@@ -15,7 +15,7 @@
 - Window: borderless, `-topmost`, `-alpha` ≈0.85, geometry `260x150+20+20` (top-left corner — top-right is reserved by the game's own minimap).
 - Displayed fields: 状态 (state) / 位置 (pos) / 目标 (target) / 消息 (message) / 耗时 (elapsed, computed internally from construction time).
 - **Correction vs. spec:** the spec's integration-points list said `utils.py::lazy_theta_pathing` / `move_to_position` / `auto_farming` — those three functions actually live in **`main.py`** (verified by reading the file; `utils.py` only holds `get_player_position`, `check_stage`, `load_binary_map`, etc.). This plan wires the overlay into `main.py`, not `utils.py`.
-- **No git repo here** (`git rev-parse` fails, no `.git`). Plan-template "Commit" steps are replaced with "mark task done" — do not run `git commit`. If the user wants history tracked, that's a separate ask, out of scope for this plan.
+- **Git repo + worktree, added after this plan was first drafted.** The project had no git repo when this plan was written (hence the original "no commit" steps below); a repo was since initialized and this feature is developed in an isolated worktree at `/Users/macmima1234/Downloads/florr-auto-pathing-main 2/.worktrees/status-overlay` on branch `status-overlay`. Every task DOES commit now — every `cd` in this plan targets the worktree path, not the main checkout. Never run these commands from the main checkout (`.../florr-auto-pathing-main 2` without the `.worktrees/status-overlay` suffix) — that pollutes the user's live `main` branch.
 - venv is at `./venv` (project root) — use `./venv/bin/python` / `./venv/bin/pip` for every command, not bare `python`/`pip`.
 
 ---
@@ -38,7 +38,7 @@ Expected: brew installs (or reports already-installed) `python-tk@3.14` and its 
 
 Run:
 ```bash
-cd "/Users/macmima1234/Downloads/florr-auto-pathing-main 2" && ./venv/bin/python -c "import tkinter; print('tkinter OK', tkinter.TkVersion)"
+cd "/Users/macmima1234/Downloads/florr-auto-pathing-main 2/.worktrees/status-overlay" && ./venv/bin/python -c "import tkinter; print('tkinter OK', tkinter.TkVersion)"
 ```
 Expected: prints `tkinter OK 8.6` (or similar version), no `ModuleNotFoundError`.
 
@@ -46,7 +46,7 @@ If it still fails: the venv's Python may need to be recreated against the now-Tk
 
 - [ ] **Step 3: Mark task done**
 
-No commit (no git repo) — proceed to Task 2.
+Nothing to commit (this task changed no tracked files) — proceed to Task 2.
 
 ---
 
@@ -63,7 +63,7 @@ No commit (no git repo) — proceed to Task 2.
 
 Run:
 ```bash
-cd "/Users/macmima1234/Downloads/florr-auto-pathing-main 2" && ./venv/bin/pip install pytest
+cd "/Users/macmima1234/Downloads/florr-auto-pathing-main 2/.worktrees/status-overlay" && ./venv/bin/pip install pytest
 ```
 Expected: pytest installs successfully.
 
@@ -120,7 +120,7 @@ def test_merge_state_does_not_mutate_input():
 
 Run:
 ```bash
-cd "/Users/macmima1234/Downloads/florr-auto-pathing-main 2" && ./venv/bin/python -m pytest test_overlay.py -v
+cd "/Users/macmima1234/Downloads/florr-auto-pathing-main 2/.worktrees/status-overlay" && ./venv/bin/python -m pytest test_overlay.py -v
 ```
 Expected: FAIL / collection error — `overlay.py` doesn't exist yet (`ModuleNotFoundError: No module named 'overlay'`).
 
@@ -159,13 +159,17 @@ def _merge_state(current, **fields):
 
 Run:
 ```bash
-cd "/Users/macmima1234/Downloads/florr-auto-pathing-main 2" && ./venv/bin/python -m pytest test_overlay.py -v
+cd "/Users/macmima1234/Downloads/florr-auto-pathing-main 2/.worktrees/status-overlay" && ./venv/bin/python -m pytest test_overlay.py -v
 ```
 Expected: all 9 tests PASS.
 
-- [ ] **Step 6: Mark task done**
+- [ ] **Step 6: Commit**
 
-No commit (no git repo) — proceed to Task 3.
+```bash
+cd "/Users/macmima1234/Downloads/florr-auto-pathing-main 2/.worktrees/status-overlay" && git add overlay.py test_overlay.py && git commit -m "feat: add overlay pure helper functions with tests"
+```
+
+Proceed to Task 3.
 
 ---
 
@@ -207,7 +211,7 @@ def test_null_overlay_update_ignores_all_args():
 
 Run:
 ```bash
-cd "/Users/macmima1234/Downloads/florr-auto-pathing-main 2" && ./venv/bin/python -m pytest test_overlay.py -v
+cd "/Users/macmima1234/Downloads/florr-auto-pathing-main 2/.worktrees/status-overlay" && ./venv/bin/python -m pytest test_overlay.py -v
 ```
 Expected: FAIL — `AttributeError: module 'overlay' has no attribute 'tkinter'` (or `'_NullOverlay'`/`'create_overlay'`) since none of that exists yet.
 
@@ -308,7 +312,7 @@ if __name__ == "__main__":
 
 Run:
 ```bash
-cd "/Users/macmima1234/Downloads/florr-auto-pathing-main 2" && ./venv/bin/python -m pytest test_overlay.py -v
+cd "/Users/macmima1234/Downloads/florr-auto-pathing-main 2/.worktrees/status-overlay" && ./venv/bin/python -m pytest test_overlay.py -v
 ```
 Expected: all 11 tests PASS.
 
@@ -316,15 +320,19 @@ Expected: all 11 tests PASS.
 
 Run:
 ```bash
-cd "/Users/macmima1234/Downloads/florr-auto-pathing-main 2" && ./venv/bin/python overlay.py
+cd "/Users/macmima1234/Downloads/florr-auto-pathing-main 2/.worktrees/status-overlay" && ./venv/bin/python overlay.py
 ```
 Expected: a small dark window appears top-left of the screen, cycles through 4 fake states every 2s (state/pos/target/message text changes, 耗时 counts up), then closes after ~8s. This does not touch florr.io — safe to run any time.
 
 If the window never appears: stop, re-check Task 1 (tkinter import), don't proceed to Task 4.
 
-- [ ] **Step 6: Mark task done**
+- [ ] **Step 6: Commit**
 
-No commit (no git repo) — proceed to Task 4.
+```bash
+cd "/Users/macmima1234/Downloads/florr-auto-pathing-main 2/.worktrees/status-overlay" && git add overlay.py test_overlay.py && git commit -m "feat: add StatusOverlay window with tkinter fallback"
+```
+
+Proceed to Task 4.
 
 ---
 
@@ -465,7 +473,7 @@ def move_to_position(current_pos, target_pos, max_attempts=30):
 
 Run:
 ```bash
-cd "/Users/macmima1234/Downloads/florr-auto-pathing-main 2" && ./venv/bin/python -c "import main" 2>&1 | tail -20
+cd "/Users/macmima1234/Downloads/florr-auto-pathing-main 2/.worktrees/status-overlay" && ./venv/bin/python -c "import main" 2>&1 | tail -20
 ```
 Expected: no traceback. (This will briefly open the overlay window since `overlay = create_overlay()` runs at import time — that's expected; it does NOT touch the mouse/keyboard. Close the window manually or let the process exit.)
 
@@ -473,13 +481,17 @@ Expected: no traceback. (This will briefly open the overlay window since `overla
 
 Run:
 ```bash
-cd "/Users/macmima1234/Downloads/florr-auto-pathing-main 2" && ./venv/bin/python -m pytest test_overlay.py -v
+cd "/Users/macmima1234/Downloads/florr-auto-pathing-main 2/.worktrees/status-overlay" && ./venv/bin/python -m pytest test_overlay.py -v
 ```
 Expected: all 11 tests still PASS (this task didn't touch `overlay.py`'s logic, just consumes it).
 
-- [ ] **Step 5: Mark task done**
+- [ ] **Step 5: Commit**
 
-No commit (no git repo) — proceed to Task 5.
+```bash
+cd "/Users/macmima1234/Downloads/florr-auto-pathing-main 2/.worktrees/status-overlay" && git add main.py && git commit -m "feat: wire status overlay into move_to_position"
+```
+
+Proceed to Task 5.
 
 ---
 
@@ -629,13 +641,17 @@ def lazy_theta_pathing(location, area=[]):
 
 Run:
 ```bash
-cd "/Users/macmima1234/Downloads/florr-auto-pathing-main 2" && ./venv/bin/python -c "import main" 2>&1 | tail -20
+cd "/Users/macmima1234/Downloads/florr-auto-pathing-main 2/.worktrees/status-overlay" && ./venv/bin/python -c "import main" 2>&1 | tail -20
 ```
 Expected: no traceback.
 
-- [ ] **Step 3: Mark task done**
+- [ ] **Step 3: Commit**
 
-No commit (no git repo) — proceed to Task 6.
+```bash
+cd "/Users/macmima1234/Downloads/florr-auto-pathing-main 2/.worktrees/status-overlay" && git add main.py && git commit -m "feat: wire status overlay into lazy_theta_pathing"
+```
+
+Proceed to Task 6.
 
 ---
 
@@ -861,18 +877,26 @@ if __name__ == "__main__":
 
 Run:
 ```bash
-cd "/Users/macmima1234/Downloads/florr-auto-pathing-main 2" && ./venv/bin/python -c "import main" 2>&1 | tail -20
+cd "/Users/macmima1234/Downloads/florr-auto-pathing-main 2/.worktrees/status-overlay" && ./venv/bin/python -c "import main" 2>&1 | tail -20
 ```
 Expected: no traceback.
 
-- [ ] **Step 4: Full real-world verification**
+- [ ] **Step 4: Commit**
+
+```bash
+cd "/Users/macmima1234/Downloads/florr-auto-pathing-main 2/.worktrees/status-overlay" && git add main.py && git commit -m "feat: wire status overlay into auto_farming and main entry point"
+```
+
+**Stop here — do not run Step 5.** Step 5 drives the real mouse/keyboard against a live florr.io session; it is a controller/human step, never delegated to an implementer subagent. Report DONE with this task's scope (Steps 1-4) complete.
+
+- [ ] **Step 5: Full real-world verification (controller/human only, not part of the implementer's task)**
 
 With florr.io open fullscreen 1920x1080 (per the running conditions in `README.md`):
 ```bash
-cd "/Users/macmima1234/Downloads/florr-auto-pathing-main 2" && ./venv/bin/python main.py
+cd "/Users/macmima1234/Downloads/florr-auto-pathing-main 2/.worktrees/status-overlay" && ./venv/bin/python main.py
 ```
 Expected: the overlay window is visible on top of the game at all times, and its 状态/位置/目标/消息/耗时 fields update live as pathing runs. This is the acceptance test from the spec — if the overlay is hidden behind the game, stop and discuss the pyobjc fallback (spec's Fallback section) instead of continuing to patch the tkinter approach.
 
-- [ ] **Step 5: Mark task done — plan complete**
+- [ ] **Step 6: Mark plan complete**
 
-No commit (no git repo).
+No further commit needed.
