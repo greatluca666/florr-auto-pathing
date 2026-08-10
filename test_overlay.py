@@ -44,11 +44,11 @@ def test_merge_state_does_not_mutate_input():
     assert current == {"state": "idle"}
 
 
-def test_create_overlay_falls_back_when_tk_unavailable(monkeypatch):
-    def raise_tcl_error(*args, **kwargs):
+def test_create_overlay_falls_back_when_appkit_construction_fails(monkeypatch):
+    def raise_error(*args, **kwargs):
         raise RuntimeError("no display")
 
-    monkeypatch.setattr(overlay_module.tkinter, "Tk", raise_tcl_error)
+    monkeypatch.setattr(overlay_module.AppKit, "NSApplication", raise_error)
     result = overlay_module.create_overlay()
     assert isinstance(result, overlay_module._NullOverlay)
     # must never raise, whatever it's called with
@@ -61,9 +61,9 @@ def test_null_overlay_update_ignores_all_args():
     assert stub.update(state="x", pos=(1, 1), target=(2, 2), message="y") is None
 
 
-def test_create_overlay_returns_null_overlay_when_tkinter_is_none(monkeypatch):
-    # import overlay 时如果没有 _tkinter, tkinter 会被置为 None (never-raises契约的核心场景).
-    monkeypatch.setattr(overlay_module, "tkinter", None)
+def test_create_overlay_returns_null_overlay_when_appkit_is_none(monkeypatch):
+    # import overlay 时如果没有 pyobjc, AppKit 会被置为 None (never-raises契约的核心场景).
+    monkeypatch.setattr(overlay_module, "AppKit", None)
     result = overlay_module.create_overlay()
     assert isinstance(result, overlay_module._NullOverlay)
     # must never raise, whatever it's called with
@@ -75,7 +75,7 @@ def test_status_overlay_update_is_noop_after_dead_latched():
     overlay = overlay_module.create_overlay()
     assert isinstance(overlay, overlay_module.StatusOverlay)
     try:
-        # 模拟Tk解释器在运行中挂掉之后再次调用update/close的情况.
+        # 模拟窗口在运行中挂掉之后再次调用update/close的情况.
         overlay._dead = True
         assert overlay.update(state="出错", message="不应该抛异常") is None
         assert overlay.close() is None
@@ -88,10 +88,10 @@ def test_status_overlay_update_latches_dead_on_exception(monkeypatch):
     overlay = overlay_module.create_overlay()
     assert isinstance(overlay, overlay_module.StatusOverlay)
     try:
-        def raise_tcl_error(*args, **kwargs):
-            raise overlay_module.tkinter.TclError("invalid command name")
+        def raise_error(*args, **kwargs):
+            raise RuntimeError("window server gone")
 
-        monkeypatch.setattr(overlay._root, "update", raise_tcl_error)
+        monkeypatch.setattr(overlay, "_pump_events", raise_error)
         assert overlay._dead is False
         # update() 内部抛异常时应吞掉异常并锁死_dead, 而不是把异常传给main.py.
         result = overlay.update(state="出错")

@@ -1,11 +1,20 @@
-"""悬浮状态窗 — 全屏运行main.py时显示寻路/移动进度."""
+"""悬浮状态窗 — 全屏运行main.py时显示寻路/移动进度.
+
+用PyObjC(AppKit)直接建原生窗口, 不用tkinter —— 实测tkinter的-topmost只能
+在同一个macOS Space内置顶, florr.io开的是原生全屏(独立Space)时, tkinter
+窗口会跳到另一个桌面上, 根本盖不到游戏画面上。AppKit窗口配合
+NSWindowCollectionBehaviorCanJoinAllSpaces + FullScreenAuxiliary +
+screensaver级别的窗口层级(1000), 才能真正跨Space盖在全屏游戏上面。
+"""
 import sys
 import time
 
 try:
-    import tkinter
+    import AppKit
+    import Foundation
 except ImportError:
-    tkinter = None
+    AppKit = None
+    Foundation = None
 
 
 def _format_elapsed(seconds):
@@ -40,6 +49,24 @@ class _NullOverlay:
         return None
 
 
+# screensaver窗口层级(CGWindowLevel), 比普通置顶(status级别~25)高得多 ——
+# 实测普通status级别 + canJoinAllSpaces 依然会被系统分到另一个Space,
+# 只有这个级别才能真正跨越florr.io的全屏Space显示。
+_SCREENSAVER_LEVEL = 1000
+
+# 窗口位置需避开 utils.py 的屏幕探测区域:
+#   check_stage() 探测像素 (316,32) 和 (156,35)
+#   get_map() 截取小地图区域 [1600,20,1900,320] (右上角)
+#   abandon_game() 点击 (307,32)
+# 左上角、顶部往下200px, 落在这些区域下方, 留出安全边距.
+_WIDTH, _HEIGHT = 260, 150
+_LEFT, _TOP_OFFSET = 20, 200
+
+# 亮橙底+黑字: 实测过暗色半透明底(#1e1e1e)会跟游戏画面糊成一片肉眼看不见,
+# 亮色才能在任意游戏背景上都保证看得见.
+_BG_COLOR = (1.0, 0.6, 0.0, 0.92)  # R, G, B, alpha
+
+
 class StatusOverlay:
     _FIELDS = ("state", "pos", "target", "message")
     _LABELS_ZH = {"state": "状态", "pos": "位置", "target": "目标", "message": "消息"}
@@ -47,43 +74,90 @@ class StatusOverlay:
     def __init__(self):
         self._start = time.time()
         self._state = {"state": "-", "pos": None, "target": None, "message": "-"}
-        # 一旦update/close在Tk解释器挂掉后抛异常, 就锁死后续调用为空操作, 绝不再炸主程序.
+        # 一旦update/close在窗口没了之后抛异常, 就锁死后续调用为空操作, 绝不再炸主程序.
         self._dead = False
 
-        self._root = tkinter.Tk()
-        self._root.overrideredirect(True)
-        self._root.attributes("-topmost", True)
-        self._root.attributes("-alpha", 0.85)
-        # 窗口位置需避开 utils.py 的屏幕探测区域:
-        #   check_stage() 探测像素 (316,32) 和 (156,35)
-        #   get_map() 截取小地图区域 [1600,20,1900,320] (右上角)
-        #   abandon_game() 点击 (307,32)
-        # 260x150+20+200 落在这些区域下方, 留出安全边距.
-        self._root.geometry("260x150+20+200")
-        self._root.configure(bg="#1e1e1e")
+        app = AppKit.NSApplication.sharedApplication()
+        # Accessory: 不占Dock图标、不抢应用切换的焦点, 纯后台悬浮窗.
+        app.setActivationPolicy_(AppKit.NSApplicationActivationPolicyAccessory)
+        self._app = app
 
-        tkinter.Label(
-            # f8de60 是 utils.get_player_position() 搜索的玩家标记色, 标题不能用它.
-            self._root, text="florr auto-pathing", fg="#66ccff", bg="#1e1e1e",
-            font=("Menlo", 12, "bold"),
-        ).pack(anchor="w", padx=8, pady=(8, 4))
+        screen_frame = AppKit.NSScreen.mainScreen().frame()
+        screen_height = screen_frame.size.height
+        y_origin = screen_height - _TOP_OFFSET - _HEIGHT
+        rect = Foundation.NSMakeRect(_LEFT, y_origin, _WIDTH, _HEIGHT)
+
+        window = AppKit.NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
+            rect, AppKit.NSWindowStyleMaskBorderless, AppKit.NSBackingStoreBuffered, False,
+        )
+        window.setLevel_(_SCREENSAVER_LEVEL)
+        window.setCollectionBehavior_(
+            AppKit.NSWindowCollectionBehaviorCanJoinAllSpaces
+            | AppKit.NSWindowCollectionBehaviorFullScreenAuxiliary
+            | AppKit.NSWindowCollectionBehaviorStationary
+        )
+        window.setOpaque_(False)
+        window.setBackgroundColor_(
+            AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(*_BG_COLOR)
+        )
+        # 悬浮窗绝不能挡鼠标点击/抢键盘焦点 —— main.py靠鼠标位置和空格键控制游戏,
+        # 焦点被抢走这些输入就发不到游戏里了. 只用orderFrontRegardless()显示,
+        # 不调用makeKeyAndOrderFront_/activateIgnoringOtherApps_.
+        window.setIgnoresMouseEvents_(True)
+        self._window = window
+
+        content = window.contentView()
+        title = self._make_label(0, "florr auto-pathing", bold=True)
+        content.addSubview_(title)
 
         self._field_labels = {}
-        for field in self._FIELDS:
-            label = tkinter.Label(
-                self._root, text=f"{self._LABELS_ZH[field]}: -", fg="white",
-                bg="#1e1e1e", font=("Menlo", 11), anchor="w", justify="left",
-            )
-            label.pack(anchor="w", padx=8, fill="x")
+        for i, field in enumerate(self._FIELDS):
+            label = self._make_label(i + 1, f"{self._LABELS_ZH[field]}: -")
+            content.addSubview_(label)
             self._field_labels[field] = label
 
-        self._elapsed_label = tkinter.Label(
-            self._root, text="耗时: 00:00", fg="#aaaaaa", bg="#1e1e1e", font=("Menlo", 10),
-        )
-        self._elapsed_label.pack(anchor="w", padx=8, pady=(4, 8))
+        self._elapsed_label = self._make_label(len(self._FIELDS) + 1, "耗时: 00:00", small=True)
+        content.addSubview_(self._elapsed_label)
 
-        self._root.update_idletasks()
-        self._root.update()
+        window.orderFrontRegardless()
+        self._pump_events()
+
+    def _make_label(self, row, text, bold=False, small=False):
+        """按行号从上往下建一个不可编辑的文本标签(Cocoa坐标原点在左下角)."""
+        row_height = 22
+        y = _HEIGHT - 12 - (row + 1) * row_height
+        frame = Foundation.NSMakeRect(8, y, _WIDTH - 16, row_height)
+        label = AppKit.NSTextField.alloc().initWithFrame_(frame)
+        label.setStringValue_(text)
+        label.setBezeled_(False)
+        label.setDrawsBackground_(False)
+        label.setEditable_(False)
+        label.setSelectable_(False)
+        size = 10 if small else 12
+        weight = AppKit.NSFont.boldSystemFontOfSize_ if bold else AppKit.NSFont.systemFontOfSize_
+        label.setFont_(weight(size))
+        label.setTextColor_(
+            AppKit.NSColor.colorWithCalibratedWhite_alpha_(0.15, 1.0) if not small
+            else AppKit.NSColor.colorWithCalibratedWhite_alpha_(0.3, 1.0)
+        )
+        return label
+
+    def _pump_events(self):
+        """非阻塞地把Cocoa事件循环转几圈, 让刚设置的内容真正画到屏幕上.
+
+        没有跑常规的NSApp.run()主循环(跟main.py现有的同步while循环轮询模型
+        保持一致, 不引入线程), 所以每次update()都要手动拉一下事件循环。
+        """
+        while True:
+            event = self._app.nextEventMatchingMask_untilDate_inMode_dequeue_(
+                AppKit.NSEventMaskAny,
+                Foundation.NSDate.dateWithTimeIntervalSinceNow_(0),
+                AppKit.NSDefaultRunLoopMode,
+                True,
+            )
+            if event is None:
+                break
+            self._app.sendEvent_(event)
 
     def update(self, state=None, pos=None, target=None, message=None):
         if self._dead:
@@ -95,10 +169,11 @@ class StatusOverlay:
             for field in self._FIELDS:
                 value = self._state[field]
                 display = _format_pos(value) if field in ("pos", "target") else value
-                self._field_labels[field].config(text=f"{self._LABELS_ZH[field]}: {display}")
-            self._elapsed_label.config(text=f"耗时: {_format_elapsed(time.time() - self._start)}")
-            self._root.update_idletasks()
-            self._root.update()
+                self._field_labels[field].setStringValue_(f"{self._LABELS_ZH[field]}: {display}")
+            self._elapsed_label.setStringValue_(
+                f"耗时: {_format_elapsed(time.time() - self._start)}"
+            )
+            self._pump_events()
         except Exception:
             self._dead = True
         return None
@@ -107,16 +182,17 @@ class StatusOverlay:
         if self._dead:
             return None
         try:
-            self._root.destroy()
+            self._window.close()
+            self._dead = True
         except Exception:
             self._dead = True
         return None
 
 
 def create_overlay():
-    """建悬浮窗, 建不起来(没tkinter/没display)就退化成空壳, 不炸主程序."""
-    if tkinter is None:
-        print("⚠️ 悬浮窗启动失败: tkinter 不可用", file=sys.stderr)
+    """建悬浮窗, 建不起来(没pyobjc/没display)就退化成空壳, 不炸主程序."""
+    if AppKit is None:
+        print("⚠️ 悬浮窗启动失败: pyobjc(AppKit) 不可用", file=sys.stderr)
         return _NullOverlay()
     try:
         return StatusOverlay()
@@ -126,7 +202,7 @@ def create_overlay():
 
 
 if __name__ == "__main__":
-    # 手动烟雾测试: 开窗, 循环几个假状态, 肉眼确认渲染/位置对不对.
+    # 手动烟雾测试: 开窗, 循环几个假状态, 肉眼确认渲染/位置/跨Space显示对不对.
     demo = create_overlay()
     fake_states = [
         {"state": "寻路中", "pos": (53, 144), "target": (14, 45), "message": "规划路径..."},
