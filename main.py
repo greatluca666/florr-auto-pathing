@@ -264,6 +264,7 @@ def auto_farming(farming_area, duration=300, move_interval=2.0):
 
     start_time = time.time()
     move_count = 0
+    exit_reason = "timeout"
 
     while time.time() - start_time < duration:
         current_pos = get_player_position()
@@ -283,6 +284,7 @@ def auto_farming(farming_area, duration=300, move_interval=2.0):
             if not lazy_theta_pathing((target_x, target_y), [farming_area]):
                 print("❌ 无法回到刷怪区域")
                 overlay.update(state="出错", message="无法回到刷怪区域")
+                exit_reason = "break"
                 break
             continue
 
@@ -298,6 +300,7 @@ def auto_farming(farming_area, duration=300, move_interval=2.0):
             print("⚠️ 移动受阻")
         elif move_result in ["in_game_dead", "in_menu"]:
             print(f"⚠️ 游戏状态变化: {move_result}")
+            exit_reason = "break"
             break
 
         # 在位置停留，依赖一直攻击按钮自动攻击
@@ -312,10 +315,12 @@ def auto_farming(farming_area, duration=300, move_interval=2.0):
         if stage == "in_game_dead":
             print("💀 玩家已死亡")
             overlay.update(state="已死亡")
+            exit_reason = "break"
             break
         elif stage == "in_menu":
             print("📋 玩家在菜单中")
             overlay.update(state="菜单中")
+            exit_reason = "break"
             break
 
     elapsed = time.time() - start_time
@@ -324,7 +329,10 @@ def auto_farming(farming_area, duration=300, move_interval=2.0):
     print(f"   实际耗时: {elapsed:.1f}秒")
     print(f"   移动次数: {move_count}")
     print(f"="*50)
-    overlay.update(state="完成", message=f"刷怪结束, 共移动{move_count}次")
+    if exit_reason == "timeout":
+        overlay.update(state="完成", message=f"刷怪结束, 共移动{move_count}次")
+    else:
+        overlay.update(message=f"刷怪结束, 共移动{move_count}次")
 
 
 if __name__ == "__main__":
@@ -348,6 +356,8 @@ if __name__ == "__main__":
         auto_farming(farming_area, farming_duration, move_interval)
     else:
         print("❌ 无法到达目标区域")
-        overlay.update(state="出错", message="无法到达目标区域")
+        # 不传state: lazy_theta_pathing已设好具体状态(已死亡/菜单中/卡住/出错),
+        # _merge_state只合并非None字段, 省略state就不会用泛泛的"出错"覆盖掉它.
+        overlay.update(message="无法到达目标区域")
 
     print("\n🏁 脚本结束")
