@@ -1,6 +1,9 @@
 from utils import *
+from overlay import create_overlay
 import time
 import random
+
+overlay = create_overlay()
 
 def lazy_heuristic(node1, node2):
     return math.sqrt((node1.x - node2.x) ** 2 + (node1.y - node2.y) ** 2)
@@ -101,23 +104,26 @@ def move_to_position(current_pos, target_pos, max_attempts=30):
     """移动到目标位置 - 简化版本"""
     if current_pos is None or target_pos is None:
         return "stuck"
-    
+
     attempts = 0
     while attempts < max_attempts:
         current_pos = get_player_position()
         if current_pos is None:
+            overlay.update(state="无法检测位置", message="移动中丢失玩家位置")
             return "stuck"
-        
+
         # 计算方向
         dx = target_pos[0] - current_pos[0]
         dy = target_pos[1] - current_pos[1]
         dist = math.sqrt(dx**2 + dy**2)
-        
+
+        overlay.update(state="移动中", pos=current_pos, target=target_pos)
+
         # 如果已到达目标
         if dist < 5:
             reset_keyboard()
             return True
-        
+
         # 移动鼠标指向目标
         extend = max(min(dist * 45, 500), 50)
         if dist > 0:
@@ -125,23 +131,26 @@ def move_to_position(current_pos, target_pos, max_attempts=30):
             extend_y = extend * dy / dist
         else:
             extend_x = extend_y = 0
-        
+
         mouse_pos = (1920 // 2 + extend_x, 1080 // 2 + extend_y)
         pyautogui.moveTo(mouse_pos)
-        
+
         # 检查游戏状态
         stage = check_stage()
         if stage == "in_game_dead":
             reset_keyboard()
+            overlay.update(state="已死亡")
             return "in_game_dead"
         elif stage == "in_menu":
             reset_keyboard()
+            overlay.update(state="菜单中")
             return "in_menu"
-        
+
         attempts += 1
         time.sleep(0.05)
-    
+
     reset_keyboard()
+    overlay.update(state="卡住", message=f"{max_attempts}次尝试后仍未到达")
     return "stuck"
 
 
