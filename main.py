@@ -298,8 +298,13 @@ def random_walkable_point(area, binary_map, max_tries=20):
     return random.randint(x1, x2), random.randint(y1, y2)
 
 
-def auto_farming(farming_area, duration=300, move_interval=2.0):
-    """自动刷怪逻辑（依赖一直攻击按钮）"""
+def auto_farming(farming_area, duration=300):
+    """自动刷怪逻辑（依赖一直攻击按钮）—— 在区域内连续走动, 不停下站桩.
+
+    原来是走到一个随机点就停下等move_interval秒(靠站桩+一直攻击刷怪), 用户反馈
+    应该在区域内持续走动而不是走走停停 —— 一到点立刻挑下一个可走点接着走, 全程
+    不主动暂停, 靠外部"一直攻击"按钮在移动中持续输出.
+    """
     x1, y1 = farming_area[0]
     x2, y2 = farming_area[1]
 
@@ -309,8 +314,7 @@ def auto_farming(farming_area, duration=300, move_interval=2.0):
     binary_map = load_binary_map()
 
     print(f"\n🎮 开始在区域 {farming_area} 进行自动刷怪...")
-    print(f"⏱️  刷怪时长: {duration}秒")
-    print(f"⏰ 每次停留: {move_interval}秒（一直攻击模式）\n")
+    print(f"⏱️  刷怪时长: {duration}秒（持续走动模式）\n")
     overlay.update(state="刷怪中", message=f"区域 {farming_area}")
 
     start_time = time.time()
@@ -342,8 +346,9 @@ def auto_farming(farming_area, duration=300, move_interval=2.0):
         # 在区域内随机选择一个可走的目标点(不是瞎猜矩形里的坐标, 避开墙)
         random_x, random_y = random_walkable_point(farming_area, binary_map)
 
-        # 移动到目标点
+        # 移动到目标点 —— 到了立刻挑下一个点接着走, 不暂停.
         print(f"🚶 移动到 ({random_x}, {random_y})")
+        overlay.update(state="刷怪中", pos=current_pos, target=(random_x, random_y), message=f"持续走动中 (第{move_count + 1}次)")
         move_result = move_to_position(current_pos, (random_x, random_y))
 
         if move_result == "stuck":
@@ -357,11 +362,6 @@ def auto_farming(farming_area, duration=300, move_interval=2.0):
         else:
             # 只有真正走到点上才计入移动次数, "受阻"那次不算.
             move_count += 1
-
-        # 在位置停留，依赖一直攻击按钮自动攻击
-        print(f"⚔️  停留 {move_interval}秒...")
-        overlay.update(state="刷怪中", pos=(random_x, random_y), message=f"停留 {move_interval}秒 (第{move_count}次)")
-        time.sleep(move_interval)
 
         # 检查游戏状态
         stage = check_stage()
@@ -395,7 +395,6 @@ if __name__ == "__main__":
     location = (14, 45)
     farming_area = [(20, 15), (9, 76)]
     farming_duration = 300  # 5 分钟
-    move_interval = 2.0     # 每次停留时间
     # ====================
 
     print("🎮 开始自动寻路到刷怪区域...")
@@ -406,7 +405,7 @@ if __name__ == "__main__":
     if lazy_theta_pathing(location, [farming_area]):
         print("✅ 到达刷怪区域！")
         # 开始刷怪
-        auto_farming(farming_area, farming_duration, move_interval)
+        auto_farming(farming_area, farming_duration)
     else:
         print("❌ 无法到达目标区域")
         # 不传state: lazy_theta_pathing已设好具体状态(已死亡/菜单中/卡住/出错),
