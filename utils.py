@@ -178,11 +178,37 @@ def abandon_game():
     pyautogui.doubleClick()
 
 
-def click_start_game():
-    """点掉线/死亡后菜单界面的"开始游戏"按钮, 坐标是实机悬停鼠标实测出来的
-    (1920x1080全屏布局下). 换分辨率/换布局需要重新量.
+_START_BUTTON_POS = (1059, 527)
+_START_BUTTON_RGB = (27, 203, 37)  # 实测出来的绿色"开始"按钮颜色(纯色底, 不是文字描边混色)
+
+
+def on_start_screen():
+    """检测屏幕上是不是正显示着开局/死亡后的"开始游戏"绿色按钮.
+
+    check_stage()那套单像素精确匹配是给别的菜单画面(死亡/游戏内暂停之类)校准的,
+    跟"还没点开始"的开局菜单对不上号(实测那个画面check_stage()只会返回
+    "unknown"). 与其猜另一个精确像素签名, 不如直接去测"开始"按钮那块是不是真是
+    绿的 —— 检测的就是马上要点的那个东西, 比猜单像素靠谱.
+
+    只采一个像素点太脆弱: 按钮上"开始"两个字带黑色描边, 单点坐标很容易正好落在
+    描边或播放三角图标上而不是绿色背景上, 采样一整块小区域看绿色占比才稳.
     """
-    pyautogui.moveTo(967, 902)
+    x, y = _START_BUTTON_POS
+    region = pyautogui.screenshot(region=[x - 15, y - 10, 30, 20])
+    arr = np.array(region)[:, :, :3]
+    match = np.all(np.abs(arr.astype(int) - np.array(_START_BUTTON_RGB)) <= 25, axis=-1)
+    green_ratio = match.sum() / match.size
+    # 实测按钮区域里"开始"文字+播放图标占了不小比例, 纯绿色背景只剩约17% ——
+    # 阈值定太高反而检测不到真按钮, 10%已经足够跟"这块完全没有绿色"区分开.
+    return green_ratio > 0.1
+
+
+def click_start_game():
+    """点开始界面的绿色"开始"按钮, 坐标是截图里对绿色按钮做像素质心算出来的
+    (1920x1080全屏布局下, "开始"按钮实测中心在(1059,527)). 换分辨率/换布局需要
+    重新量 —— 之前凭鼠标悬停手动量过一次得到(967,902), 跟实际按钮对不上, 别再用.
+    """
+    pyautogui.moveTo(_START_BUTTON_POS)
     time.sleep(0.2)
     pyautogui.click()
 

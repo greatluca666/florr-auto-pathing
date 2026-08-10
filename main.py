@@ -403,6 +403,18 @@ if __name__ == "__main__":
     while True:
         round_count += 1
         print(f"\n{'='*50}\n第 {round_count} 轮\n{'='*50}")
+
+        # 每轮开头先检查: 掉线/死亡/还停在开局菜单(比如脚本刚启动时游戏还没点开始)
+        # 都会落在这几个状态上 —— 先点"开始游戏"把局开起来, 再去寻路。放在循环
+        # 顶部而不是只在轮次结束后检查, 这样脚本刚启动、游戏还没开始的情况也能
+        # 处理到, 不会一上来就对着开局菜单傻寻路.
+        stage = check_stage()
+        if stage in ("in_game_dead", "in_menu") or on_start_screen():
+            print("🔁 检测到掉线/死亡/开局菜单, 点击开始按钮进入游戏...")
+            overlay.update(state="重新开始", message="点击开始按钮...")
+            click_start_game()
+            time.sleep(3)  # 等游戏加载
+
         print(f"📍 目标区域: {farming_area}\n")
         overlay.update(state="启动", target=location, message=f"第{round_count}轮: 开始自动寻路到刷怪区域")
 
@@ -415,13 +427,4 @@ if __name__ == "__main__":
             # 不传state: lazy_theta_pathing已设好具体状态(已死亡/菜单中/卡住/出错),
             # _merge_state只合并非None字段, 省略state就不会用泛泛的"出错"覆盖掉它.
             overlay.update(message="本轮未能到达目标区域")
-
-        # 掉线/死亡/被踢都会落到菜单界面 —— 点"开始游戏"重新进局, 而不是结束脚本.
-        stage = check_stage()
-        if stage in ("in_game_dead", "in_menu"):
-            print("🔁 检测到掉线/死亡, 点击开始按钮继续游戏...")
-            overlay.update(state="重新开始", message="点击开始按钮...")
-            click_start_game()
-            time.sleep(3)  # 等游戏加载
-        else:
             time.sleep(1)
