@@ -100,7 +100,7 @@ def reset_keyboard():
     keyup("d")
 
 
-def move_to_position(current_pos, target_pos, max_attempts=200, stall_limit=13):
+def move_to_position(current_pos, target_pos, max_attempts=200, stall_limit=13, progress_epsilon=1.5):
     """移动到目标位置.
 
     跟原版(github.com/Shiny-Ladybug/florr-auto-pathing)的go_direction比对后, 补回了
@@ -109,6 +109,12 @@ def move_to_position(current_pos, target_pos, max_attempts=200, stall_limit=13):
       - 冲过头(这次比上次离目标还远) —— 已经很接近了, 直接算到达, 别死磕这一段.
       - 连续stall_limit次距离都没缩短(原地打转) —— 才真正判定为卡住, 不是简单数
         循环次数. max_attempts只是保底上限, 防止极端情况死循环, 平时基本不会撞到.
+
+    原版(以及我们最早抄过来那版)这两条判定都是用"距离完全相等"(dist == last_dist)
+    做比较 —— 实测位置检测本身有量化噪声, 连续两帧distance几乎不可能位级精确相等,
+    导致卡在死角/洞里时stall_count永远攒不起来, "卡住"判定形同虚设, 角色能在原地
+    干耗到天荒地老。改用progress_epsilon容差带: 只要没有明显缩短(缩短量小于
+    progress_epsilon)就算一次停滞, 不再要求毫厘不差.
     """
     if current_pos is None or target_pos is None:
         return "stuck"
@@ -135,14 +141,16 @@ def move_to_position(current_pos, target_pos, max_attempts=200, stall_limit=13):
             return True
 
         if last_dist is not None:
-            if dist > last_dist:
-                # 冲过头了, 已经足够接近, 当作到达, 不继续死磕这一段.
+            if dist > last_dist + progress_epsilon:
+                # 明显冲过头了, 已经足够接近, 当作到达, 不继续死磕这一段.
                 reset_keyboard()
                 return True
-            elif dist == last_dist:
-                stall_count += 1
-            else:
+            elif dist < last_dist - progress_epsilon:
+                # 明显缩短了, 真有进展, 停滞计数清零.
                 stall_count = 0
+            else:
+                # 在容差带内(包括原来要求毫厘不差才算的"完全相等") —— 没有实质进展.
+                stall_count += 1
         last_dist = dist
 
         if stall_count > stall_limit:
