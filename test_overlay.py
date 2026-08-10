@@ -41,3 +41,23 @@ def test_merge_state_does_not_mutate_input():
     current = {"state": "idle"}
     _merge_state(current, state="移动中")
     assert current == {"state": "idle"}
+
+
+import overlay as overlay_module
+
+
+def test_create_overlay_falls_back_when_tk_unavailable(monkeypatch):
+    def raise_tcl_error(*args, **kwargs):
+        raise RuntimeError("no display")
+
+    monkeypatch.setattr(overlay_module.tkinter, "Tk", raise_tcl_error)
+    result = overlay_module.create_overlay()
+    assert isinstance(result, overlay_module._NullOverlay)
+    # must never raise, whatever it's called with
+    result.update(state="寻路中", pos=(1, 2), target=(3, 4), message="test")
+    result.close()
+
+
+def test_null_overlay_update_ignores_all_args():
+    stub = overlay_module._NullOverlay()
+    assert stub.update(state="x", pos=(1, 1), target=(2, 2), message="y") is None
