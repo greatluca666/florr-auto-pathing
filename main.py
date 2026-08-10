@@ -219,19 +219,21 @@ def lazy_theta_pathing(location, area=[]):
     retry_count = 0
 
     while True:
+        # 死亡/开局画面的检查必须放在最前面、且不能只在"pos is None"分支里做 ——
+        # 实机踩过坑: 死亡结算画面上凑巧有个像素跟玩家标记色对上了, 稳定测出一个
+        # 假位置(不是None!), 导致下面那个"pos is None才查死亡画面"的分支永远
+        # 进不去, 角色明明卡在死亡画面上, 脚本还在拿假坐标一遍遍重新规划路径。
+        # 不管这轮测没测到位置, 每次循环开头都先确认没有落在这两个画面上.
+        if on_death_screen() or on_start_screen():
+            print("🔁 检测到落在死亡/开局画面上, 交回上层处理")
+            overlay.update(state="出错", message="落在死亡/开局画面, 交回上层重开")
+            return False
+
         pos = get_player_position()
 
         if pos is None:
-            # 检测不到位置最常见的原因就是死了/回到了开局菜单(小地图上没有玩家
-            # 标记可认) —— 之前这里死循环重试, 从来不检查是不是已经到了死亡/开局
-            # 画面, 结果卡在这个内层循环里出不去, 外层__main__那个"每轮开头检查
-            # 一次"的重开逻辑永远等不到执行的机会(实机验证过: on_death_screen()
-            # 已经是True了, 这里还在傻等)。现在每次检测不到位置就顺手看一眼是不是
-            # 落在这两个画面上了, 是的话直接交还给外层循环去点按钮, 不在这里空转.
-            if on_death_screen() or on_start_screen():
-                print("🔁 检测不到位置, 但发现落在死亡/开局画面上, 交回上层处理")
-                overlay.update(state="出错", message="落在死亡/开局画面, 交回上层重开")
-                return False
+            # 死亡/开局画面已经在循环开头查过了, 到这里还是None就是真的暂时没
+            # 认出玩家标记(截图抖动之类), 单纯重试.
             retry_count += 1
             print(f"⚠️ 无法检测玩家位置，持续重试中 (第{retry_count}次)...")
             overlay.update(state="无法检测位置", message=f"持续重试中 (第{retry_count}次)")
@@ -332,16 +334,18 @@ def auto_farming(farming_area, duration=300):
     exit_reason = "timeout"
 
     while time.time() - start_time < duration:
+        # 死亡/开局画面检查放在循环最前面、不依赖"位置测不到" —— 死亡结算画面上
+        # 曾经实测出过稳定的假位置(不是None), 只在current_pos is None分支里查
+        # 会被这种假阳性绕过去, 角色明明已经死了脚本还在拿假坐标继续瞎刷.
+        if on_death_screen() or on_start_screen():
+            print("🔁 检测到落在死亡/开局画面上, 交回上层处理")
+            overlay.update(state="出错", message="落在死亡/开局画面, 交回上层重开")
+            exit_reason = "break"
+            break
+
         current_pos = get_player_position()
 
         if current_pos is None:
-            # 跟lazy_theta_pathing同样的问题: 检测不到位置很可能是死了/回到了
-            # 开局菜单, 不检查这个的话最坏情况要空等到duration超时才会退出重开.
-            if on_death_screen() or on_start_screen():
-                print("🔁 检测不到位置, 但发现落在死亡/开局画面上, 交回上层处理")
-                overlay.update(state="出错", message="落在死亡/开局画面, 交回上层重开")
-                exit_reason = "break"
-                break
             print("⚠️ 无法检测玩家位置")
             overlay.update(state="无法检测位置")
             time.sleep(1)
