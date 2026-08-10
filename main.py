@@ -100,11 +100,21 @@ def reset_keyboard():
     keyup("d")
 
 
-def move_to_position(current_pos, target_pos, max_attempts=30):
-    """移动到目标位置 - 简化版本"""
+def move_to_position(current_pos, target_pos, max_attempts=200, stall_limit=13):
+    """移动到目标位置.
+
+    跟原版(github.com/Shiny-Ladybug/florr-auto-pathing)的go_direction比对后, 补回了
+    两条它有而我们这版"简化版本"漏掉的关键判定 —— 之前只看"到没到5px内", 不看有
+    没有在朝目标靠近, 导致过头或者原地打转都要死等到max_attempts才认卡住:
+      - 冲过头(这次比上次离目标还远) —— 已经很接近了, 直接算到达, 别死磕这一段.
+      - 连续stall_limit次距离都没缩短(原地打转) —— 才真正判定为卡住, 不是简单数
+        循环次数. max_attempts只是保底上限, 防止极端情况死循环, 平时基本不会撞到.
+    """
     if current_pos is None or target_pos is None:
         return "stuck"
 
+    last_dist = None
+    stall_count = 0
     attempts = 0
     while attempts < max_attempts:
         current_pos = get_player_position()
@@ -123,6 +133,22 @@ def move_to_position(current_pos, target_pos, max_attempts=30):
         if dist < 5:
             reset_keyboard()
             return True
+
+        if last_dist is not None:
+            if dist > last_dist:
+                # 冲过头了, 已经足够接近, 当作到达, 不继续死磕这一段.
+                reset_keyboard()
+                return True
+            elif dist == last_dist:
+                stall_count += 1
+            else:
+                stall_count = 0
+        last_dist = dist
+
+        if stall_count > stall_limit:
+            reset_keyboard()
+            overlay.update(state="卡住", message=f"原地打转{stall_count}次")
+            return "stuck"
 
         # 移动鼠标指向目标
         extend = max(min(dist * 45, 500), 50)
@@ -179,21 +205,18 @@ def execute_path(path):
 
 
 def lazy_theta_pathing(location, area=[]):
-    """寻路到目标区域"""
+    """寻路到目标区域. 检测不到位置、或者移动卡住, 都不放弃, 一直重试
+    (脱困后重新规划路径)直到真的到达/玩家死亡/进了菜单为止。
+    """
     retry_count = 0
-    max_retries = 3
 
     while True:
         pos = get_player_position()
 
         if pos is None:
             retry_count += 1
-            print(f"⚠️ 无法检测玩家位置，重试 {retry_count}/{max_retries}...")
-            overlay.update(state="无法检测位置", message=f"重试 {retry_count}/{max_retries}")
-            if retry_count >= max_retries:
-                print("❌ 多次重试失败")
-                overlay.update(state="出错", message="多次重试失败")
-                return False
+            print(f"⚠️ 无法检测玩家位置，持续重试中 (第{retry_count}次)...")
+            overlay.update(state="无法检测位置", message=f"持续重试中 (第{retry_count}次)")
             time.sleep(1)
             continue
 
@@ -233,9 +256,10 @@ def lazy_theta_pathing(location, area=[]):
             return True
 
         if stat == "stuck":
-            print("🔄 检测到卡住")
-            overlay.update(state="卡住", message="移动受阻")
-            return False
+            print("🔄 检测到卡住, 脱困后重新规划路径...")
+            overlay.update(state="卡住", message="脱困中, 稍后重新寻路")
+            execute_anti_stuck()
+            continue
 
         stage = check_stage()
         if stage == "in_game_dead":

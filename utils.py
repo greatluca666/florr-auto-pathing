@@ -80,12 +80,11 @@ def calc_anti_stuck(borders, weight=1.0):
 
 
 def execute_anti_stuck(duration=1.5):
-    global pathing_log
     pyautogui_img = pyautogui.screenshot(region=[0, 0, 1920, 1080])
     opencv_img = cv2.cvtColor(np.array(pyautogui_img), cv2.COLOR_RGB2BGR)
     borders = check_map_border(opencv_img)
     suggested_position = calc_anti_stuck(borders)
-    pathing_log["steps"]["step_status"] = f"Moving to {suggested_position} to avoid stuck..."
+    print(f"🧭 脱困: 朝 {suggested_position} 移动...")
     screen_center = np.array([960, 540])
     delta = suggested_position - screen_center
     max_delta = np.max(np.abs(delta))
