@@ -280,6 +280,24 @@ def lazy_theta_pathing(location, area=[]):
             return False
 
 
+def random_walkable_point(area, binary_map, max_tries=20):
+    """在矩形区域内随机采样一个可走点(binary_map里=255的), 而不是纯瞎猜坐标.
+
+    之前是在整个矩形里直接randint, 完全不管地图形状 —— 采样到墙里/区域外形状
+    (不是每个刷怪区域都是实心矩形)的点很常见, 角色会直接顶着墙走不过去。
+    这里改成拒绝采样: 采到墙就重来, max_tries次都不行就退回原来的随机点
+    (兜底, 不会因为极端形状的区域卡死采样).
+    """
+    (x1, y1), (x2, y2) = area
+    for _ in range(max_tries):
+        x = random.randint(x1, x2)
+        y = random.randint(y1, y2)
+        if binary_map is not None and 0 <= y < binary_map.shape[0] and 0 <= x < binary_map.shape[1]:
+            if binary_map[y, x] == 255:
+                return x, y
+    return random.randint(x1, x2), random.randint(y1, y2)
+
+
 def auto_farming(farming_area, duration=300, move_interval=2.0):
     """自动刷怪逻辑（依赖一直攻击按钮）"""
     x1, y1 = farming_area[0]
@@ -288,6 +306,7 @@ def auto_farming(farming_area, duration=300, move_interval=2.0):
     min_x, max_x = min(x1, x2), max(x1, x2)
     min_y, max_y = min(y1, y2), max(y1, y2)
     farming_area = [(min_x, min_y), (max_x, max_y)]
+    binary_map = load_binary_map()
 
     print(f"\n🎮 开始在区域 {farming_area} 进行自动刷怪...")
     print(f"⏱️  刷怪时长: {duration}秒")
@@ -320,27 +339,29 @@ def auto_farming(farming_area, duration=300, move_interval=2.0):
                 break
             continue
 
-        # 在区域内随机选择一个目标点
-        random_x = random.randint(farming_area[0][0], farming_area[1][0])
-        random_y = random.randint(farming_area[0][1], farming_area[1][1])
+        # 在区域内随机选择一个可走的目标点(不是瞎猜矩形里的坐标, 避开墙)
+        random_x, random_y = random_walkable_point(farming_area, binary_map)
 
         # 移动到目标点
         print(f"🚶 移动到 ({random_x}, {random_y})")
         move_result = move_to_position(current_pos, (random_x, random_y))
 
         if move_result == "stuck":
-            print("⚠️ 移动受阻")
+            print("⚠️ 移动受阻, 脱困一下...")
+            overlay.update(state="卡住", message="脱困中")
+            execute_anti_stuck()
         elif move_result in ["in_game_dead", "in_menu"]:
             print(f"⚠️ 游戏状态变化: {move_result}")
             exit_reason = "break"
             break
+        else:
+            # 只有真正走到点上才计入移动次数, "受阻"那次不算.
+            move_count += 1
 
         # 在位置停留，依赖一直攻击按钮自动攻击
         print(f"⚔️  停留 {move_interval}秒...")
-        overlay.update(state="刷怪中", pos=(random_x, random_y), message=f"停留 {move_interval}秒 (第{move_count + 1}次)")
+        overlay.update(state="刷怪中", pos=(random_x, random_y), message=f"停留 {move_interval}秒 (第{move_count}次)")
         time.sleep(move_interval)
-
-        move_count += 1
 
         # 检查游戏状态
         stage = check_stage()
