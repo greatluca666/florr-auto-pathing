@@ -19,8 +19,18 @@ def apply_map(name):
 
 
 def if_in_area(areas: list[tuple[tuple[int, int], tuple[int, int]]], point: tuple[int, int]):
+    """检查point在不在areas任意一个矩形里.
+
+    不假设area[0]一定是"左上角"、area[1]一定是"右下角" —— 之前就假设了这个顺序,
+    main.py里farming_area=[(20,15),(9,76)]第一个角x比第二个角x还大, 导致
+    `20 <= x <= 9`这种区间永远判不出True, 玩家哪怕站在区域正中间都判定"不在区域
+    内"。这里对每个轴分别取min/max再判断, 不管两个角怎么给都能判对。
+    """
     for area in areas:
-        if area[0][0] <= point[0] <= area[1][0] and area[0][1] <= point[1] <= area[1][1]:
+        (x1, y1), (x2, y2) = area
+        min_x, max_x = min(x1, x2), max(x1, x2)
+        min_y, max_y = min(y1, y2), max(y1, y2)
+        if min_x <= point[0] <= max_x and min_y <= point[1] <= max_y:
             return True
     return False
 
@@ -152,6 +162,15 @@ def abandon_game():
     pyautogui.doubleClick()
     pyautogui.doubleClick()
     pyautogui.doubleClick()
+
+
+def click_start_game():
+    """点掉线/死亡后菜单界面的"开始游戏"按钮, 坐标是实机悬停鼠标实测出来的
+    (1920x1080全屏布局下). 换分辨率/换布局需要重新量.
+    """
+    pyautogui.moveTo(967, 902)
+    time.sleep(0.2)
+    pyautogui.click()
 
 
 def check_stage():

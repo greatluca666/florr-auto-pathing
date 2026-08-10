@@ -397,19 +397,31 @@ if __name__ == "__main__":
     farming_duration = 300  # 5 分钟
     # ====================
 
-    print("🎮 开始自动寻路到刷怪区域...")
-    print(f"📍 目标区域: {farming_area}\n")
-    overlay.update(state="启动", target=location, message="开始自动寻路到刷怪区域")
+    print("🎮 开始自动寻路+刷怪 (掉线/死亡后自动点开始重来, 不主动停)\n")
 
-    # 寻路到目标区域
-    if lazy_theta_pathing(location, [farming_area]):
-        print("✅ 到达刷怪区域！")
-        # 开始刷怪
-        auto_farming(farming_area, farming_duration)
-    else:
-        print("❌ 无法到达目标区域")
-        # 不传state: lazy_theta_pathing已设好具体状态(已死亡/菜单中/卡住/出错),
-        # _merge_state只合并非None字段, 省略state就不会用泛泛的"出错"覆盖掉它.
-        overlay.update(message="无法到达目标区域")
+    round_count = 0
+    while True:
+        round_count += 1
+        print(f"\n{'='*50}\n第 {round_count} 轮\n{'='*50}")
+        print(f"📍 目标区域: {farming_area}\n")
+        overlay.update(state="启动", target=location, message=f"第{round_count}轮: 开始自动寻路到刷怪区域")
 
-    print("\n🏁 脚本结束")
+        # 寻路到目标区域
+        if lazy_theta_pathing(location, [farming_area]):
+            print("✅ 到达刷怪区域！")
+            auto_farming(farming_area, farming_duration)
+        else:
+            print("❌ 本轮未能到达目标区域")
+            # 不传state: lazy_theta_pathing已设好具体状态(已死亡/菜单中/卡住/出错),
+            # _merge_state只合并非None字段, 省略state就不会用泛泛的"出错"覆盖掉它.
+            overlay.update(message="本轮未能到达目标区域")
+
+        # 掉线/死亡/被踢都会落到菜单界面 —— 点"开始游戏"重新进局, 而不是结束脚本.
+        stage = check_stage()
+        if stage in ("in_game_dead", "in_menu"):
+            print("🔁 检测到掉线/死亡, 点击开始按钮继续游戏...")
+            overlay.update(state="重新开始", message="点击开始按钮...")
+            click_start_game()
+            time.sleep(3)  # 等游戏加载
+        else:
+            time.sleep(1)
