@@ -175,3 +175,6 @@ cython_debug/
 
 # git worktrees (agent-managed isolated workspaces)
 .worktrees/
+
+# local venv symlink (points back to main checkout, not a real dir here)
+/venv
