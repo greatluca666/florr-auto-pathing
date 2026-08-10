@@ -91,13 +91,18 @@ def calc_anti_stuck(borders, weight=1.0):
 
 
 def execute_anti_stuck(duration=1.5):
-    """卡住脱困: 优先用画面里的墙壁色算排斥方向, 找不到墙壁色就退化成随机方向硬闯.
+    """卡住脱困: 优先用画面里的墙壁色算排斥方向, 排斥力太弱/没有就退化成随机方向硬闯.
 
     check_map_border靠一个写死的墙壁RGB(容差±3)在全屏截图里找墙 —— 实测这颜色
     经常一个像素都匹配不上(游戏画面是带纹理阴影的贴图, 不是纯色小地图符号,
-    单一颜色+窄容差很容易全军覆没), 一旦borders是空的, 排斥力算出来就是零向量,
-    之前delta全零直接return, 脱困函数等于啥也没干, 角色永远卡着出不来。现在
-    找不到墙就随便挑个方向硬走, 好歹能把角色从卡死的地方挪开.
+    单一颜色+窄容差很容易全军覆没), 一旦borders是空的, 排斥力算出来就是零向量.
+
+    光判"完全等于0"不够: 实测过好几次borders不是空的, 但只匹配到零星几个孤立
+    像素, 算出来的力delta只有1像素左右(比如(0.26,-0.97)) —— 这点力换算成
+    keydown按键时长约等于0, 角色压根没挪窝, 下一轮截图又是同一批孤立像素,
+    算出来还是同一个delta, 陷入"看起来在脱困、实际原地不动"的死循环(实机验证过:
+    连续多轮"卡住→脱困→还是卡住"打印的坐标一模一样)。改成力小于阈值(以屏幕
+    像素为单位, 5px)就当没找到有效方向, 退化成随机方向硬闯.
     """
     pyautogui_img = pyautogui.screenshot(region=[0, 0, 1920, 1080])
     opencv_img = cv2.cvtColor(np.array(pyautogui_img), cv2.COLOR_RGB2BGR)
@@ -107,9 +112,9 @@ def execute_anti_stuck(duration=1.5):
     screen_center = np.array([960, 540])
     delta = suggested_position - screen_center
     max_delta = np.max(np.abs(delta))
-    if max_delta == 0:
+    if max_delta < 5:
         direction = random.choice(["w", "a", "s", "d", "wa", "wd", "sa", "sd"])
-        print(f"⚠️ 附近没找到墙壁色, 退化成随机方向脱困: {direction}")
+        print(f"⚠️ 附近没找到足够强的墙壁排斥力(力度{max_delta:.1f}), 退化成随机方向脱困: {direction}")
         keydown(direction)
         time.sleep(duration)
         keyup(direction)
