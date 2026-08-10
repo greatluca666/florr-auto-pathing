@@ -178,29 +178,58 @@ def abandon_game():
     pyautogui.doubleClick()
 
 
-_START_BUTTON_POS = (1059, 527)
-_START_BUTTON_RGB = (27, 203, 37)  # 实测出来的绿色"开始"按钮颜色(纯色底, 不是文字描边混色)
+_BUTTON_GREEN_RGB = (27, 203, 37)  # florr.io确认类按钮统一用这个绿色底(开始/继续都是)
+_START_BUTTON_POS = (1059, 527)     # 开局菜单"开始"按钮(还没进过局/或已经回到开局菜单)
+_CONTINUE_BUTTON_POS = (959, 634)   # 死亡结算画面"继续"按钮(注意: 跟开局菜单是两个完全不同的界面!)
+
+
+def _green_button_ratio(pos, half_w=15, half_h=10):
+    """采样按钮周围一小块区域, 算绿色像素占比 —— 不能只采一个点.
+
+    按钮上的文字/图标带黑色描边, 单点坐标很容易正好落在描边或图标上而不是纯色
+    背景上, 只有采样一整块区域看绿色占比才稳. 实测按钮区域里文字+图标占比不小,
+    纯绿色背景经常只剩10%~20%, 别把阈值定太高.
+    """
+    x, y = pos
+    region = pyautogui.screenshot(region=[x - half_w, y - half_h, half_w * 2, half_h * 2])
+    arr = np.array(region)[:, :, :3]
+    match = np.all(np.abs(arr.astype(int) - np.array(_BUTTON_GREEN_RGB)) <= 25, axis=-1)
+    return match.sum() / match.size
 
 
 def on_start_screen():
-    """检测屏幕上是不是正显示着开局/死亡后的"开始游戏"绿色按钮.
+    """检测屏幕上是不是正显示着开局菜单的绿色"开始"按钮(还没进局, 或已经从
+    死亡画面点"继续"回到了这里).
 
-    check_stage()那套单像素精确匹配是给别的菜单画面(死亡/游戏内暂停之类)校准的,
-    跟"还没点开始"的开局菜单对不上号(实测那个画面check_stage()只会返回
-    "unknown"). 与其猜另一个精确像素签名, 不如直接去测"开始"按钮那块是不是真是
-    绿的 —— 检测的就是马上要点的那个东西, 比猜单像素靠谱.
-
-    只采一个像素点太脆弱: 按钮上"开始"两个字带黑色描边, 单点坐标很容易正好落在
-    描边或播放三角图标上而不是绿色背景上, 采样一整块小区域看绿色占比才稳.
+    check_stage()那套单像素精确匹配是给别的画面校准的, 跟开局菜单对不上号(实测
+    这个画面check_stage()只会返回"unknown")。与其猜另一个精确像素签名, 不如直接
+    去测"开始"按钮那块是不是真是绿的 —— 检测的就是马上要点的那个东西.
     """
-    x, y = _START_BUTTON_POS
-    region = pyautogui.screenshot(region=[x - 15, y - 10, 30, 20])
-    arr = np.array(region)[:, :, :3]
-    match = np.all(np.abs(arr.astype(int) - np.array(_START_BUTTON_RGB)) <= 25, axis=-1)
-    green_ratio = match.sum() / match.size
-    # 实测按钮区域里"开始"文字+播放图标占了不小比例, 纯绿色背景只剩约17% ——
-    # 阈值定太高反而检测不到真按钮, 10%已经足够跟"这块完全没有绿色"区分开.
-    return green_ratio > 0.1
+    return _green_button_ratio(_START_BUTTON_POS) > 0.1
+
+
+_DEATH_SCREEN_GREEN_THRESHOLD = 0.02
+# "继续"按钮比"开始"按钮文字占比更高(按钮更小、字体相对更大), 同样15x10半径的
+# 采样框里纯绿色实测只剩3.7%左右, 阈值比on_start_screen()的0.1低不少, 不是笔误.
+
+
+def on_death_screen():
+    """检测屏幕上是不是正显示着死亡结算画面("你死于XX" + 绿色"继续"按钮).
+
+    这是跟开局菜单完全不同的一个界面(死于XX的文字、花瓣战利品面板、"继续"/"关闭"
+    两个按钮, 位置和文案都不一样), check_stage()原来那套in_game_dead判定
+    (探测像素(316,32)是不是纯白255,255,255)在实机上从没真正触发过 —— 同样是
+    没验证过的硬编码签名。这里直接测"继续"按钮那块是不是绿的.
+    """
+    return _green_button_ratio(_CONTINUE_BUTTON_POS) > _DEATH_SCREEN_GREEN_THRESHOLD
+
+
+def click_continue_after_death():
+    """点死亡结算画面的绿色"继续"按钮. 点完通常会回到开局菜单, 还需要再点一次
+    "开始"(click_start_game)才能真正进下一局."""
+    pyautogui.moveTo(_CONTINUE_BUTTON_POS)
+    time.sleep(0.2)
+    pyautogui.click()
 
 
 def click_start_game():

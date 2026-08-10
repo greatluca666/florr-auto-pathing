@@ -404,13 +404,19 @@ if __name__ == "__main__":
         round_count += 1
         print(f"\n{'='*50}\n第 {round_count} 轮\n{'='*50}")
 
-        # 每轮开头先检查: 掉线/死亡/还停在开局菜单(比如脚本刚启动时游戏还没点开始)
-        # 都会落在这几个状态上 —— 先点"开始游戏"把局开起来, 再去寻路。放在循环
+        # 每轮开头先检查: 死亡结算画面/开局菜单(掉线、被踢、或脚本刚启动时游戏
+        # 还没点开始)都会落在这两种画面之一 —— 注意这是两个完全不同的界面(死亡
+        # 画面是"你死于XX"+"继续"按钮, 开局菜单是用户名+"开始"按钮), 得分别处理:
+        # 死亡画面先点"继续"回到开局菜单, 开局菜单再点"开始"真正进局。放在循环
         # 顶部而不是只在轮次结束后检查, 这样脚本刚启动、游戏还没开始的情况也能
-        # 处理到, 不会一上来就对着开局菜单傻寻路.
-        stage = check_stage()
-        if stage in ("in_game_dead", "in_menu") or on_start_screen():
-            print("🔁 检测到掉线/死亡/开局菜单, 点击开始按钮进入游戏...")
+        # 处理到, 不会一上来就对着菜单傻寻路.
+        if on_death_screen():
+            print("💀 检测到死亡结算画面, 点击继续...")
+            overlay.update(state="重新开始", message="死亡, 点击继续...")
+            click_continue_after_death()
+            time.sleep(2)
+        if on_start_screen():
+            print("🔁 检测到开局菜单, 点击开始按钮进入游戏...")
             overlay.update(state="重新开始", message="点击开始按钮...")
             click_start_game()
             time.sleep(3)  # 等游戏加载
