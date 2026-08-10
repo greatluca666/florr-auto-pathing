@@ -182,58 +182,69 @@ def lazy_theta_pathing(location, area=[]):
     """寻路到目标区域"""
     retry_count = 0
     max_retries = 3
-    
+
     while True:
         pos = get_player_position()
-        
+
         if pos is None:
             retry_count += 1
             print(f"⚠️ 无法检测玩家位置，重试 {retry_count}/{max_retries}...")
+            overlay.update(state="无法检测位置", message=f"重试 {retry_count}/{max_retries}")
             if retry_count >= max_retries:
                 print("❌ 多次重试失败")
+                overlay.update(state="出错", message="多次重试失败")
                 return False
             time.sleep(1)
             continue
-        
+
         retry_count = 0
         print(f"\n📍 寻路: {pos} -> {location}")
+        overlay.update(state="寻路中", pos=pos, target=location, message="规划路径...")
         time_now = time.time()
-        
+
         binary_map = load_binary_map()
         if binary_map is None:
             print("❌ 地图加载失败")
+            overlay.update(state="出错", message="地图加载失败")
             return False
-        
+
         path = lazy_theta_star(binary_map, pos, location)
         print(f"⏱️  寻路耗时: {time.time() - time_now:.2f}秒")
-        
+
         if path is None:
             print("❌ 路径规划失败")
+            overlay.update(state="出错", message="路径规划失败")
             return False
-        
+
         print(f"✅ 找到路径，共 {len(path)} 个点")
+        overlay.update(message=f"找到路径, 共{len(path)}个点")
         stat = execute_path(path)
-        
+
         # 检查是否到达目标区域
         current_pos = get_player_position()
         if current_pos and if_in_area(area, current_pos):
             print(f"✅ 已到达目标区域！位置: {current_pos}\n")
+            overlay.update(state="完成", pos=current_pos, message="已到达目标区域")
             return True
-        
+
         if current_pos == location:
             print(f"✅ 已到达目标位置！\n")
+            overlay.update(state="完成", pos=current_pos, message="已到达目标位置")
             return True
-        
+
         if stat == "stuck":
             print("🔄 检测到卡住")
+            overlay.update(state="卡住", message="移动受阻")
             return False
-        
+
         stage = check_stage()
         if stage == "in_game_dead":
             print("💀 玩家已死亡")
+            overlay.update(state="已死亡")
             return False
         elif stage == "in_menu":
             print("📋 玩家在菜单中")
+            overlay.update(state="菜单中")
             return False
 
 
