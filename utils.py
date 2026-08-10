@@ -7,6 +7,7 @@ import os
 import cv2
 import traceback
 import heapq
+import random
 import numpy as np
 
 MAP = ""
@@ -90,6 +91,14 @@ def calc_anti_stuck(borders, weight=1.0):
 
 
 def execute_anti_stuck(duration=1.5):
+    """卡住脱困: 优先用画面里的墙壁色算排斥方向, 找不到墙壁色就退化成随机方向硬闯.
+
+    check_map_border靠一个写死的墙壁RGB(容差±3)在全屏截图里找墙 —— 实测这颜色
+    经常一个像素都匹配不上(游戏画面是带纹理阴影的贴图, 不是纯色小地图符号,
+    单一颜色+窄容差很容易全军覆没), 一旦borders是空的, 排斥力算出来就是零向量,
+    之前delta全零直接return, 脱困函数等于啥也没干, 角色永远卡着出不来。现在
+    找不到墙就随便挑个方向硬走, 好歹能把角色从卡死的地方挪开.
+    """
     pyautogui_img = pyautogui.screenshot(region=[0, 0, 1920, 1080])
     opencv_img = cv2.cvtColor(np.array(pyautogui_img), cv2.COLOR_RGB2BGR)
     borders = check_map_border(opencv_img)
@@ -99,6 +108,11 @@ def execute_anti_stuck(duration=1.5):
     delta = suggested_position - screen_center
     max_delta = np.max(np.abs(delta))
     if max_delta == 0:
+        direction = random.choice(["w", "a", "s", "d", "wa", "wd", "sa", "sd"])
+        print(f"⚠️ 附近没找到墙壁色, 退化成随机方向脱困: {direction}")
+        keydown(direction)
+        time.sleep(duration)
+        keyup(direction)
         return
     duration_x = duration * abs(delta[0]) / max_delta
     duration_y = duration * abs(delta[1]) / max_delta
