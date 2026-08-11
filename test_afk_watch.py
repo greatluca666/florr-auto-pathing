@@ -68,3 +68,10 @@ def test_poll_afk_pause_rereads_from_start_after_truncation(tmp_path, monkeypatc
         "[2026-08-11 00:00:01] <segment.py:127> <afk_thread()> EVENT: Found AFK window\n"
     )
     assert afk_watch.poll_afk_pause() is True
+
+
+def test_poll_afk_pause_false_when_path_is_directory(tmp_path, monkeypatch):
+    # 模拟LATEST_LOG_PATH指向目录而非文件(权限错误或误配置).
+    # open()会抛IsADirectoryError, 应被捕获且返回False.
+    _reset(monkeypatch, tmp_path)
+    assert afk_watch.poll_afk_pause() is False

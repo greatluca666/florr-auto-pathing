@@ -28,15 +28,15 @@ def _read_new_lines():
     global _last_offset
     try:
         size = os.path.getsize(LATEST_LOG_PATH)
-    except OSError:
+        if size < _last_offset:
+            _last_offset = 0
+        with open(LATEST_LOG_PATH, "r", encoding="utf-8", errors="ignore") as f:
+            f.seek(_last_offset)
+            lines = f.readlines()
+            _last_offset = f.tell()
+        return lines
+    except Exception:
         return []
-    if size < _last_offset:
-        _last_offset = 0
-    with open(LATEST_LOG_PATH, "r", encoding="utf-8", errors="ignore") as f:
-        f.seek(_last_offset)
-        lines = f.readlines()
-        _last_offset = f.tell()
-    return lines
 
 
 def poll_afk_pause():
