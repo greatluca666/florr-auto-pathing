@@ -2,6 +2,7 @@ from utils import *
 from overlay import create_overlay
 import time
 import random
+import afk_watch
 
 overlay = create_overlay()
 
@@ -123,6 +124,11 @@ def move_to_position(current_pos, target_pos, max_attempts=200, stall_limit=13, 
     stall_count = 0
     attempts = 0
     while attempts < max_attempts:
+        if afk_watch.poll_afk_pause():
+            overlay.update(state="AFK弹窗处理中", message="等待florr-auto-afk解题")
+            time.sleep(0.2)
+            continue
+
         current_pos = get_player_position()
         if current_pos is None:
             overlay.update(state="无法检测位置", message="移动中丢失玩家位置")
@@ -219,6 +225,11 @@ def lazy_theta_pathing(location, area=[]):
     retry_count = 0
 
     while True:
+        if afk_watch.poll_afk_pause():
+            overlay.update(state="AFK弹窗处理中", message="等待florr-auto-afk解题")
+            time.sleep(0.2)
+            continue
+
         # 死亡/开局画面的检查必须放在最前面、且不能只在"pos is None"分支里做 ——
         # 实机踩过坑: 死亡结算画面上凑巧有个像素跟玩家标记色对上了, 稳定测出一个
         # 假位置(不是None!), 导致下面那个"pos is None才查死亡画面"的分支永远
@@ -334,6 +345,11 @@ def auto_farming(farming_area, duration=300):
     exit_reason = "timeout"
 
     while time.time() - start_time < duration:
+        if afk_watch.poll_afk_pause():
+            overlay.update(state="AFK弹窗处理中", message="等待florr-auto-afk解题")
+            time.sleep(0.2)
+            continue
+
         # 死亡/开局画面检查放在循环最前面、不依赖"位置测不到" —— 死亡结算画面上
         # 曾经实测出过稳定的假位置(不是None), 只在current_pos is None分支里查
         # 会被这种假阳性绕过去, 角色明明已经死了脚本还在拿假坐标继续瞎刷.
