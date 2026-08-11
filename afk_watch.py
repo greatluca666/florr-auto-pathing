@@ -11,8 +11,9 @@ docs/superpowers/specs/2026-08-11-afk-check-coexistence-design.md.
 import os
 import time
 
-# 部署时改成florr-auto-afk实际launch目录下的latest.log绝对路径(VM里那个程序的工作目录).
-LATEST_LOG_PATH = "./latest.log"
+# florr-auto-afk.exe在VM里的部署目录是C:\Users\luca\Desktop\florr-auto-afk-v1.1.1-auto,
+# 双击exe时CWD是exe自身所在目录, latest.log就落在这个目录下.
+LATEST_LOG_PATH = "C:/Users/luca/Desktop/florr-auto-afk-v1.1.1-auto/latest.log"
 # 覆盖YOLO检测+分割+拖拽执行的时间; 若在florr-auto-afk配置里关掉moveAfterAFK可以调低.
 PAUSE_SECONDS = 12
 
