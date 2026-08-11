@@ -7,6 +7,11 @@ def _reset(monkeypatch, log_path):
     monkeypatch.setattr(afk_watch, "LATEST_LOG_PATH", str(log_path))
     monkeypatch.setattr(afk_watch, "_last_offset", 0)
     monkeypatch.setattr(afk_watch, "_pause_until", 0.0)
+    # 默认模拟"之前已经poll过, offset合法为0"这种常规状态(不是模块刚加载的
+    # 首次poll) —— 首次poll跳到文件末尾的特殊逻辑单独用测试覆盖, 见下面
+    # test_poll_afk_pause_ignores_preexisting_history_on_first_ever_poll.
+    monkeypatch.setattr(afk_watch, "_initialized", True)
+    monkeypatch.setattr(afk_watch, "_warned_unreadable", False)
 
 
 def test_poll_afk_pause_false_when_log_file_missing(tmp_path, monkeypatch):
@@ -75,3 +80,65 @@ def test_poll_afk_pause_false_when_path_is_directory(tmp_path, monkeypatch):
     # open()会抛IsADirectoryError, 应被捕获且返回False.
     _reset(monkeypatch, tmp_path)
     assert afk_watch.poll_afk_pause() is False
+
+
+def test_poll_afk_pause_detects_marker_appended_after_a_poll(tmp_path, monkeypatch):
+    # 复现真实运行方式: 先poll一次(什么都没有), 文件被外部程序追加内容,
+    # 再poll一次才检测到 —— 不是像其它测试那样在第一次poll前就把完整内容写好.
+    log_path = tmp_path / "latest.log"
+    log_path.write_text(
+        "[2026-08-11 00:00:00] <segment.py:1> <afk_thread()> EVENT: something else\n"
+    )
+    _reset(monkeypatch, log_path)
+    assert afk_watch.poll_afk_pause() is False
+    with open(log_path, "a") as f:
+        f.write(
+            "[2026-08-11 00:00:01] <segment.py:127> <afk_thread()> EVENT: Found AFK window\n"
+        )
+    assert afk_watch.poll_afk_pause() is True
+
+
+def test_poll_afk_pause_detects_marker_split_across_two_writes(tmp_path, monkeypatch):
+    # 模拟florr-auto-afk的write()调用被我们的poll撞到一半: 第一次poll时文件里
+    # 只有这一行的前半部分(还没写完, 没有结尾换行符). 没有finding 1的修复,
+    # _last_offset会越过这半行, 后半部分写完后也永远拼不回去, 标记就漏检了.
+    log_path = tmp_path / "latest.log"
+    prefix = "[2026-08-11 00:00:00] <segment.py:127> <afk_thread()> EVENT: Found AFK "
+    log_path.write_text(prefix)
+    _reset(monkeypatch, log_path)
+    assert afk_watch.poll_afk_pause() is False
+    with open(log_path, "a") as f:
+        f.write("window\n")
+    assert afk_watch.poll_afk_pause() is True
+
+
+def test_poll_afk_pause_ignores_preexisting_history_on_first_ever_poll(tmp_path, monkeypatch):
+    # 模拟main.py启动前florr-auto-afk已经跑了一段时间, 日志里躺着一条老早以前
+    # 就处理完的标记行. 模块从没poll过时的第一次调用不该把这段历史当成新事件,
+    # 得直接跳到文件末尾. 之后真的新写一条, 才应该触发.
+    log_path = tmp_path / "latest.log"
+    log_path.write_text(
+        "[2026-08-11 00:00:00] <segment.py:127> <afk_thread()> EVENT: Found AFK window\n"
+    )
+    monkeypatch.setattr(afk_watch, "LATEST_LOG_PATH", str(log_path))
+    monkeypatch.setattr(afk_watch, "_last_offset", 0)
+    monkeypatch.setattr(afk_watch, "_pause_until", 0.0)
+    monkeypatch.setattr(afk_watch, "_initialized", False)
+    monkeypatch.setattr(afk_watch, "_warned_unreadable", False)
+
+    assert afk_watch.poll_afk_pause() is False
+
+    with open(log_path, "a") as f:
+        f.write(
+            "[2026-08-11 00:00:01] <segment.py:127> <afk_thread()> EVENT: Found AFK window\n"
+        )
+    assert afk_watch.poll_afk_pause() is True
+
+
+def test_poll_afk_pause_warns_once_when_log_unreadable(tmp_path, monkeypatch, capsys):
+    _reset(monkeypatch, tmp_path / "does_not_exist.log")
+    assert afk_watch.poll_afk_pause() is False
+    assert afk_watch.poll_afk_pause() is False
+    assert afk_watch.poll_afk_pause() is False
+    captured = capsys.readouterr()
+    assert captured.out.count("⚠️") == 1

@@ -20,22 +20,49 @@ _FOUND_MARKER = "EVENT: Found AFK window"
 
 _last_offset = 0
 _pause_until = 0.0
+# 还没做过第一次真实读取 —— 用来区分"模块刚加载, 从没poll过"和"poll过, offset
+# 合法为0"这两种情况, 好让下面的截断重置逻辑(size < _last_offset)只在后一种
+# 情况下生效. 参见_read_new_lines()里的用法.
+_initialized = False
+# 日志读取失败(路径没配对/文件不存在/是目录/权限不够)只在第一次发生时打印一次
+# 警告, 别每次poll(一秒好几次)都刷屏.
+_warned_unreadable = False
 
 
 def _read_new_lines():
     """读取上次读到的位置之后新增的行. 文件比上次记录的offset还小(轮转/程序
-    重启)就当成新文件, 从头重读."""
-    global _last_offset
+    重启)就当成新文件, 从头重读.
+
+    模块刚加载、还从没poll过的第一次调用是特例: 不从文件开头读, 直接跳到当前
+    文件末尾. florr-auto-afk可能已经跑了一段时间, 从0读会把老早以前就处理完的
+    "Found AFK window"历史事件当成新事件, 触发一次没必要的暂停. 代价是main.py
+    启动前几毫秒内刚好写的标记可能被跳过, 比回放整段历史划得来.
+    """
+    global _last_offset, _initialized, _warned_unreadable
     try:
         size = os.path.getsize(LATEST_LOG_PATH)
-        if size < _last_offset:
+        if not _initialized:
+            _last_offset = size
+            _initialized = True
+        elif size < _last_offset:
             _last_offset = 0
         with open(LATEST_LOG_PATH, "r", encoding="utf-8", errors="ignore") as f:
             f.seek(_last_offset)
             lines = f.readlines()
             _last_offset = f.tell()
+            if lines and not lines[-1].endswith("\n"):
+                # 最后一行是对方进程正在写、还没写完的残行(我们刚好在它两次write
+                # 之间poll到了). 扔掉它, offset退回到这行开头 —— 不然下次它写完
+                # 剩下的部分时, 两半永远拼不到一起, 里面的标记行就永久漏检了.
+                partial = lines.pop()
+                _last_offset -= len(partial.encode("utf-8"))
         return lines
     except Exception:
+        if not _warned_unreadable:
+            _warned_unreadable = True
+            print(
+                f"⚠️ 读取florr-auto-afk日志失败(LATEST_LOG_PATH配置可能有误): {LATEST_LOG_PATH}"
+            )
         return []
 
 

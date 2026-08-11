@@ -127,6 +127,12 @@ def move_to_position(current_pos, target_pos, max_attempts=200, stall_limit=13, 
         if afk_watch.poll_afk_pause():
             overlay.update(state="AFK弹窗处理中", message="等待florr-auto-afk解题")
             time.sleep(0.2)
+            # 暂停期间角色可能被上一次鼠标指令继续带着走(这游戏靠鼠标位置转向,
+            # 不是靠按键状态) —— 暂停12秒后dist跟last_dist已经没有可比性了,
+            # 不清零的话很容易被误判成"冲过头"直接算到达. 清成跟函数开头一样的
+            # 初始状态, 让暂停后第一个真实tick当"刚开始移动"处理.
+            last_dist = None
+            stall_count = 0
             continue
 
         current_pos = get_player_position()
