@@ -230,21 +230,26 @@ def on_death_screen():
 
 
 def click_continue_after_death():
-    """点死亡结算画面的绿色"继续"按钮. 点完通常会回到开局菜单, 还需要再点一次
-    "开始"(click_start_game)才能真正进下一局."""
-    pyautogui.moveTo(_CONTINUE_BUTTON_POS)
+    """确认死亡结算画面, 回到开局菜单(还需要再调click_start_game才能真正进下一局).
+
+    改用回车而不是点像素坐标的绿色"继续"按钮(实测回车在这个画面确实能触发) ——
+    点坐标在换分辨率/换显示缩放(典型场景: Windows虚拟机)时经常点空, 回车不依赖
+    任何屏幕坐标, 天然跨分辨率/跨平台. _CONTINUE_BUTTON_POS仍然留着给
+    on_death_screen()做颜色探测用, 只是不再拿它去点击.
+    """
+    pyautogui.press("enter")
     time.sleep(0.2)
-    pyautogui.click()
 
 
 def click_start_game():
-    """点开始界面的绿色"开始"按钮, 坐标是截图里对绿色按钮做像素质心算出来的
-    (1920x1080全屏布局下, "开始"按钮实测中心在(1059,527)). 换分辨率/换布局需要
-    重新量 —— 之前凭鼠标悬停手动量过一次得到(967,902), 跟实际按钮对不上, 别再用.
+    """确认开局菜单, 真正进入游戏.
+
+    同click_continue_after_death()的理由, 改用回车而不是点像素坐标的绿色"开始"
+    按钮. _START_BUTTON_POS仍然留着给on_start_screen()做颜色探测用, 只是不再拿
+    它去点击.
     """
-    pyautogui.moveTo(_START_BUTTON_POS)
+    pyautogui.press("enter")
     time.sleep(0.2)
-    pyautogui.click()
 
 
 def check_stage():
