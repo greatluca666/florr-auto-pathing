@@ -232,29 +232,30 @@ def on_death_screen():
 def click_continue_after_death():
     """确认死亡结算画面, 回到开局菜单(还需要再调click_start_game才能真正进下一局).
 
-    上一版只用回车, 结果实机在Windows上死亡画面纹丝不动 —— 回车只会打进"当前
-    有键盘焦点的窗口", 脚本运行时焦点大概率停在终端(操作者盯着的就是终端输出),
-    不在florr.io那个浏览器标签页, 回车打空了. florr.io是全屏, 点哪儿都能把
-    焦点抢过来(不需要精确点在按钮上, 这也是为什么点坐标本身当年会失准但至少
-    还抢得到焦点) —— 点一下抢焦点, 再回车真正确认, 两步缺一不可.
+    之前两版都试过回车(先纯回车, 再补"点一下抢焦点+回车"), 实机截图拿到手才
+    发现方向从一开始就错了: florr.io里回车是开聊天框的快捷键(截图左下角写着
+    "按下[ENTER]或点击这里聊天"), 根本不会触发这个"继续"按钮, 跟焦点没关系.
+    (959,634)这个坐标本身是准的, 对着真实1920x1080截图量过, 正落在按钮范围内.
+
+    改回纯点击, 但沿用这个项目自己在abandon_game()里已经踩过坑验证过的套路:
+    单次click()第一下常常只把窗口/标签页激活, 点击事件没能真正传进游戏画布,
+    要连点几次才可靠命中.
     """
     pyautogui.moveTo(_CONTINUE_BUTTON_POS)
     time.sleep(0.2)
     pyautogui.click()
     time.sleep(0.1)
-    pyautogui.press("enter")
-    time.sleep(0.2)
+    pyautogui.click()
 
 
 def click_start_game():
     """确认开局菜单, 真正进入游戏. 同click_continue_after_death()的理由:
-    先点一下抢键盘焦点, 再回车真正确认."""
+    纯点击, 连点两次保证命中(参见该函数注释里的完整说明)."""
     pyautogui.moveTo(_START_BUTTON_POS)
     time.sleep(0.2)
     pyautogui.click()
     time.sleep(0.1)
-    pyautogui.press("enter")
-    time.sleep(0.2)
+    pyautogui.click()
 
 
 def check_stage():
