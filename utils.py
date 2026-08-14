@@ -232,22 +232,27 @@ def on_death_screen():
 def click_continue_after_death():
     """确认死亡结算画面, 回到开局菜单(还需要再调click_start_game才能真正进下一局).
 
-    改用回车而不是点像素坐标的绿色"继续"按钮(实测回车在这个画面确实能触发) ——
-    点坐标在换分辨率/换显示缩放(典型场景: Windows虚拟机)时经常点空, 回车不依赖
-    任何屏幕坐标, 天然跨分辨率/跨平台. _CONTINUE_BUTTON_POS仍然留着给
-    on_death_screen()做颜色探测用, 只是不再拿它去点击.
+    上一版只用回车, 结果实机在Windows上死亡画面纹丝不动 —— 回车只会打进"当前
+    有键盘焦点的窗口", 脚本运行时焦点大概率停在终端(操作者盯着的就是终端输出),
+    不在florr.io那个浏览器标签页, 回车打空了. florr.io是全屏, 点哪儿都能把
+    焦点抢过来(不需要精确点在按钮上, 这也是为什么点坐标本身当年会失准但至少
+    还抢得到焦点) —— 点一下抢焦点, 再回车真正确认, 两步缺一不可.
     """
+    pyautogui.moveTo(_CONTINUE_BUTTON_POS)
+    time.sleep(0.2)
+    pyautogui.click()
+    time.sleep(0.1)
     pyautogui.press("enter")
     time.sleep(0.2)
 
 
 def click_start_game():
-    """确认开局菜单, 真正进入游戏.
-
-    同click_continue_after_death()的理由, 改用回车而不是点像素坐标的绿色"开始"
-    按钮. _START_BUTTON_POS仍然留着给on_start_screen()做颜色探测用, 只是不再拿
-    它去点击.
-    """
+    """确认开局菜单, 真正进入游戏. 同click_continue_after_death()的理由:
+    先点一下抢键盘焦点, 再回车真正确认."""
+    pyautogui.moveTo(_START_BUTTON_POS)
+    time.sleep(0.2)
+    pyautogui.click()
+    time.sleep(0.1)
     pyautogui.press("enter")
     time.sleep(0.2)
 
