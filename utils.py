@@ -1,5 +1,6 @@
 import re
 import json
+import sys
 import pyautogui
 import time
 import math
@@ -9,6 +10,22 @@ import traceback
 import heapq
 import random
 import numpy as np
+
+if sys.platform == "win32":
+    # 没有这行, Windows下显示缩放不是100%时, PyAutoGUI截图/点击用的坐标系会被
+    # 系统偷偷做DPI虚拟化映射, 跟真实物理像素对不上 —— 全屏时最明显(实测:
+    # 关掉浏览器全屏反而能点对, 但一离开全屏, 屏幕中心就不等于游戏画布中心了,
+    # 靠鼠标相对屏幕中心转向的移动逻辑跟着报废, 全屏/点得准不能兼得, 必须从根上
+    # 让这个进程本身声明自己是DPI-aware的). florr-auto-afk(同作者同类项目)的
+    # main.py末尾就有这行, 说明这个坑已经被踩过验证过.
+    import ctypes
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(1)
+    except Exception:
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()
+        except Exception:
+            pass
 
 MAP = ""
 
