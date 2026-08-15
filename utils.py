@@ -257,7 +257,15 @@ def click_continue_after_death():
     改回纯点击, 但沿用这个项目自己在abandon_game()里已经踩过坑验证过的套路:
     单次click()第一下常常只把窗口/标签页激活, 点击事件没能真正传进游戏画布,
     要连点几次才可靠命中.
+
+    实测坐标+点击机制本身都没问题(debug_death_click.py隔离测过, 点击成功) ——
+    main.py主循环里失败, 是因为on_death_screen()一测到颜色达标就立刻点, 而
+    死亡画面很可能还在渐入动画里, 颜色刚过检测阈值那一瞬间按钮还没真正可交互.
+    隔离测试之所以每次都成功, 是因为脚本给了5秒倒计时, 画面早就稳定了才点 ——
+    人手速也从没快到能踩中这个窗口, 所以感觉不到"冷却", 但紧循环里的脚本能.
+    加一点等待, 让画面先稳定下来.
     """
+    time.sleep(0.5)
     pyautogui.moveTo(_CONTINUE_BUTTON_POS)
     time.sleep(0.2)
     pyautogui.click()
