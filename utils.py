@@ -230,9 +230,15 @@ def on_start_screen():
     return _green_button_ratio(_START_BUTTON_POS) > 0.1
 
 
-_DEATH_SCREEN_GREEN_THRESHOLD = 0.02
-# "继续"按钮比"开始"按钮文字占比更高(按钮更小、字体相对更大), 同样15x10半径的
-# 采样框里纯绿色实测只剩3.7%左右, 阈值比on_start_screen()的0.1低不少, 不是笔误.
+# "继续"按钮比"开始"按钮小, "继续"两个字相对占比更大 —— 用_green_button_ratio()
+# 默认的15x10采样半径时, 那两个字几乎能把整个采样框填满, 纯绿色背景被挤没了.
+# 实机截图验证过(debug_death_click.py存的debug_before_click.png, 真死亡画面):
+#   15x10框: ratio=0.0033 (被文字占满, 远低于旧阈值0.02, 检测直接判False)
+#   30x16框: ratio=0.3760 (放大采样范围, 纯绿色背景占比回归正常)
+# 阈值和采样半径都得跟着放大的框重新定, 不是单独调阈值就能补救.
+_DEATH_SCREEN_GREEN_THRESHOLD = 0.15
+_DEATH_SCREEN_SAMPLE_HALF_W = 30
+_DEATH_SCREEN_SAMPLE_HALF_H = 16
 
 
 def on_death_screen():
@@ -243,7 +249,12 @@ def on_death_screen():
     (探测像素(316,32)是不是纯白255,255,255)在实机上从没真正触发过 —— 同样是
     没验证过的硬编码签名。这里直接测"继续"按钮那块是不是绿的.
     """
-    return _green_button_ratio(_CONTINUE_BUTTON_POS) > _DEATH_SCREEN_GREEN_THRESHOLD
+    ratio = _green_button_ratio(
+        _CONTINUE_BUTTON_POS,
+        half_w=_DEATH_SCREEN_SAMPLE_HALF_W,
+        half_h=_DEATH_SCREEN_SAMPLE_HALF_H,
+    )
+    return ratio > _DEATH_SCREEN_GREEN_THRESHOLD
 
 
 def click_continue_after_death():
