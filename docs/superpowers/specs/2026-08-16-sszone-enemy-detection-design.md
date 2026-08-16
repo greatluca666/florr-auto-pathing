@@ -62,7 +62,7 @@ Per (species, rarity), each detection is classified into exactly one bucket:
 - **`ENGAGE`** — Mythic and below, any species. Normal behavior: this can become the chase/aim target, closing to normal range.
 - **`AVOID`** — Ultra `scorpion` or `beetle`. Never a chase candidate; if one is within `AVOID_TRIGGER_PX` of screen center, it overrides everything else and triggers a flee vector this tick.
 - **`CAUTIOUS`** — Ultra `sandstorm`, `cactus`, `sand_centipede`, or `soldier_fire_ant`. Still a valid chase candidate (can be aimed at / prioritized), but movement stops closing once within `CAUTIOUS_HOLD_PX` of it — held at that distance rather than pressed into melee range.
-- Anything rarer than Ultra (`Super`/`Eternal`/`Unique`) is not expected to actually spawn here (confirmed by the user) but is still given a defined fallback so classification never raises on an unlisted combination: treated as `CAUTIOUS`, the more conservative of the two non-`ENGAGE` buckets.
+- Anything rarer than Ultra (`Super`/`Eternal`/`Unique`) is not expected to actually spawn here (confirmed by the user) but is still given a defined fallback so classification never raises on an unlisted combination: treated as `AVOID` — the fail-closed choice, since these tiers are rarer (and presumably tougher) than the already-`AVOID`-worthy Ultra `scorpion`/`beetle`, with no observed rule to say otherwise.
 
 ## Priority (target selection)
 
@@ -115,13 +115,13 @@ Existing per-tick checks (AFK pause, death/menu screen) stay first and unchanged
 ## Error handling
 
 - Model load failure, inference exception, or zero detections → treated identically to `"wander"`. Enemy detection is additive; it must never be able to block or crash the core farming loop it sits on top of.
-- Unlisted (species, rarity) combination in `classify_action` → falls back to `CAUTIOUS` (see above) rather than raising.
+- Unlisted (species, rarity) combination in `classify_action` → falls back to `AVOID` (see above) rather than raising.
 
 ## Testing
 
 Unit tests (`test_enemy_detect.py`, following this repo's existing `test_utils.py` style):
 
-- `classify_action` — every (species, rarity) combination used by the ruleset resolves to the right bucket; combinations above Ultra fall back to `CAUTIOUS` without raising.
+- `classify_action` — every (species, rarity) combination used by the ruleset resolves to the right bucket; combinations above Ultra fall back to `AVOID` without raising.
 - `priority_score` ordering — a low-species-priority mob at a higher rarity tier outranks a high-species-priority mob at a lower tier (e.g. Rare `sand_centipede` > Common `sandstorm`); within the same rarity tier, species order matches `sandstorm > cactus > beetle > scorpion > {sand_centipede, soldier_fire_ant}`.
 - `sample_rarity` — synthetic small images filled with each table color resolve to the right tier within tolerance; an unmatched color falls back to `Common`.
 - `select_action` — given canned detection lists: an `AVOID` mob within radius produces `"flee"` regardless of what else is present; no `AVOID` mob in range but an `ENGAGE`/`CAUTIOUS` candidate present produces `"chase"` with the right `hold_px`; no relevant detections produces `"wander"`.
