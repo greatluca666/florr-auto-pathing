@@ -1,6 +1,6 @@
 import numpy as np
 
-from enemy_detect import sample_rarity, RARITY_COLORS, _hex_to_bgr
+from enemy_detect import sample_rarity, RARITY_COLORS, _hex_to_bgr, classify_action, priority_score
 
 
 def test_sample_rarity_matches_known_colors():
@@ -37,3 +37,47 @@ def test_sample_rarity_falls_back_to_common_when_no_match():
     image = np.zeros((100, 100, 3), dtype=np.uint8)  # pure black
     bbox = (40, 60, 60, 80)
     assert sample_rarity(image, bbox) == "Common"
+
+
+_ALL_SPECIES = [
+    "scorpion", "beetle", "cactus", "sandstorm",
+    "sand_centipede", "soldier_fire_ant",
+]
+_BELOW_ULTRA = ["Common", "Unusual", "Rare", "Epic", "Legendary", "Mythic"]
+_ABOVE_ULTRA = ["Super", "Eternal", "Unique"]
+
+
+def test_classify_action_engage_below_ultra_any_species():
+    for species in _ALL_SPECIES:
+        for rarity in _BELOW_ULTRA:
+            assert classify_action(species, rarity) == "ENGAGE"
+
+
+def test_classify_action_ultra_avoid_species():
+    assert classify_action("scorpion", "Ultra") == "AVOID"
+    assert classify_action("beetle", "Ultra") == "AVOID"
+
+
+def test_classify_action_ultra_cautious_species():
+    for species in ["sandstorm", "cactus", "sand_centipede", "soldier_fire_ant"]:
+        assert classify_action(species, "Ultra") == "CAUTIOUS"
+
+
+def test_classify_action_above_ultra_falls_back_to_avoid():
+    for species in _ALL_SPECIES:
+        for rarity in _ABOVE_ULTRA:
+            assert classify_action(species, rarity) == "AVOID"
+
+
+def test_priority_score_rarity_dominates_species():
+    # Rare sand_centipede(物种优先级最低)该压过Common sandstorm(物种优先级最高) ——
+    # 稀有度是第一比较项, 碾压式的.
+    assert priority_score("sand_centipede", "Rare") > priority_score("sandstorm", "Common")
+
+
+def test_priority_score_species_tiebreak_within_same_rarity():
+    assert priority_score("sandstorm", "Common") > priority_score("cactus", "Common")
+    assert priority_score("cactus", "Common") > priority_score("beetle", "Common")
+    assert priority_score("beetle", "Common") > priority_score("scorpion", "Common")
+    assert priority_score("scorpion", "Common") > priority_score("sand_centipede", "Common")
+    assert priority_score("sand_centipede", "Common") == priority_score("soldier_fire_ant", "Common")

@@ -56,3 +56,42 @@ def sample_rarity(image, bbox, tolerance=40):
         if dist < best_dist:
             best_name, best_dist = name, dist
     return best_name if best_dist <= tolerance else "Common"
+
+
+# 数值越大优先级越高(故意跟RARITY_RANK同方向, 好用max()一起挑目标).
+# sandstorm > cactus > beetle > scorpion > {sand_centipede, soldier_fire_ant}(并列最低)
+SPECIES_RANK = {
+    "sandstorm": 5,
+    "cactus": 4,
+    "beetle": 3,
+    "scorpion": 2,
+    "sand_centipede": 1,
+    "soldier_fire_ant": 1,
+}
+
+_AVOID_PAIRS = {("scorpion", "Ultra"), ("beetle", "Ultra")}
+_CAUTIOUS_PAIRS = {
+    ("sandstorm", "Ultra"), ("cactus", "Ultra"),
+    ("sand_centipede", "Ultra"), ("soldier_fire_ant", "Ultra"),
+}
+
+
+def classify_action(species, rarity):
+    """按(物种, 稀有度)分档: ENGAGE(正常接战)/CAUTIOUS(可打但保持距离)/
+    AVOID(不打, 触发规避). Mythic及以下全ENGAGE; Ultra档蝎子/甲虫AVOID,
+    沙尘暴/仙人掌/沙蜈蚣/火蚁CAUTIOUS; 比Ultra还稀有(Super/Eternal/Unique, 实测
+    这个刷怪区不会刷新这个档位)没规则覆盖时兜底AVOID —— 失败方向选"别惹", 不选
+    "谨慎打": 比已经判AVOID的Ultra蝎子/甲虫还稀有的东西没理由更弱。"""
+    if RARITY_RANK[rarity] < RARITY_RANK["Ultra"]:
+        return "ENGAGE"
+    if (species, rarity) in _AVOID_PAIRS:
+        return "AVOID"
+    if (species, rarity) in _CAUTIOUS_PAIRS:
+        return "CAUTIOUS"
+    return "AVOID"
+
+
+def priority_score(species, rarity):
+    """排序键, 数值越大优先级越高. 稀有度档位是第一比较项(碾压式), 物种优先级
+    只在同稀有度档位时当平手规则."""
+    return (RARITY_RANK[rarity], SPECIES_RANK[species])
