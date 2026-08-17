@@ -95,3 +95,41 @@ def priority_score(species, rarity):
     """排序键, 数值越大优先级越高. 稀有度档位是第一比较项(碾压式), 物种优先级
     只在同稀有度档位时当平手规则."""
     return (RARITY_RANK[rarity], SPECIES_RANK[species])
+
+
+def aim_mouse_target(target_pos, hold_px=None, center=(960, 540), max_extend=500):
+    """把目标的屏幕坐标换算成鼠标该移到的位置 —— 纯屏幕坐标系计算, 跟
+    move_to_position()那套小地图坐标系是两套独立空间, 不能互相传参数。
+    hold_px设了值时, 一旦已经进到这个距离内就不再继续靠近(退回屏幕中心, 停止
+    输出"继续接近"的方向), 给CAUTIOUS档的怪用; hold_px=None时无视距离上限一直
+    往目标方向贴(只按max_extend限速度), 给ENGAGE档用。"""
+    tx, ty = target_pos
+    cx, cy = center
+    dx, dy = tx - cx, ty - cy
+    dist = math.hypot(dx, dy)
+    if dist == 0:
+        return center
+    if hold_px is not None and dist <= hold_px:
+        return center
+    extend = min(dist, max_extend)
+    return (cx + dx / dist * extend, cy + dy / dist * extend)
+
+
+def flee_mouse_target(avoid_positions, center=(960, 540), extend=400):
+    """算所有AVOID怪的排斥力合向量, 换算成鼠标该移到的位置(往远离它们的方向)。
+    合力互相抵消成约0向量(比如两个AVOID怪分别在玩家两侧)时没有明确逃离方向,
+    退回屏幕中心 —— 等同于"停止移动", 跟utils.keyup()把鼠标收回中心停止移动是
+    同一个约定。"""
+    cx, cy = center
+    fx, fy = 0.0, 0.0
+    for px, py in avoid_positions:
+        dx, dy = cx - px, cy - py
+        dist = math.hypot(dx, dy)
+        if dist == 0:
+            continue
+        fx += dx / dist
+        fy += dy / dist
+    mag = math.hypot(fx, fy)
+    if mag == 0:
+        return center
+    return (cx + fx / mag * extend, cy + fy / mag * extend)

@@ -1,6 +1,6 @@
 import numpy as np
 
-from enemy_detect import sample_rarity, RARITY_COLORS, _hex_to_bgr, classify_action, priority_score
+from enemy_detect import sample_rarity, RARITY_COLORS, _hex_to_bgr, classify_action, priority_score, aim_mouse_target, flee_mouse_target
 
 
 def test_sample_rarity_matches_known_colors():
@@ -81,3 +81,30 @@ def test_priority_score_species_tiebreak_within_same_rarity():
     assert priority_score("beetle", "Common") > priority_score("scorpion", "Common")
     assert priority_score("scorpion", "Common") > priority_score("sand_centipede", "Common")
     assert priority_score("sand_centipede", "Common") == priority_score("soldier_fire_ant", "Common")
+
+
+def test_aim_mouse_target_points_toward_target_beyond_hold():
+    result = aim_mouse_target((1460, 540), hold_px=None, center=(960, 540), max_extend=500)
+    assert result[0] > 960
+    assert abs(result[1] - 540) < 1e-6
+
+
+def test_aim_mouse_target_stops_at_hold_distance():
+    result = aim_mouse_target((1200, 540), hold_px=250, center=(960, 540))
+    assert result == (960, 540)
+
+
+def test_aim_mouse_target_clamps_to_max_extend():
+    result = aim_mouse_target((3000, 540), hold_px=None, center=(960, 540), max_extend=500)
+    assert result == (1460, 540)
+
+
+def test_flee_mouse_target_points_away_from_single_threat():
+    result = flee_mouse_target([(1460, 540)], center=(960, 540), extend=400)
+    assert result[0] < 960
+    assert abs(result[1] - 540) < 1e-6
+
+
+def test_flee_mouse_target_returns_center_when_forces_cancel():
+    result = flee_mouse_target([(1460, 540), (460, 540)], center=(960, 540))
+    assert result == (960, 540)
