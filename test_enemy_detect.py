@@ -99,6 +99,13 @@ def test_aim_mouse_target_clamps_to_max_extend():
     assert result == (1460, 540)
 
 
+def test_aim_mouse_target_chases_to_actual_distance_when_within_max_extend():
+    # dist=100 is well inside max_extend=500 — the mouse should land exactly
+    # at the target's offset from center, not jump all the way to max_extend.
+    result = aim_mouse_target((1060, 540), hold_px=None, center=(960, 540), max_extend=500)
+    assert result == (1060, 540)
+
+
 def test_flee_mouse_target_points_away_from_single_threat():
     result = flee_mouse_target([(1460, 540)], center=(960, 540), extend=400)
     assert result[0] < 960

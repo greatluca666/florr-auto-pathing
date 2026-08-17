@@ -130,6 +130,6 @@ def flee_mouse_target(avoid_positions, center=(960, 540), extend=400):
         fx += dx / dist
         fy += dy / dist
     mag = math.hypot(fx, fy)
-    if mag == 0:
+    if mag < 0.05:
         return center
     return (cx + fx / mag * extend, cy + fy / mag * extend)
