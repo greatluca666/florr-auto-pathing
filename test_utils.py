@@ -1,4 +1,6 @@
-from utils import if_in_area
+import numpy as np
+
+from utils import if_in_area, _ensure_grayscale_2d
 
 
 def test_if_in_area_normal_corner_order():
@@ -29,3 +31,28 @@ def test_if_in_area_checks_multiple_areas():
     areas = [[(0, 0), (5, 5)], [(20, 20), (25, 25)]]
     assert if_in_area(areas, (22, 22)) is True
     assert if_in_area(areas, (12, 12)) is False
+
+
+def test_ensure_grayscale_2d_squeezes_trailing_channel_dim():
+    # 复现实测撞到的场景: cv2.imread(path, cv2.IMREAD_GRAYSCALE)在某些
+    # OpenCV/平台组合(Windows)下吐出(H,W,1)而不是纯(H,W), 导致下游
+    # calibrate_player()的`rows, cols = map.shape`拆包报错.
+    img_3d = np.zeros((10, 20, 1), dtype=np.uint8)
+    img_3d[3, 5, 0] = 255
+    result = _ensure_grayscale_2d(img_3d)
+    assert result.shape == (10, 20)
+    assert result[3, 5] == 255
+
+
+def test_ensure_grayscale_2d_leaves_true_2d_untouched():
+    img_2d = np.zeros((10, 20), dtype=np.uint8)
+    img_2d[3, 5] = 255
+    result = _ensure_grayscale_2d(img_2d)
+    assert result.shape == (10, 20)
+    assert result[3, 5] == 255
+
+
+def test_ensure_grayscale_2d_passes_through_none():
+    # cv2.imread在文件读不到时返回None(不是抛异常) —— 不能让形状归一化
+    # 逻辑在这种情况下自己先炸了(None.ndim会AttributeError).
+    assert _ensure_grayscale_2d(None) is None

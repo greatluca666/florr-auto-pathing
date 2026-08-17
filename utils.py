@@ -83,7 +83,9 @@ def check_map_border(opencv_img):
 
 
 def toggle_map():
-    if get_player_position() == (250, 50):
+    pos = get_player_position()
+    if pos == (250, 50):
+        print(f"🗺️ toggle_map: 位置命中(250,50), 按M切换地图 (调用前位置={pos})")
         pyautogui.press('m')
         time.sleep(1)
 
@@ -327,8 +329,20 @@ def preprocess_map(image):
     return binary
 
 
+def _ensure_grayscale_2d(img):
+    """cv2.imread(path, cv2.IMREAD_GRAYSCALE)理论上强制转成纯(H,W), 但实测在
+    Windows上撞到过它吐出带一条多余尾随通道维的(H,W,1)(Mac上没复现, 是OpenCV/
+    平台组合的已知行为差异). 这个二义性会让所有假设'map是2D数组'的下游代码
+    (calibrate_player的rows,cols=map.shape、lazy_theta_star的map[y][x]、
+    random_walkable_point的binary_map[y,x]等)全部遭殃 —— 与其挨个打补丁, 不如
+    在唯一的加载入口把形状锁死."""
+    if img is not None and img.ndim == 3:
+        img = img[:, :, 0]
+    return img
+
+
 def load_binary_map():
-    return cv2.imread(f'./maps/{MAP}.png', cv2.IMREAD_GRAYSCALE)
+    return _ensure_grayscale_2d(cv2.imread(f'./maps/{MAP}.png', cv2.IMREAD_GRAYSCALE))
 
 
 def get_player_location_on_map(opencv_img, target_color, map, precise=False):
