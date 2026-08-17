@@ -115,3 +115,57 @@ def test_flee_mouse_target_points_away_from_single_threat():
 def test_flee_mouse_target_returns_center_when_forces_cancel():
     result = flee_mouse_target([(1460, 540), (460, 540)], center=(960, 540))
     assert result == (960, 540)
+
+
+from enemy_detect import select_action
+
+
+def _det(species, rarity, screen_pos):
+    return {
+        "species": species, "rarity": rarity, "screen_pos": screen_pos,
+        "bbox": (0, 0, 0, 0), "confidence": 0.9,
+    }
+
+
+def test_select_action_flees_when_avoid_mob_in_range():
+    detections = [
+        _det("scorpion", "Ultra", (1100, 540)),   # 160px from center, 在触发半径内
+        _det("sandstorm", "Common", (960, 700)),  # 优先级再高也不该盖过flee
+    ]
+    action, payload = select_action(detections, avoid_trigger_px=400)
+    assert action == "flee"
+    assert (1100, 540) in payload
+
+
+def test_select_action_ignores_avoid_mob_outside_trigger_radius():
+    detections = [
+        _det("scorpion", "Ultra", (2000, 540)),   # 1040px, 远超触发半径
+        _det("sandstorm", "Common", (1000, 560)),
+    ]
+    action, target, hold_px = select_action(detections, avoid_trigger_px=400)
+    assert action == "chase"
+    assert target["species"] == "sandstorm"
+    assert hold_px is None
+
+
+def test_select_action_chases_best_priority_candidate():
+    detections = [
+        _det("scorpion", "Common", (1000, 540)),
+        _det("sand_centipede", "Rare", (1010, 540)),  # 稀有度更高, 该选它
+    ]
+    action, target, hold_px = select_action(detections)
+    assert action == "chase"
+    assert target["species"] == "sand_centipede"
+
+
+def test_select_action_holds_distance_for_cautious_target():
+    detections = [_det("cactus", "Ultra", (1000, 540))]
+    action, target, hold_px = select_action(detections, cautious_hold_px=250)
+    assert action == "chase"
+    assert hold_px == 250
+
+
+def test_select_action_wanders_with_no_relevant_detections():
+    action, payload = select_action([])
+    assert action == "wander"
+    assert payload is None

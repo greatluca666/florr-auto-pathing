@@ -133,3 +133,35 @@ def flee_mouse_target(avoid_positions, center=(960, 540), extend=400):
     if mag < 0.05:
         return center
     return (cx + fx / mag * extend, cy + fy / mag * extend)
+
+
+def select_action(detections, avoid_trigger_px=400, cautious_hold_px=250, center=(960, 540)):
+    """每tick的索敌决策入口. detections是scan_enemies()给的检测列表(或测试里
+    手搭的同结构字典列表). 返回三选一:
+      ("flee", avoid_positions)   —— 触发半径内有AVOID怪, 优先规避
+      ("chase", target, hold_px)  —— 没有近身危险, 但有可打目标(ENGAGE/CAUTIOUS)
+      ("wander", None)            —— 啥有效目标都没有, 交回原来的随机漫游
+    AVOID怪永远进不了"chase"候选池, 哪怕它稀有度算下来优先级最高。"""
+    avoid_positions = []
+    candidates = []
+    for d in detections:
+        bucket = classify_action(d["species"], d["rarity"])
+        if bucket == "AVOID":
+            avoid_positions.append(d["screen_pos"])
+        else:
+            candidates.append((d, bucket))
+
+    if avoid_positions:
+        cx, cy = center
+        nearest = min(math.hypot(px - cx, py - cy) for px, py in avoid_positions)
+        if nearest <= avoid_trigger_px:
+            return ("flee", avoid_positions)
+
+    if candidates:
+        best, best_bucket = max(
+            candidates,
+            key=lambda pair: priority_score(pair[0]["species"], pair[0]["rarity"]))
+        hold_px = cautious_hold_px if best_bucket == "CAUTIOUS" else None
+        return ("chase", best, hold_px)
+
+    return ("wander", None)
