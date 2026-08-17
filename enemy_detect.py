@@ -111,7 +111,13 @@ def priority_score(species, rarity):
     return (RARITY_RANK[rarity], SPECIES_RANK[species])
 
 
-def aim_mouse_target(target_pos, hold_px=None, center=(960, 540), max_extend=500):
+SCREEN_CENTER = (960, 540)  # 屏幕中心, 同时也是"停止移动"的鼠标位置约定(见
+                              # utils.keyup()) —— aim_mouse_target/flee_mouse_target
+                              # 在"保持距离"/"没有明确方向"时都退回这个值, 调用方
+                              # (main.py)靠跟这个常量比较来判断"这tick是不是故意停住"。
+
+
+def aim_mouse_target(target_pos, hold_px=None, center=SCREEN_CENTER, max_extend=500):
     """把目标的屏幕坐标换算成鼠标该移到的位置 —— 纯屏幕坐标系计算, 跟
     move_to_position()那套小地图坐标系是两套独立空间, 不能互相传参数。
     hold_px设了值时, 一旦已经进到这个距离内就不再继续靠近(退回屏幕中心, 停止
@@ -129,7 +135,7 @@ def aim_mouse_target(target_pos, hold_px=None, center=(960, 540), max_extend=500
     return (cx + dx / dist * extend, cy + dy / dist * extend)
 
 
-def flee_mouse_target(avoid_positions, center=(960, 540), extend=400):
+def flee_mouse_target(avoid_positions, center=SCREEN_CENTER, extend=400):
     """算所有AVOID怪的排斥力合向量, 换算成鼠标该移到的位置(往远离它们的方向)。
     合力互相抵消成约0向量(比如两个AVOID怪分别在玩家两侧)时没有明确逃离方向,
     退回屏幕中心 —— 等同于"停止移动", 跟utils.keyup()把鼠标收回中心停止移动是
@@ -168,7 +174,7 @@ def chase_is_stalled(last_pos, current_pos, stall_count, progress_epsilon=1.5, s
     return stall_count, stall_count >= stall_limit
 
 
-def select_action(detections, avoid_trigger_px=400, cautious_hold_px=250, center=(960, 540)):
+def select_action(detections, avoid_trigger_px=400, cautious_hold_px=250, center=SCREEN_CENTER):
     """每tick的索敌决策入口. detections是scan_enemies()给的检测列表(或测试里
     手搭的同结构字典列表). 返回三选一:
       ("flee", avoid_positions)   —— 触发半径内有AVOID怪, 优先规避

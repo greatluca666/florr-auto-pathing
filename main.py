@@ -420,34 +420,39 @@ def auto_farming(farming_area, duration=300):
 
         enemy_action = enemy_decision[0]
 
+        if enemy_action == "flee":
+            avoid_positions = enemy_decision[1]
+            mouse_target = enemy_detect.flee_mouse_target(avoid_positions)
+        elif enemy_action == "chase":
+            target, hold_px = enemy_decision[1], enemy_decision[2]
+            mouse_target = enemy_detect.aim_mouse_target(target["screen_pos"], hold_px=hold_px)
+
         if enemy_action in ("flee", "chase"):
             # wander分支靠move_to_position自带的卡住检测+execute_anti_stuck()脱困,
             # chase/flee这两个分支是每tick直接moveTo(), 没有等价机制 —— 补上同款
             # 卡住判定(看玩家自己的位置有没有实质进展), 卡住够久就让execute_anti_stuck()
             # 接管这一tick, 不再执行下面的追击/逃离moveTo().
-            chase_stall_count, should_yield = enemy_detect.chase_is_stalled(
-                chase_last_pos, current_pos, chase_stall_count)
-            chase_last_pos = current_pos
-            if should_yield:
-                print("⚠️ 追击/规避途中卡住, 脱困一下...")
-                overlay.update(state="卡住", message="追击/规避途中卡住, 脱困中")
-                execute_anti_stuck()
-                chase_stall_count = 0
-                continue
+            # 注意: mouse_target == SCREEN_CENTER时是aim_mouse_target/flee_mouse_target
+            # 自己主动选择"停在这"(CAUTIOUS档保持距离/规避合力抵消没有明确方向), 不是
+            # 卡住 —— 这种tick完全跳过卡住计数的推进和判定(不累加也不清零, 留给下一个
+            # 真正在动的tick接着算), 否则会把"刻意停"误判成"卡住"进而执行脱困把玩家
+            # 怼向它本该保持距离的危险目标。
+            if mouse_target != enemy_detect.SCREEN_CENTER:
+                chase_stall_count, should_yield = enemy_detect.chase_is_stalled(
+                    chase_last_pos, current_pos, chase_stall_count)
+                chase_last_pos = current_pos
+                if should_yield:
+                    print("⚠️ 追击/规避途中卡住, 脱困一下...")
+                    overlay.update(state="卡住", message="追击/规避途中卡住, 脱困中")
+                    execute_anti_stuck()
+                    chase_stall_count = 0
+                    continue
 
-        if enemy_action == "flee":
-            avoid_positions = enemy_decision[1]
-            mouse_target = enemy_detect.flee_mouse_target(avoid_positions)
-            overlay.update(state="规避中", pos=current_pos, message="附近有危险稀有怪, 拉开距离")
-            pyautogui.moveTo(mouse_target)
-            time.sleep(0.05)
-            continue
-
-        if enemy_action == "chase":
-            target, hold_px = enemy_decision[1], enemy_decision[2]
-            mouse_target = enemy_detect.aim_mouse_target(target["screen_pos"], hold_px=hold_px)
-            overlay.update(state="索敌中", pos=current_pos,
-                            message=f"追击 {target['species']}({target['rarity']})")
+            if enemy_action == "flee":
+                overlay.update(state="规避中", pos=current_pos, message="附近有危险稀有怪, 拉开距离")
+            else:
+                overlay.update(state="索敌中", pos=current_pos,
+                                message=f"追击 {target['species']}({target['rarity']})")
             pyautogui.moveTo(mouse_target)
             time.sleep(0.05)
             continue
