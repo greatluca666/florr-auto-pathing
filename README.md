@@ -27,6 +27,20 @@ To decide on the positions and areas, I've already prepared `map_select.py` and 
 > Area added: [(1, 43), (27, 87)]
 > Final areas: [[(6, 5), (40, 44)], [(1, 43), (27, 87)]]
 
+## Enemy Detection (Sandstorm Zone)
+
+`auto_farming()` can chase/avoid mobs by rarity using a YOLO model. This needs
+`models/desert.pt` (6 classes: scorpion, beetle, cactus, sandstorm,
+sand_centipede, soldier_fire_ant) placed at that exact path — it's not
+included in this repo (third-party binary weights, gitignored). Get it from
+[Shiny-Ladybug/assets](https://github.com/Shiny-Ladybug/assets) yourself and
+verify its source before use; whoever/whatever wires this up should not be
+downloading and loading arbitrary `.pt` files from the internet without a
+human confirming that step (`.pt` files are pickle-based and can execute
+code on load). See
+`docs/superpowers/specs/2026-08-16-sszone-enemy-detection-design.md` for the
+full design and the rarity-color-table caveats.
+
 ## Implements
 
 For this is CLIENT-SIDE, so I haven't do any resolution support.

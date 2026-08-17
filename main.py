@@ -3,8 +3,17 @@ from overlay import create_overlay
 import time
 import random
 import afk_watch
+import enemy_detect
 
 overlay = create_overlay()
+
+# ===== 索敌配置 (sszone敌怪检测/追击/规避) =====
+ENEMY_MODEL_PATH = "models/desert.pt"
+ENEMY_SCAN_INTERVAL = 0.3   # 秒, YOLO扫描节流间隔(不是每tick都跑, 推理有开销)
+AVOID_TRIGGER_PX = 400      # 屏幕像素半径, AVOID怪进入此半径触发逃离
+CAUTIOUS_HOLD_PX = 250      # 屏幕像素, CAUTIOUS怪保持的最小距离(不继续贴近)
+# 以上数值是没实机测过的占位默认值, 实机跑一遍后再按观察到的效果调.
+# ================================================
 
 def lazy_heuristic(node1, node2):
     return math.sqrt((node1.x - node2.x) ** 2 + (node1.y - node2.y) ** 2)
@@ -349,6 +358,8 @@ def auto_farming(farming_area, duration=300):
     start_time = time.time()
     move_count = 0
     exit_reason = "timeout"
+    last_enemy_scan = 0.0
+    enemy_decision = ("wander", None)
 
     while time.time() - start_time < duration:
         if afk_watch.poll_afk_pause():
@@ -386,7 +397,42 @@ def auto_farming(farming_area, duration=300):
                 break
             continue
 
-        # 在区域内随机选择一个可走的目标点(不是瞎猜矩形里的坐标, 避开墙)
+        # 索敌: 按ENEMY_SCAN_INTERVAL节流跑YOLO(不是每tick都跑, 推理有开销).
+        # 索敌是附加功能, 任何异常都退化成"漫游", 不能让它打断刷怪主循环.
+        now = time.time()
+        if now - last_enemy_scan >= ENEMY_SCAN_INTERVAL:
+            last_enemy_scan = now
+            try:
+                detections = enemy_detect.scan_enemies(model_path=ENEMY_MODEL_PATH)
+                enemy_decision = enemy_detect.select_action(
+                    detections,
+                    avoid_trigger_px=AVOID_TRIGGER_PX,
+                    cautious_hold_px=CAUTIOUS_HOLD_PX,
+                )
+            except Exception as e:
+                print(f"⚠️ 索敌出错, 本轮当漫游处理: {e}")
+                enemy_decision = ("wander", None)
+
+        enemy_action = enemy_decision[0]
+
+        if enemy_action == "flee":
+            avoid_positions = enemy_decision[1]
+            mouse_target = enemy_detect.flee_mouse_target(avoid_positions)
+            overlay.update(state="规避中", pos=current_pos, message="附近有危险稀有怪, 拉开距离")
+            pyautogui.moveTo(mouse_target)
+            time.sleep(0.05)
+            continue
+
+        if enemy_action == "chase":
+            target, hold_px = enemy_decision[1], enemy_decision[2]
+            mouse_target = enemy_detect.aim_mouse_target(target["screen_pos"], hold_px=hold_px)
+            overlay.update(state="索敌中", pos=current_pos,
+                            message=f"追击 {target['species']}({target['rarity']})")
+            pyautogui.moveTo(mouse_target)
+            time.sleep(0.05)
+            continue
+
+        # enemy_action == "wander": 没有可打/需规避的目标, 跟原来一样随机漫游.
         random_x, random_y = random_walkable_point(farming_area, binary_map)
 
         # 移动到目标点 —— 到了立刻挑下一个点接着走, 不暂停.
