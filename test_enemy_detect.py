@@ -1,3 +1,5 @@
+import os
+
 import numpy as np
 
 from enemy_detect import sample_rarity, RARITY_COLORS, _hex_to_bgr, classify_action, priority_score, aim_mouse_target, flee_mouse_target
@@ -169,3 +171,27 @@ def test_select_action_wanders_with_no_relevant_detections():
     action, payload = select_action([])
     assert action == "wander"
     assert payload is None
+
+
+import pytest
+
+from enemy_detect import load_enemy_model, scan_enemies
+
+_HAS_MODEL = os.path.exists("models/desert.pt")
+_SKIP_REASON = "models/desert.pt not present locally (gitignored, user-provided)"
+
+
+@pytest.mark.skipif(not _HAS_MODEL, reason=_SKIP_REASON)
+def test_load_enemy_model_exposes_expected_classes():
+    model = load_enemy_model()
+    expected = {
+        "scorpion", "beetle", "cactus",
+        "sandstorm", "sand_centipede", "soldier_fire_ant",
+    }
+    assert set(model.names.values()) == expected
+
+
+@pytest.mark.skipif(not _HAS_MODEL, reason=_SKIP_REASON)
+def test_scan_enemies_returns_empty_list_for_blank_image():
+    blank = np.zeros((640, 640, 3), dtype=np.uint8)
+    assert scan_enemies(image=blank) == []

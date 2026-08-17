@@ -181,3 +181,6 @@ cython_debug/
 
 # SDD scratch workspace (ledger, briefs, reports, review packages)
 .superpowers/
+
+# YOLO model weights - third-party binaries, user-provided, not tracked
+models/*.pt

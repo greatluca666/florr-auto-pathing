@@ -165,3 +165,52 @@ def select_action(detections, avoid_trigger_px=400, cautious_hold_px=250, center
         return ("chase", best, hold_px)
 
     return ("wander", None)
+
+
+_model = None
+
+
+def load_enemy_model(path="models/desert.pt"):
+    """加载一次desert.pt, 模块级单例缓存. 只走ultralytics.YOLO()的安全加载
+    路径(底层是torch的weights_only安全反序列化), 不直接用不设限的
+    torch.load(..., weights_only=False) —— 见
+    docs/superpowers/specs/2026-08-16-sszone-enemy-detection-design.md的
+    "模型来源"说明。"""
+    global _model
+    if _model is None:
+        _model = YOLO(path)
+    return _model
+
+
+def scan_enemies(image=None, conf=0.4, model_path="models/desert.pt"):
+    """跑一次YOLO检测, 返回屏幕坐标系(不是小地图坐标系!)下的检测列表.
+    image=None时截一次全屏游戏画面; 传image是为了测试时能喂合成图片, 不用依赖
+    真实截屏(pyautogui.screenshot()在没有真实显示器的环境里跑不了)。model_path
+    转手传给load_enemy_model() —— 不在这里写死, 让调用方(main.py)的配置常量
+    真正管用, 不是摆设。"""
+    if image is None:
+        screenshot = pyautogui.screenshot(region=[0, 0, 1920, 1080])
+        image = cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2BGR)
+
+    model = load_enemy_model(model_path)
+    results = model.predict(image, conf=conf, verbose=False)
+    if not results:
+        return []
+
+    result = results[0]
+    names = result.names
+    detections = []
+    for box in result.boxes:
+        species = names[int(box.cls[0])]
+        confidence = float(box.conf[0])
+        x1, y1, x2, y2 = [float(v) for v in box.xyxy[0]]
+        bbox = (x1, y1, x2, y2)
+        screen_pos = ((x1 + x2) / 2, (y1 + y2) / 2)
+        detections.append({
+            "species": species,
+            "rarity": sample_rarity(image, bbox),
+            "screen_pos": screen_pos,
+            "bbox": bbox,
+            "confidence": confidence,
+        })
+    return detections
