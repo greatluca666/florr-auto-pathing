@@ -41,6 +41,35 @@ def test_sample_rarity_falls_back_to_common_when_no_match():
     assert sample_rarity(image, bbox) == "Common"
 
 
+# Background BGR for the partial-coverage tests below: picked to NOT fall
+# within `tolerance` of any RARITY_COLORS entry itself (a plain gray, for
+# example, would spuriously match "Unique"'s 555555 and dominate the count).
+# Verified: none of the 10 rarity colors' ±40 tolerance boxes contain this.
+_BG_BGR = (0, 200, 0)
+
+
+def test_sample_rarity_detects_partial_coverage_above_floor():
+    # Realistic case: name tag glyph covers a minority of the sampled patch,
+    # rest is background — not a flat 100% fill like the tests above.
+    # bbox (40,60,60,80) -> sampled patch is image[40:52, 30:70] = 12 rows x
+    # 40 cols = 480 px total (see sample_rarity's y0:y1s/x0:x1s derivation).
+    image = np.full((100, 100, 3), _BG_BGR, dtype=np.uint8)
+    bbox = (40, 60, 60, 80)
+    bgr = _hex_to_bgr(RARITY_COLORS["Ultra"])
+    image[40:45, 30:70] = bgr  # 5 of 12 rows = 200/480 ≈ 41.7% of the patch, clears the 8% floor
+    assert sample_rarity(image, bbox) == "Ultra"
+
+
+def test_sample_rarity_falls_back_to_common_below_coverage_floor():
+    # Glyph covers only a tiny sliver of the patch — below the min_pixel_ratio
+    # floor — should NOT be trusted even though it's the closest color present.
+    image = np.full((100, 100, 3), _BG_BGR, dtype=np.uint8)
+    bbox = (40, 60, 60, 80)
+    bgr = _hex_to_bgr(RARITY_COLORS["Ultra"])
+    image[40:41, 30:32] = bgr  # 1 row x 2 px = 2/480 ≈ 0.4%, well under the 8% (38.4px) floor
+    assert sample_rarity(image, bbox) == "Common"
+
+
 _ALL_SPECIES = [
     "scorpion", "beetle", "cactus", "sandstorm",
     "sand_centipede", "soldier_fire_ant",
@@ -119,7 +148,7 @@ def test_flee_mouse_target_returns_center_when_forces_cancel():
     assert result == (960, 540)
 
 
-from enemy_detect import select_action
+from enemy_detect import select_action, chase_is_stalled
 
 
 def _det(species, rarity, screen_pos):
@@ -171,6 +200,40 @@ def test_select_action_wanders_with_no_relevant_detections():
     action, payload = select_action([])
     assert action == "wander"
     assert payload is None
+
+
+def test_select_action_flee_excludes_out_of_range_avoid_mobs():
+    detections = [
+        _det("scorpion", "Ultra", (1060, 540)),  # 100px, in range
+        _det("beetle", "Ultra", (60, 540)),       # 900px, out of range — must not dilute the flee vector
+    ]
+    action, payload = select_action(detections, avoid_trigger_px=400)
+    assert action == "flee"
+    assert payload == [(1060, 540)]
+
+
+def test_chase_is_stalled_resets_on_movement():
+    count, yield_now = chase_is_stalled((10, 10), (20, 20), stall_count=5)
+    assert count == 0
+    assert yield_now is False
+
+
+def test_chase_is_stalled_increments_on_no_progress():
+    count, yield_now = chase_is_stalled((10, 10), (10.5, 10.2), stall_count=3)
+    assert count == 4
+    assert yield_now is False
+
+
+def test_chase_is_stalled_yields_at_limit():
+    count, yield_now = chase_is_stalled((10, 10), (10, 10), stall_count=14, stall_limit=15)
+    assert count == 15
+    assert yield_now is True
+
+
+def test_chase_is_stalled_handles_none_positions():
+    count, yield_now = chase_is_stalled(None, (10, 10), stall_count=9)
+    assert count == 0
+    assert yield_now is False
 
 
 import pytest

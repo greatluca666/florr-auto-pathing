@@ -35,9 +35,16 @@ def _hex_to_bgr(hex_color):
     return tuple(int(hex_color[i:i + 2], 16) for i in (4, 2, 0))
 
 
-def sample_rarity(image, bbox, tolerance=40):
-    """在检测框上方采样一小块区域(florr.io怪物名牌悬浮在头顶), 按最近色距匹配
-    RARITY_COLORS. 采样区域越界(空)或容差外没匹配上 → 默认Common —— 这是最
+MIN_RARITY_PIXEL_RATIO = 0.08  # 采样区域里至少8%像素匹配上, 才采信这个稀有度判定;
+                                 # 低于这个占比大概率是背景色主导, 不是真名牌颜色.
+
+
+def sample_rarity(image, bbox, tolerance=40, min_pixel_ratio=MIN_RARITY_PIXEL_RATIO):
+    """在检测框上方采样一小块区域(florr.io怪物名牌悬浮在头顶), 按每种稀有度颜色
+    数命中像素数、取数量最多的那档(不是取平均色再找最近邻 —— 名牌是带背景的
+    局部色块, 平均色会被背景冲淡到不可用, 跟utils.py里get_player_location_on_map
+    同款'数像素'手法, 不用'取均值'). 采样区域越界(空)、或最多那档命中像素占比
+    低于min_pixel_ratio(大概率是背景主导, 不是真名牌) → 默认Common —— 这是最
     宽松/正常接战的那一档, 颜色采样失败不会误触发规避行为."""
     x1, y1, x2, y2 = bbox
     cx = int((x1 + x2) / 2)
@@ -48,14 +55,21 @@ def sample_rarity(image, bbox, tolerance=40):
     region = image[y0:y1s, x0:x1s]
     if region.size == 0:
         return "Common"
-    mean_bgr = region.reshape(-1, 3).mean(axis=0).tolist()
 
-    best_name, best_dist = "Common", tolerance + 1
+    total_px = region.shape[0] * region.shape[1]
+    best_name, best_count = "Common", 0
     for name in RARITY_ORDER:
-        dist = math.dist(mean_bgr, _hex_to_bgr(RARITY_COLORS[name]))
-        if dist < best_dist:
-            best_name, best_dist = name, dist
-    return best_name if best_dist <= tolerance else "Common"
+        b, g, r = _hex_to_bgr(RARITY_COLORS[name])
+        lower = np.array([max(0, b - tolerance), max(0, g - tolerance), max(0, r - tolerance)])
+        upper = np.array([min(255, b + tolerance), min(255, g + tolerance), min(255, r + tolerance)])
+        mask = cv2.inRange(region, lower, upper)
+        count = int(np.count_nonzero(mask))
+        if count > best_count:
+            best_name, best_count = name, count
+
+    if best_count / total_px < min_pixel_ratio:
+        return "Common"
+    return best_name
 
 
 # 数值越大优先级越高(故意跟RARITY_RANK同方向, 好用max()一起挑目标).
@@ -135,6 +149,25 @@ def flee_mouse_target(avoid_positions, center=(960, 540), extend=400):
     return (cx + fx / mag * extend, cy + fy / mag * extend)
 
 
+def chase_is_stalled(last_pos, current_pos, stall_count, progress_epsilon=1.5, stall_limit=15):
+    """追击/规避途中判断是否卡住了(玩家位置连续没有实质进展, 跟move_to_position
+    的卡住判定思路一致, 但这里没有'目标点'可比距离 —— 追的目标本身在动, 只能
+    看玩家自己的位置有没有变化). 返回(更新后的stall_count, 是否该让步给一轮
+    漫游). last_pos/current_pos都是minimap坐标系(get_player_position()的返回值,
+    不是屏幕坐标) —— 这里比较的是'玩家挪没挪窝', 不是跟目标的屏幕坐标做减法,
+    没有违反屏幕坐标系/小地图坐标系不能混用的规则."""
+    if last_pos is None or current_pos is None:
+        return 0, False
+    dx = current_pos[0] - last_pos[0]
+    dy = current_pos[1] - last_pos[1]
+    moved = math.hypot(dx, dy)
+    if moved < progress_epsilon:
+        stall_count += 1
+    else:
+        stall_count = 0
+    return stall_count, stall_count >= stall_limit
+
+
 def select_action(detections, avoid_trigger_px=400, cautious_hold_px=250, center=(960, 540)):
     """每tick的索敌决策入口. detections是scan_enemies()给的检测列表(或测试里
     手搭的同结构字典列表). 返回三选一:
@@ -153,9 +186,12 @@ def select_action(detections, avoid_trigger_px=400, cautious_hold_px=250, center
 
     if avoid_positions:
         cx, cy = center
-        nearest = min(math.hypot(px - cx, py - cy) for px, py in avoid_positions)
-        if nearest <= avoid_trigger_px:
-            return ("flee", avoid_positions)
+        in_range = [
+            p for p in avoid_positions
+            if math.hypot(p[0] - cx, p[1] - cy) <= avoid_trigger_px
+        ]
+        if in_range:
+            return ("flee", in_range)
 
     if candidates:
         best, best_bucket = max(

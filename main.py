@@ -9,7 +9,10 @@ overlay = create_overlay()
 
 # ===== 索敌配置 (sszone敌怪检测/追击/规避) =====
 ENEMY_MODEL_PATH = "models/desert.pt"
-ENEMY_SCAN_INTERVAL = 0.3   # 秒, YOLO扫描节流间隔(不是每tick都跑, 推理有开销)
+ENEMY_SCAN_INTERVAL = 0.3   # 秒, YOLO扫描节流间隔(不是每tick都跑, 推理有开销).
+                              # 注意: 漫游时每腿路最长受move_to_position的
+                              # max_attempts限制(见下方wander分支), 实际响应
+                              # 延迟以那个为准, 不是这个数字本身.
 AVOID_TRIGGER_PX = 400      # 屏幕像素半径, AVOID怪进入此半径触发逃离
 CAUTIOUS_HOLD_PX = 250      # 屏幕像素, CAUTIOUS怪保持的最小距离(不继续贴近)
 # 以上数值是没实机测过的占位默认值, 实机跑一遍后再按观察到的效果调.
@@ -360,6 +363,8 @@ def auto_farming(farming_area, duration=300):
     exit_reason = "timeout"
     last_enemy_scan = 0.0
     enemy_decision = ("wander", None)
+    chase_stall_count = 0
+    chase_last_pos = None
 
     while time.time() - start_time < duration:
         if afk_watch.poll_afk_pause():
@@ -415,6 +420,21 @@ def auto_farming(farming_area, duration=300):
 
         enemy_action = enemy_decision[0]
 
+        if enemy_action in ("flee", "chase"):
+            # wander分支靠move_to_position自带的卡住检测+execute_anti_stuck()脱困,
+            # chase/flee这两个分支是每tick直接moveTo(), 没有等价机制 —— 补上同款
+            # 卡住判定(看玩家自己的位置有没有实质进展), 卡住够久就让execute_anti_stuck()
+            # 接管这一tick, 不再执行下面的追击/逃离moveTo().
+            chase_stall_count, should_yield = enemy_detect.chase_is_stalled(
+                chase_last_pos, current_pos, chase_stall_count)
+            chase_last_pos = current_pos
+            if should_yield:
+                print("⚠️ 追击/规避途中卡住, 脱困一下...")
+                overlay.update(state="卡住", message="追击/规避途中卡住, 脱困中")
+                execute_anti_stuck()
+                chase_stall_count = 0
+                continue
+
         if enemy_action == "flee":
             avoid_positions = enemy_decision[1]
             mouse_target = enemy_detect.flee_mouse_target(avoid_positions)
@@ -433,12 +453,18 @@ def auto_farming(farming_area, duration=300):
             continue
 
         # enemy_action == "wander": 没有可打/需规避的目标, 跟原来一样随机漫游.
+        # 重置chase专属的卡住状态, 别让上一轮追击/规避的残留跨进漫游或下一轮追击.
+        chase_stall_count = 0
+        chase_last_pos = None
         random_x, random_y = random_walkable_point(farming_area, binary_map)
 
         # 移动到目标点 —— 到了立刻挑下一个点接着走, 不暂停.
         print(f"🚶 移动到 ({random_x}, {random_y})")
         overlay.update(state="刷怪中", pos=current_pos, target=(random_x, random_y), message=f"持续走动中 (第{move_count + 1}次)")
-        move_result = move_to_position(current_pos, (random_x, random_y))
+        # max_attempts=20 (≈1s worst case at time.sleep(0.05)每tick) 而不是默认的
+        # 200(≈10s) —— 让外层循环更频繁拿回控制权重新索敌扫描, 见下面ENEMY_SCAN_INTERVAL
+        # 的注释.
+        move_result = move_to_position(current_pos, (random_x, random_y), max_attempts=20)
 
         if move_result == "stuck":
             print("⚠️ 移动受阻, 脱困一下...")
