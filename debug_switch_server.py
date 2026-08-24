@@ -13,6 +13,7 @@
 import time
 import pyautogui
 from utils import (
+    apply_map,
     switch_server,
     on_death_screen,
     on_start_screen,
@@ -21,6 +22,8 @@ from utils import (
 
 
 def main():
+    apply_map("desert")  # MAP全局变量不设就是空字符串, get_player_position()内部
+                          # 拼路径会变成'./maps/.png', 读不到文件.
     print("🔍 换服务器隔离测试")
     print(f"   屏幕尺寸: {pyautogui.size()}")
     print("\n⏳ 5秒后开始, 这段时间切到florr.io标签页...\n")
