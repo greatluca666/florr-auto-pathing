@@ -248,9 +248,10 @@ def switch_server(positions=None):
     target = next_server_option(positions)
     print(f"🌐 切换服务器: 点击选项 {target}")
 
-    # 实机验证过: 单次click()第一下经常只把画布/焦点激活, 点击事件没能真正传
-    # 进游戏 —— 跟click_continue_after_death()/click_start_game()踩过的坑一样,
-    # 连点两下才可靠命中. 每一步(开下拉框、选选项)都照这个套路来, 不能只点一下.
+    # 实机验证过: 开下拉框这步单次click()第一下经常只把画布/焦点激活, 点击事件
+    # 没能真正传进游戏 —— 跟click_continue_after_death()/click_start_game()踩过
+    # 的坑一样, 连点两下才可靠命中. 但选具体选项那步不是这样(见下面选项点击处的
+    # 注释), 两步的点击次数不能一概而论.
     pyautogui.press("esc")
     time.sleep(0.3)
 
@@ -261,9 +262,12 @@ def switch_server(positions=None):
     pyautogui.click()
     time.sleep(0.3)
 
+    # 这一下只点一次, 不套用上面开下拉框那步的"连点两下"套路 —— 实机验证过:
+    # 单击就已经选中并收起下拉框了(这是"选完即生效"的下拉选项, 跟前面"第一下
+    # 点击常被吞掉"的画布焦点问题不是同一类情况), 再点第二下会落在下拉框收起后
+    # 重新露出来的"服务器"控件原位置上, 把它重新点开, 相当于自己把刚选的结果
+    # 撤销/盖掉了.
     pyautogui.moveTo(*target)
-    time.sleep(0.1)
-    pyautogui.click()
     time.sleep(0.1)
     pyautogui.click()
     time.sleep(0.5)
