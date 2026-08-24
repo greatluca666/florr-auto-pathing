@@ -231,14 +231,19 @@ def next_server_option(positions=None):
 
 
 def switch_server(positions=None):
-    """按Esc解开全屏/指针锁定, 点开服务器下拉菜单, 选一个跟上次不同的服务器.
+    """按Esc打开设置面板(实机确认过, Esc在这个游戏里就是开面板的键, 不是退出
+    全屏), 点开服务器下拉菜单, 选一个跟上次不同的服务器.
 
-    ⚠️ 没大规模实机验证过选完之后游戏具体啥反应(直接回开局菜单/原地重连/别的
-    过渡状态) —— main.py那边死亡/开局画面检测(on_death_screen/on_start_screen)
-    每轮都会查, 兜得住"选完掉进开局菜单"这种情况; 如果选完后卡在什么这两个检测
-    都认不出的中间状态, 会表现成"无法检测玩家位置"持续重试, 跟之前那个
-    toggle_map误触发的症状类似 —— 上线前务必先跑debug_switch_server.py单独确认
-    一遍完整流程, 别让这个没验证过的新动作直接进无人值守的主循环.
+    选完不再补按Esc —— 第一版这里结尾多按了一次Esc, 直接把刚打开的面板关掉,
+    等于自己把选择动作盖掉了(选没选中都看不出来, 因为面板已经关了). 选完就地
+    结束, 面板要么选完自动收掉、要么留着由main.py下一轮循环开头的死亡/开局画面
+    检测接手, 不在这里画蛇添足.
+
+    ⚠️ 没大规模实机验证过选完之后游戏具体啥反应(面板自动收起/直接回开局菜单/
+    原地重连/别的过渡状态) —— main.py那边死亡/开局画面检测(on_death_screen/
+    on_start_screen)每轮都会查, 兜得住"选完掉进开局菜单"这种情况; 如果选完后
+    卡在什么这两个检测都认不出的中间状态, 会表现成"无法检测玩家位置"持续重试 ——
+    上线前务必先跑debug_switch_server.py单独确认一遍完整流程.
     """
     target = next_server_option(positions)
     print(f"🌐 切换服务器: 点击选项 {target}")
@@ -263,7 +268,6 @@ def switch_server(positions=None):
     pyautogui.click()
     time.sleep(0.5)
 
-    pyautogui.press("esc")
     return target
 
 
