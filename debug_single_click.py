@@ -3,8 +3,11 @@
 需要把"点击本身有没有传进游戏"这一件事单独摘出来测, 排除掉其它步骤的干扰.
 
 用法: 你自己手动先把设置面板打开、服务器下拉展开(眼睛能看见Juliett那一行),
-然后跑这个脚本. 倒计时结束后它只做一件事: 在(233, 305)点一下(默认坐标, 也可以
-传别的坐标进来测), 点前点后各截一张图存下来.
+然后跑这个脚本. 倒计时结束后它只做一件事: 在目标坐标点一下(默认(233, 305),
+也可以`python debug_single_click.py X Y`传别的坐标进来测), 点前点后各截一张
+图存下来. 加`--double`参数就点两下(跟click_continue_after_death()同款间隔:
+moveTo→sleep(0.2)→click→sleep(0.1)→click), 测"第一下只是激活、第二下才真正
+生效"这个假设.
 """
 import sys
 import time
@@ -12,11 +15,13 @@ import pyautogui
 
 
 def main():
+    args = [a for a in sys.argv[1:] if a != "--double"]
+    double = "--double" in sys.argv[1:]
     x, y = (233, 305)
-    if len(sys.argv) == 3:
-        x, y = int(sys.argv[1]), int(sys.argv[2])
+    if len(args) == 2:
+        x, y = int(args[0]), int(args[1])
 
-    print("🔍 单点点击隔离测试")
+    print("🔍 单点点击隔离测试" + ("(双击模式)" if double else "(单击模式)"))
     print(f"   目标坐标: ({x}, {y})")
     print("\n⏳ 5秒后点击, 这段时间自己把设置面板+服务器下拉打开...\n")
     for i in range(5, 0, -1):
@@ -31,6 +36,10 @@ def main():
     time.sleep(0.2)
     print(f"🖱️  moveTo后鼠标实际位置: {pyautogui.position()} (应该等于目标坐标)")
     pyautogui.click()
+    if double:
+        time.sleep(0.1)
+        pyautogui.click()
+        print("🖱️  已点第二下")
     time.sleep(0.5)
 
     after_img = pyautogui.screenshot()
