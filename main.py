@@ -507,6 +507,11 @@ def auto_farming(farming_area, duration=300):
     else:
         overlay.update(message=f"刷怪结束, 共移动{move_count}次")
 
+    # 是不是刷满了整个duration —— 给调用方(主循环)判断"这轮算不算刷够时长"用,
+    # 不刷满(死亡/被踢/卡死放弃)的连续出现太多次, 说明这个服务器可能有问题
+    # (比如刷怪区域被占、或者哪里持续卡关), 值得换个服务器而不是死磕.
+    return exit_reason == "timeout"
+
 
 if __name__ == "__main__":
     apply_map("desert")
@@ -522,6 +527,12 @@ if __name__ == "__main__":
     # ====================
 
     print("🎮 开始自动寻路+刷怪 (掉线/死亡后自动点开始重来, 不主动停)\n")
+
+    # 连续两轮都没刷满farming_duration(死亡/被踢/卡死放弃, 或者压根没到达刷怪
+    # 区域, 都算0分钟刷怪时间), 就换个服务器 —— 不跟当前这个死磕, 阈值直接复用
+    # farming_duration本身, 不再另开一个独立的"5分钟"概念跟它各调各的.
+    CONSECUTIVE_SHORT_ROUND_LIMIT = 2
+    consecutive_short_rounds = 0
 
     round_count = 0
     while True:
@@ -551,10 +562,23 @@ if __name__ == "__main__":
         # 寻路到目标区域
         if lazy_theta_pathing(location, [farming_area]):
             print("✅ 到达刷怪区域！")
-            auto_farming(farming_area, farming_duration)
+            completed_full_duration = auto_farming(farming_area, farming_duration)
         else:
             print("❌ 本轮未能到达目标区域")
             # 不传state: lazy_theta_pathing已设好具体状态(已死亡/菜单中/卡住/出错),
             # _merge_state只合并非None字段, 省略state就不会用泛泛的"出错"覆盖掉它.
             overlay.update(message="本轮未能到达目标区域")
             time.sleep(1)
+            completed_full_duration = False  # 压根没到达刷怪区域, 这轮刷怪时间等于0
+
+        if completed_full_duration:
+            consecutive_short_rounds = 0
+        else:
+            consecutive_short_rounds += 1
+            print(f"⚠️ 本轮没刷满{farming_duration}秒 (连续{consecutive_short_rounds}次)")
+            if consecutive_short_rounds >= CONSECUTIVE_SHORT_ROUND_LIMIT:
+                print(f"🌐 连续{consecutive_short_rounds}轮没刷满, 换个服务器...")
+                overlay.update(state="换服务器", message=f"连续{consecutive_short_rounds}轮没刷满, 切换中")
+                switch_server()
+                consecutive_short_rounds = 0
+                time.sleep(2)  # 给切换后的画面留点稳定时间, 下一轮循环顶部的死亡/开局检测再接手

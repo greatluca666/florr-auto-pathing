@@ -1,6 +1,6 @@
 import numpy as np
 
-from utils import if_in_area, _ensure_grayscale_2d
+from utils import if_in_area, _ensure_grayscale_2d, next_server_option
 
 
 def test_if_in_area_normal_corner_order():
@@ -56,3 +56,28 @@ def test_ensure_grayscale_2d_passes_through_none():
     # cv2.imread在文件读不到时返回None(不是抛异常) —— 不能让形状归一化
     # 逻辑在这种情况下自己先炸了(None.ndim会AttributeError).
     assert _ensure_grayscale_2d(None) is None
+
+
+def test_next_server_option_never_repeats_consecutively():
+    # 不依赖模块级_last_server_index的起始值(测试跑的顺序会影响它) —— 只断言
+    # "连续两次调用不会选中同一个", 不断言具体从哪个开始.
+    positions = [(1, 1), (2, 2), (3, 3)]
+    previous = next_server_option(positions)
+    for _ in range(10):
+        current = next_server_option(positions)
+        assert current != previous
+        previous = current
+
+
+def test_next_server_option_cycles_through_all_positions():
+    # 连续调用len(positions)次, 应该覆盖到每一个选项至少一次(轮换, 不是随机漏选).
+    positions = [(1, 1), (2, 2), (3, 3)]
+    seen = {next_server_option(positions) for _ in range(len(positions))}
+    assert seen == set(positions)
+
+
+def test_next_server_option_defaults_to_desert_dropdown_positions():
+    # 不传参数时用模块内置的三个沙漠服务器选项坐标, 不是空列表/报错.
+    from utils import _SERVER_OPTION_POSITIONS
+    result = next_server_option()
+    assert result in _SERVER_OPTION_POSITIONS

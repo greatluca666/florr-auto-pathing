@@ -202,6 +202,58 @@ def abandon_game():
     pyautogui.doubleClick()
 
 
+# 沙漠区服务器切换用的游戏内下拉菜单坐标 —— 实机量出来的(debug_screen_pos.py),
+# 不是猜的. 按Esc解开全屏/指针锁定后这个下拉菜单才能点开(florr.io全屏时可能用
+# Keyboard/Pointer Lock吞掉普通点击, 这条经验来自DevTools console路线踩过的坑,
+# 虽然那条路线本身被这个更简单的方案替换掉了).
+_SERVER_DROPDOWN_POS = (170, 261)   # 下拉菜单本体(未展开时)
+_SERVER_OPTION_POSITIONS = [
+    (235, 296),
+    (196, 322),
+    (193, 342),
+]
+
+_last_server_index = -1
+
+
+def next_server_option(positions=None):
+    """轮换选一个服务器选项坐标, 不重复上一次选的(positions长度>1时).
+
+    记的是"上次我们自己选了第几个", 不是游戏当前真实所在的服务器 —— 那个读不到
+    (屏幕上没地方能看出当前服务器是哪个), 这里只保证连续调用不会两次选中同一个,
+    换服务器至少真的换到不一样的房间.
+    """
+    global _last_server_index
+    if positions is None:
+        positions = _SERVER_OPTION_POSITIONS
+    _last_server_index = (_last_server_index + 1) % len(positions)
+    return positions[_last_server_index]
+
+
+def switch_server(positions=None):
+    """按Esc解开全屏/指针锁定, 点开服务器下拉菜单, 选一个跟上次不同的服务器.
+
+    ⚠️ 没大规模实机验证过选完之后游戏具体啥反应(直接回开局菜单/原地重连/别的
+    过渡状态) —— main.py那边死亡/开局画面检测(on_death_screen/on_start_screen)
+    每轮都会查, 兜得住"选完掉进开局菜单"这种情况; 如果选完后卡在什么这两个检测
+    都认不出的中间状态, 会表现成"无法检测玩家位置"持续重试, 跟之前那个
+    toggle_map误触发的症状类似 —— 上线前务必先跑debug_switch_server.py单独确认
+    一遍完整流程, 别让这个没验证过的新动作直接进无人值守的主循环.
+    """
+    target = next_server_option(positions)
+    print(f"🌐 切换服务器: 点击选项 {target}")
+    pyautogui.press("esc")
+    time.sleep(0.3)
+    pyautogui.moveTo(*_SERVER_DROPDOWN_POS)
+    pyautogui.click()
+    time.sleep(0.3)
+    pyautogui.moveTo(*target)
+    pyautogui.click()
+    time.sleep(0.5)
+    pyautogui.press("esc")
+    return target
+
+
 _BUTTON_GREEN_RGB = (27, 203, 37)  # florr.io确认类按钮统一用这个绿色底(开始/继续都是)
 _START_BUTTON_POS = (1059, 527)     # 开局菜单"开始"按钮(还没进过局/或已经回到开局菜单)
 _CONTINUE_BUTTON_POS = (959, 634)   # 死亡结算画面"继续"按钮(注意: 跟开局菜单是两个完全不同的界面!)
