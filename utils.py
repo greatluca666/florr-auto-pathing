@@ -202,15 +202,16 @@ def abandon_game():
     pyautogui.doubleClick()
 
 
-# 沙漠区服务器切换用的游戏内下拉菜单坐标 —— 实机量出来的(debug_screen_pos.py),
-# 不是猜的. 按Esc解开全屏/指针锁定后这个下拉菜单才能点开(florr.io全屏时可能用
-# Keyboard/Pointer Lock吞掉普通点击, 这条经验来自DevTools console路线踩过的坑,
-# 虽然那条路线本身被这个更简单的方案替换掉了).
+# 换服务器用的游戏内"设置"面板坐标 —— 实机拿debug_screen_pos.py标记截图
+# 逐个确认过的(红十字精准落在对应行正中间), 不是估的. 按Esc打开设置面板(实机
+# 确认过, 这个游戏里Esc就是开设置面板的键). 下拉框实际是"服务器"选区域, 4个
+# 选项里"自动"跳过不用(那是交给游戏自己选, 不保证真的换房间), 只在
+# Juliett(美国)/Romeo(欧洲)/Sierra(亚洲)这三个之间轮换.
 _SERVER_DROPDOWN_POS = (170, 261)   # 下拉菜单本体(未展开时)
 _SERVER_OPTION_POSITIONS = [
-    (235, 296),
-    (196, 322),
-    (193, 342),
+    (233, 305),  # Juliett（美国）
+    (162, 317),  # Romeo（欧洲）
+    (288, 333),  # Sierra（亚洲）
 ]
 
 _last_server_index = -1
