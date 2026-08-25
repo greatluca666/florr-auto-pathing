@@ -12,6 +12,7 @@ import random
 import numpy as np
 
 import cdp_bridge
+import server_lookup
 
 if sys.platform == "win32":
     # 没有这行, Windows下显示缩放不是100%时, PyAutoGUI截图/点击用的坐标系会被
@@ -204,32 +205,45 @@ def abandon_game():
     pyautogui.doubleClick()
 
 
-# 换服务器: 试过两种更麻烦的路子, 都被这个更简单的方案替代掉了——
+# 换服务器: 试过三种更麻烦的路子, 都被这个方案替代掉了——
 #   1) 点游戏内"设置"面板下拉框: 坐标拿debug_screen_pos.py标记截图逐个确认过、
 #      确认落在正确的行上, 但pyautogui的点击就是不被那个画布控件识别(单击/双击
 #      都试过, debug_single_click.py隔离测试过, 排除了坐标和点击次数两个变量,
 #      依然选不中), 真人手动点完全正常 —— 是pyautogui合成的点击事件对这个
 #      canvas控件不管用, 不是坐标或点击次数的问题.
-#   2) cp6.forceServerID("具体服务器码"): 靠CDP执行确认过真的能触发重连, 但
-#      需要一个有效服务器码, 这些码只能从第三方florr.io服务器码追踪站
-#      (ashish.top、craft.darkmax.top)人工抄, 而且会不定期失效 —— 意味着这个
-#      列表得人时不时去核对更新, 不是配一次就一直管用.
-# 实测(CDP里直接查cp6对象的属性)发现cp6.disconnect()不需要任何服务器码 ——
-# 单纯断开连接, 触发游戏自己的重连逻辑, 天然不存在"码过期"这个问题.
-def switch_server():
-    """通过CDP在florr.io标签页里跑cp6.disconnect()触发重连, 换一个服务器.
+#   2) cp6.forceServerID("码") + 手动抄的静态码表: 靠CDP执行确认过真的能触发
+#      重连, 但码是从第三方florr.io服务器码追踪站(ashish.top、craft.darkmax.top)
+#      人工抄的, 会不定期失效 —— 得人时不时去核对更新, 不是配一次就一直管用.
+#   3) cp6.disconnect()不指定服务器: 不用管码过期, 但交给游戏自己重新分配,
+#      没法保证真的换到了不同服务器(可能原地重连回同一个).
+# 现在这版: forceServerID(码)还是要用(能确保真的指向一个不同服务器), 但码不再
+# 手动抄 —— 直接调server_lookup.py查的官方(M28 Games)实时接口, 每次调用拿到的
+# 都是当下最新数据, 天然不存在"码过期"问题.
+_last_server_id = None
 
-    需要Chrome用cdp_bridge.py模块文档里那三个参数启动. 没开/找不到florr.io
-    标签页时cdp_bridge.eval_js()会抛RuntimeError, 这里不吞掉它 —— 换服务器
-    失败main.py那边应该能看到报错, 不是静默啥也没发生.
 
-    ⚠️ 不指定具体服务器, 交给游戏自己的重连逻辑重新分配 —— 实机验证过确实会
-    触发"连接中......"的重连画面, 但没法从这边直接确认重连后是不是真换到了
-    不同的服务器实例(游戏UI没有能读到具体服务器ID的地方). 大概率会换(重连时
-    机变了, 各服务器人数分布也变了), 但不是100%保证跟之前不是同一个.
+def switch_server(biome="desert"):
+    """查一次官方实时服务器列表(server_lookup.fetch_server_ids), 挑一个跟
+    上次不同的, 通过CDP在florr.io标签页里跑cp6.forceServerID(...)切过去.
+
+    需要Chrome用cdp_bridge.py模块文档里那三个参数启动. 网络请求失败/找不到
+    florr.io标签页时原样抛出异常(urllib的异常/cdp_bridge.eval_js()的
+    RuntimeError), 不在这里吞掉 —— 换服务器失败main.py那边应该能看到报错,
+    不是静默啥也没发生.
     """
-    print("🌐 切换服务器: cp6.disconnect()")
-    cdp_bridge.eval_js("cp6.disconnect()")
+    global _last_server_id
+    ids = server_lookup.fetch_server_ids(biome)
+    # 优先挑一个不是上次选的(避免连续两次切到同一个服务器); 如果查回来的列表
+    # 里根本没有别的选项(len(ids)==1, 或者上次那个码这轮干脆没在列表里了),
+    # 退化成直接用第一个 —— 好歹是当下真实存在的服务器, 不因为"非要挑不同的"
+    # 卡死.
+    candidates = [i for i in ids if i != _last_server_id]
+    server_id = candidates[0] if candidates else ids[0]
+    _last_server_id = server_id
+
+    print(f"🌐 切换服务器: {server_id}")
+    cdp_bridge.eval_js(f'cp6.forceServerID("{server_id}")')
+    return server_id
 
 
 _BUTTON_GREEN_RGB = (27, 203, 37)  # florr.io确认类按钮统一用这个绿色底(开始/继续都是)
