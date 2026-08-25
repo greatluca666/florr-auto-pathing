@@ -10,9 +10,18 @@ main.py刻意混淆的情况不是一回事, 这才放心照着抄这段请求�
 (curl直接调, 返回的id "254j/254k/254l"跟社区追踪站数据完全对得上).
 """
 import json
+import ssl
 import urllib.request
 
+import certifi
+
 M28_ENDPOINT_TEMPLATE = "https://api.n.m28.io/endpoint/florrio-map-{index}-green/findEach/"
+
+# Windows下Python标准库的urllib/ssl不会自动去读系统证书库(跟macOS/Linux不
+# 一样) —— 实机在Windows上跑switch_server()复现过这个报错:
+# "ssl.SSLCertVerificationError: unable to get local issuer certificate".
+# 显式用certifi自带的证书链建一个SSLContext, 不依赖某台机器系统证书装没装好.
+_SSL_CONTEXT = ssl.create_default_context(cafile=certifi.where())
 
 # 接口挂了Cloudflare, 默认urllib的UA("Python-urllib/3.11")会被拦成403 ——
 # 实测确认过(curl不带任何特殊UA能通, 纯Python默认UA不行). 老实标明这是什么
@@ -43,6 +52,6 @@ def fetch_server_ids(biome="desert", timeout=5):
     index = BIOME_INDEX[biome]
     url = M28_ENDPOINT_TEMPLATE.format(index=index)
     req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
+    with urllib.request.urlopen(req, timeout=timeout, context=_SSL_CONTEXT) as resp:
         data = json.load(resp)
     return [server["id"] for server in data["servers"].values()]

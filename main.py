@@ -579,6 +579,14 @@ if __name__ == "__main__":
             if consecutive_short_rounds >= CONSECUTIVE_SHORT_ROUND_LIMIT:
                 print(f"🌐 连续{consecutive_short_rounds}轮没刷满, 换个服务器...")
                 overlay.update(state="换服务器", message=f"连续{consecutive_short_rounds}轮没刷满, 切换中")
-                switch_server()
-                consecutive_short_rounds = 0
-                time.sleep(2)  # 给切换后的画面留点稳定时间, 下一轮循环顶部的死亡/开局检测再接手
+                # 换服务器是附加功能(查接口/连CDP都可能失败, 比如Chrome没用对参数
+                # 启动、证书验证失败、网络问题), 失败了不能让整个"不主动停"的机器人
+                # 直接崩掉 —— 打印清楚原因, 不清零计数, 下一轮接着重试(跟这个项目
+                # 一贯的"卡住不放弃, 无限重试"风格一致, 不是遇到问题就躺平).
+                try:
+                    switch_server()
+                    consecutive_short_rounds = 0
+                    time.sleep(2)  # 给切换后的画面留点稳定时间, 下一轮循环顶部的死亡/开局检测再接手
+                except Exception as e:
+                    print(f"⚠️ 换服务器失败, 先用当前服务器继续刷 (下轮再重试): {e}")
+                    overlay.update(message=f"换服务器失败(下轮重试): {e}")
