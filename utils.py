@@ -11,6 +11,8 @@ import heapq
 import random
 import numpy as np
 
+import cdp_bridge
+
 if sys.platform == "win32":
     # 没有这行, Windows下显示缩放不是100%时, PyAutoGUI截图/点击用的坐标系会被
     # 系统偷偷做DPI虚拟化映射, 跟真实物理像素对不上 —— 全屏时最明显(实测:
@@ -202,76 +204,50 @@ def abandon_game():
     pyautogui.doubleClick()
 
 
-# 换服务器用的游戏内"设置"面板坐标 —— 实机拿debug_screen_pos.py标记截图
-# 逐个确认过的(红十字精准落在对应行正中间), 不是估的. 按Esc打开设置面板(实机
-# 确认过, 这个游戏里Esc就是开设置面板的键). 下拉框实际是"服务器"选区域, 4个
-# 选项里"自动"跳过不用(那是交给游戏自己选, 不保证真的换房间), 只在
-# Juliett(美国)/Romeo(欧洲)/Sierra(亚洲)这三个之间轮换.
-_SERVER_DROPDOWN_POS = (170, 261)   # 下拉菜单本体(未展开时)
-_SERVER_OPTION_POSITIONS = [
-    (233, 305),  # Juliett（美国）
-    (162, 317),  # Romeo（欧洲）
-    (288, 333),  # Sierra（亚洲）
-]
+# 换服务器: 放弃了点游戏内"设置"面板下拉框这条路 —— 坐标拿debug_screen_pos.py
+# 标记截图逐个确认过、确认落在正确的行上, 但pyautogui的点击就是不被那个画布
+# 控件识别(单击/双击都试过, debug_single_click.py隔离测试过, 排除了坐标和
+# 点击次数两个变量, 依然选不中), 真人手动点completely正常 —— 说明这不是
+# "坐标不对"或"点击次数不对"的问题, 是pyautogui合成的点击事件对这个控件不管用.
+# 改用cp6.forceServerID(...)这条JS调用(跟florr-auto-sszone、多个第三方
+# florr.io服务器码追踪站验证过是同一个机制), 通过Chrome DevTools Protocol
+# (cdp_bridge.py)直接在页面里执行, 不用再跟画布点击的可靠性较劲.
+DESERT_SERVER_IDS = ["254j", "254k", "254l"]
 
 _last_server_index = -1
 
 
-def next_server_option(positions=None):
-    """轮换选一个服务器选项坐标, 不重复上一次选的(positions长度>1时).
+def next_server_id(ids=None):
+    """轮换选一个服务器码, 不重复上一次选的(ids长度>1时).
 
     记的是"上次我们自己选了第几个", 不是游戏当前真实所在的服务器 —— 那个读不到
-    (屏幕上没地方能看出当前服务器是哪个), 这里只保证连续调用不会两次选中同一个,
+    (屏幕上没地方能看出当前服务器ID), 这里只保证连续调用不会两次选中同一个,
     换服务器至少真的换到不一样的房间.
     """
     global _last_server_index
-    if positions is None:
-        positions = _SERVER_OPTION_POSITIONS
-    _last_server_index = (_last_server_index + 1) % len(positions)
-    return positions[_last_server_index]
+    if ids is None:
+        ids = DESERT_SERVER_IDS
+    _last_server_index = (_last_server_index + 1) % len(ids)
+    return ids[_last_server_index]
 
 
-def switch_server(positions=None):
-    """按Esc打开设置面板(实机确认过, Esc在这个游戏里就是开面板的键, 不是退出
-    全屏), 点开服务器下拉菜单, 选一个跟上次不同的服务器.
+def switch_server(ids=None):
+    """通过CDP在florr.io标签页里跑cp6.forceServerID(...)强制换服务器.
 
-    选完不再补按Esc —— 第一版这里结尾多按了一次Esc, 直接把刚打开的面板关掉,
-    等于自己把选择动作盖掉了(选没选中都看不出来, 因为面板已经关了). 选完就地
-    结束, 面板要么选完自动收掉、要么留着由main.py下一轮循环开头的死亡/开局画面
-    检测接手, 不在这里画蛇添足.
+    需要Chrome用--remote-debugging-port=9222启动, 见cdp_bridge.py模块文档里
+    的具体命令. 没开这个端口/找不到florr.io标签页时cdp_bridge.eval_js()会抛
+    RuntimeError, 这里不吞掉它 —— 换服务器失败main.py那边应该能看到报错,
+    不是静默啥也没发生.
 
-    ⚠️ 没大规模实机验证过选完之后游戏具体啥反应(面板自动收起/直接回开局菜单/
-    原地重连/别的过渡状态) —— main.py那边死亡/开局画面检测(on_death_screen/
-    on_start_screen)每轮都会查, 兜得住"选完掉进开局菜单"这种情况; 如果选完后
-    卡在什么这两个检测都认不出的中间状态, 会表现成"无法检测玩家位置"持续重试 ——
-    上线前务必先跑debug_switch_server.py单独确认一遍完整流程.
+    ⚠️ DESERT_SERVER_IDS这几个码是从第三方florr.io服务器码追踪站(ashish.top、
+    craft.darkmax.top)人工抄的, 不是实时抓取(那几个站数据是WebSocket推送的,
+    没有简单接口能自动拿, 详见对应讨论) —— 码会不定期失效, 需要人偶尔去这些
+    网站上复核/更新这个列表, 不是一次性配好就永远管用.
     """
-    target = next_server_option(positions)
-    print(f"🌐 切换服务器: 点击选项 {target}")
-
-    # 实机验证过: 开下拉框这步单次click()第一下经常只把画布/焦点激活, 点击事件
-    # 没能真正传进游戏 —— 跟click_continue_after_death()/click_start_game()踩过
-    # 的坑一样, 连点两下才可靠命中. 但选具体选项那步不是这样(见下面选项点击处的
-    # 注释), 两步的点击次数不能一概而论.
-    pyautogui.press("esc")
-    time.sleep(0.3)
-
-    pyautogui.moveTo(*_SERVER_DROPDOWN_POS)
-    time.sleep(0.1)
-    pyautogui.click()
-    time.sleep(0.1)
-    pyautogui.click()
-    time.sleep(0.3)
-
-    # 这一下只点一次, 不套用上面开下拉框那步的"连点两下"套路 —— 实机验证过:
-    # 单击就已经选中并收起下拉框了(这是"选完即生效"的下拉选项, 跟前面"第一下
-    # 点击常被吞掉"的画布焦点问题不是同一类情况), 再点第二下会落在下拉框收起后
-    # 重新露出来的"服务器"控件原位置上, 把它重新点开, 相当于自己把刚选的结果
-    # 撤销/盖掉了.
-    pyautogui.moveTo(*target)
-    time.sleep(0.1)
-    pyautogui.click()
-    time.sleep(0.5)
+    server_id = next_server_id(ids)
+    print(f"🌐 切换服务器: {server_id}")
+    cdp_bridge.eval_js(f'cp6.forceServerID("{server_id}")')
+    return server_id
 
     return target
 
