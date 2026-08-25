@@ -1,6 +1,6 @@
 import numpy as np
 
-from utils import if_in_area, _ensure_grayscale_2d
+from utils import if_in_area, _ensure_grayscale_2d, _pick_server_id
 
 
 def test_if_in_area_normal_corner_order():
@@ -56,3 +56,39 @@ def test_ensure_grayscale_2d_passes_through_none():
     # cv2.imread在文件读不到时返回None(不是抛异常) —— 不能让形状归一化
     # 逻辑在这种情况下自己先炸了(None.ndim会AttributeError).
     assert _ensure_grayscale_2d(None) is None
+
+
+def test_pick_server_id_excludes_ids_used_within_cooldown():
+    ids = ["a", "b", "c"]
+    now = 10_000
+    last_used = {"a": now - 60}  # 1分钟前刚用过a, 还在30分钟冷却期内
+    for _ in range(20):
+        assert _pick_server_id(ids, last_used, now, cooldown_seconds=1800) != "a"
+
+
+def test_pick_server_id_allows_id_once_cooldown_expires():
+    ids = ["a", "b", "c"]
+    now = 10_000
+    last_used = {"a": now - 1801}  # 30分钟零1秒前用过, 刚好过了冷却期
+    # a现在应该重新进入候选池了(不再总是被排除), 多跑几次应该能选到a.
+    results = {_pick_server_id(ids, last_used, now, cooldown_seconds=1800) for _ in range(50)}
+    assert "a" in results
+
+
+def test_pick_server_id_falls_back_to_least_recently_used_when_all_on_cooldown():
+    # 只有3台服务器, 全部都在冷却期内(换得比冷却期还频繁) —— 不能卡死不换,
+    # 退化成挑最久没用过的那个(b, 5分钟前用的, 比a/c更久远).
+    ids = ["a", "b", "c"]
+    now = 10_000
+    last_used = {"a": now - 60, "b": now - 300, "c": now - 120}
+    assert _pick_server_id(ids, last_used, now, cooldown_seconds=1800) == "b"
+
+
+def test_pick_server_id_never_used_before_is_always_eligible():
+    # last_used里完全没有的id, 相当于"上次使用时间是很久很久以前", 天然不在
+    # 冷却期内 —— 用.get(i, 0)兜底, 不能因为字典里没这个key就报KeyError.
+    ids = ["a", "brand_new"]
+    now = 10_000
+    last_used = {"a": now - 60}
+    result = _pick_server_id(ids, last_used, now, cooldown_seconds=1800)
+    assert result == "brand_new"

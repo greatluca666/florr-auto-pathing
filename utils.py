@@ -219,27 +219,40 @@ def abandon_game():
 # 现在这版: forceServerID(码)还是要用(能确保真的指向一个不同服务器), 但码不再
 # 手动抄 —— 直接调server_lookup.py查的官方(M28 Games)实时接口, 每次调用拿到的
 # 都是当下最新数据, 天然不存在"码过期"问题.
-_last_server_id = None
+SERVER_COOLDOWN_SECONDS = 30 * 60  # 同一个服务器码30分钟内不再选回去
+
+_server_last_used = {}  # server_id -> 上次切到它的time.time()时间戳, 进程内存, 不落盘
+
+
+def _pick_server_id(ids, last_used, now, cooldown_seconds=SERVER_COOLDOWN_SECONDS):
+    """从ids里随机挑一个不在冷却期内的服务器码.
+
+    last_used是{server_id: 上次切到它的时间戳}. cooldown_seconds内用过的码
+    被排除掉, 剩下的候选里随机选一个(不是固定选第一个, 3台服务器轮着用不然
+    永远只在同两个之间跳). 排除完一个候选都不剩时(比如可选服务器总共就3个,
+    换得比冷却期还频繁, 全在冷却里), 退化成挑最久没用过的那个 —— 好歹是当下
+    真实存在的服务器, 不能因为"非要挑没冷却过的"卡死不换.
+    """
+    candidates = [i for i in ids if now - last_used.get(i, 0) >= cooldown_seconds]
+    if candidates:
+        return random.choice(candidates)
+    return min(ids, key=lambda i: last_used.get(i, 0))
 
 
 def switch_server(biome="desert"):
-    """查一次官方实时服务器列表(server_lookup.fetch_server_ids), 挑一个跟
-    上次不同的, 通过CDP在florr.io标签页里跑cp6.forceServerID(...)切过去.
+    """查一次官方实时服务器列表(server_lookup.fetch_server_ids), 用
+    _pick_server_id()挑一个30分钟内没选过的, 通过CDP在florr.io标签页里跑
+    cp6.forceServerID(...)切过去.
 
     需要Chrome用cdp_bridge.py模块文档里那三个参数启动. 网络请求失败/找不到
     florr.io标签页时原样抛出异常(urllib的异常/cdp_bridge.eval_js()的
     RuntimeError), 不在这里吞掉 —— 换服务器失败main.py那边应该能看到报错,
     不是静默啥也没发生.
     """
-    global _last_server_id
     ids = server_lookup.fetch_server_ids(biome)
-    # 优先挑一个不是上次选的(避免连续两次切到同一个服务器); 如果查回来的列表
-    # 里根本没有别的选项(len(ids)==1, 或者上次那个码这轮干脆没在列表里了),
-    # 退化成直接用第一个 —— 好歹是当下真实存在的服务器, 不因为"非要挑不同的"
-    # 卡死.
-    candidates = [i for i in ids if i != _last_server_id]
-    server_id = candidates[0] if candidates else ids[0]
-    _last_server_id = server_id
+    now = time.time()
+    server_id = _pick_server_id(ids, _server_last_used, now)
+    _server_last_used[server_id] = now
 
     print(f"🌐 切换服务器: {server_id}")
     cdp_bridge.eval_js(f'cp6.forceServerID("{server_id}")')
