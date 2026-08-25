@@ -204,52 +204,32 @@ def abandon_game():
     pyautogui.doubleClick()
 
 
-# 换服务器: 放弃了点游戏内"设置"面板下拉框这条路 —— 坐标拿debug_screen_pos.py
-# 标记截图逐个确认过、确认落在正确的行上, 但pyautogui的点击就是不被那个画布
-# 控件识别(单击/双击都试过, debug_single_click.py隔离测试过, 排除了坐标和
-# 点击次数两个变量, 依然选不中), 真人手动点completely正常 —— 说明这不是
-# "坐标不对"或"点击次数不对"的问题, 是pyautogui合成的点击事件对这个控件不管用.
-# 改用cp6.forceServerID(...)这条JS调用(跟florr-auto-sszone、多个第三方
-# florr.io服务器码追踪站验证过是同一个机制), 通过Chrome DevTools Protocol
-# (cdp_bridge.py)直接在页面里执行, 不用再跟画布点击的可靠性较劲.
-DESERT_SERVER_IDS = ["254j", "254k", "254l"]
+# 换服务器: 试过两种更麻烦的路子, 都被这个更简单的方案替代掉了——
+#   1) 点游戏内"设置"面板下拉框: 坐标拿debug_screen_pos.py标记截图逐个确认过、
+#      确认落在正确的行上, 但pyautogui的点击就是不被那个画布控件识别(单击/双击
+#      都试过, debug_single_click.py隔离测试过, 排除了坐标和点击次数两个变量,
+#      依然选不中), 真人手动点完全正常 —— 是pyautogui合成的点击事件对这个
+#      canvas控件不管用, 不是坐标或点击次数的问题.
+#   2) cp6.forceServerID("具体服务器码"): 靠CDP执行确认过真的能触发重连, 但
+#      需要一个有效服务器码, 这些码只能从第三方florr.io服务器码追踪站
+#      (ashish.top、craft.darkmax.top)人工抄, 而且会不定期失效 —— 意味着这个
+#      列表得人时不时去核对更新, 不是配一次就一直管用.
+# 实测(CDP里直接查cp6对象的属性)发现cp6.disconnect()不需要任何服务器码 ——
+# 单纯断开连接, 触发游戏自己的重连逻辑, 天然不存在"码过期"这个问题.
+def switch_server():
+    """通过CDP在florr.io标签页里跑cp6.disconnect()触发重连, 换一个服务器.
 
-_last_server_index = -1
+    需要Chrome用cdp_bridge.py模块文档里那三个参数启动. 没开/找不到florr.io
+    标签页时cdp_bridge.eval_js()会抛RuntimeError, 这里不吞掉它 —— 换服务器
+    失败main.py那边应该能看到报错, 不是静默啥也没发生.
 
-
-def next_server_id(ids=None):
-    """轮换选一个服务器码, 不重复上一次选的(ids长度>1时).
-
-    记的是"上次我们自己选了第几个", 不是游戏当前真实所在的服务器 —— 那个读不到
-    (屏幕上没地方能看出当前服务器ID), 这里只保证连续调用不会两次选中同一个,
-    换服务器至少真的换到不一样的房间.
+    ⚠️ 不指定具体服务器, 交给游戏自己的重连逻辑重新分配 —— 实机验证过确实会
+    触发"连接中......"的重连画面, 但没法从这边直接确认重连后是不是真换到了
+    不同的服务器实例(游戏UI没有能读到具体服务器ID的地方). 大概率会换(重连时
+    机变了, 各服务器人数分布也变了), 但不是100%保证跟之前不是同一个.
     """
-    global _last_server_index
-    if ids is None:
-        ids = DESERT_SERVER_IDS
-    _last_server_index = (_last_server_index + 1) % len(ids)
-    return ids[_last_server_index]
-
-
-def switch_server(ids=None):
-    """通过CDP在florr.io标签页里跑cp6.forceServerID(...)强制换服务器.
-
-    需要Chrome用--remote-debugging-port=9222启动, 见cdp_bridge.py模块文档里
-    的具体命令. 没开这个端口/找不到florr.io标签页时cdp_bridge.eval_js()会抛
-    RuntimeError, 这里不吞掉它 —— 换服务器失败main.py那边应该能看到报错,
-    不是静默啥也没发生.
-
-    ⚠️ DESERT_SERVER_IDS这几个码是从第三方florr.io服务器码追踪站(ashish.top、
-    craft.darkmax.top)人工抄的, 不是实时抓取(那几个站数据是WebSocket推送的,
-    没有简单接口能自动拿, 详见对应讨论) —— 码会不定期失效, 需要人偶尔去这些
-    网站上复核/更新这个列表, 不是一次性配好就永远管用.
-    """
-    server_id = next_server_id(ids)
-    print(f"🌐 切换服务器: {server_id}")
-    cdp_bridge.eval_js(f'cp6.forceServerID("{server_id}")')
-    return server_id
-
-    return target
+    print("🌐 切换服务器: cp6.disconnect()")
+    cdp_bridge.eval_js("cp6.disconnect()")
 
 
 _BUTTON_GREEN_RGB = (27, 203, 37)  # florr.io确认类按钮统一用这个绿色底(开始/继续都是)

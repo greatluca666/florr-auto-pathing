@@ -34,6 +34,7 @@ Shell里`*`记得加引号, 不然会被当成通配符展开(zsh下`--remote-al
 这个模块只负责"找到florr.io那个标签页 + 往里面扔一段JS执行", 不掺杂具体要跑
 哪段JS(那是调用方, 比如switch_server(), 该关心的事).
 """
+import base64
 import json
 import urllib.request
 import urllib.error
@@ -60,10 +61,12 @@ def find_florr_tab():
     return None
 
 
-def eval_js(expression, timeout=5):
-    """在florr.io标签页里执行一段JS表达式, 返回CDP Runtime.evaluate的原始返回
-    字典. 找不到标签页/连不上时抛RuntimeError, 带清楚的中文原因, 不静默失败——
-    换服务器这种操作, 调用方(switch_server())必须知道到底有没有真的执行."""
+def _send_cdp_command(method, params=None, timeout=5):
+    """开一条WebSocket连接, 发一条CDP命令, 等到id对上号的响应, 关连接, 返回
+    结果. eval_js()/capture_screenshot()共用这一套收发逻辑, 不重复写.
+
+    找不到标签页时抛RuntimeError, 带清楚的中文原因, 不静默失败 —— 调用方
+    (switch_server()等)必须知道到底有没有真的执行成功."""
     tab = find_florr_tab()
     if tab is None:
         raise RuntimeError(
@@ -78,8 +81,8 @@ def eval_js(expression, timeout=5):
         request_id = 1
         ws.send(json.dumps({
             "id": request_id,
-            "method": "Runtime.evaluate",
-            "params": {"expression": expression},
+            "method": method,
+            "params": params or {},
         }))
         # CDP这条连接上可能同时有别的事件消息(跟我们这次调用无关的通知)混进来,
         # 不能假设recv()第一条就是我们要的响应 —— 按id对上号才是我们的.
@@ -92,3 +95,19 @@ def eval_js(expression, timeout=5):
     if "error" in result:
         raise RuntimeError(f"CDP执行出错: {result['error']}")
     return result
+
+
+def eval_js(expression, timeout=5):
+    """在florr.io标签页里执行一段JS表达式, 返回CDP Runtime.evaluate的原始
+    返回字典."""
+    return _send_cdp_command(
+        "Runtime.evaluate", {"expression": expression}, timeout=timeout)
+
+
+def capture_screenshot(timeout=5):
+    """截florr.io标签页当前内容, 返回PNG原始字节. 走CDP, 不是pyautogui —— 不
+    依赖那个标签页是不是在前台/有没有窗口焦点(main.py跑着的时候用户很可能在看
+    别的窗口, pyautogui.screenshot()这时候截到的是别的东西, 不是游戏画面)."""
+    result = _send_cdp_command(
+        "Page.captureScreenshot", {"format": "png"}, timeout=timeout)
+    return base64.b64decode(result["result"]["data"])

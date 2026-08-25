@@ -1,6 +1,6 @@
 import numpy as np
 
-from utils import if_in_area, _ensure_grayscale_2d, next_server_id
+from utils import if_in_area, _ensure_grayscale_2d
 
 
 def test_if_in_area_normal_corner_order():
@@ -56,28 +56,3 @@ def test_ensure_grayscale_2d_passes_through_none():
     # cv2.imread在文件读不到时返回None(不是抛异常) —— 不能让形状归一化
     # 逻辑在这种情况下自己先炸了(None.ndim会AttributeError).
     assert _ensure_grayscale_2d(None) is None
-
-
-def test_next_server_id_never_repeats_consecutively():
-    # 不依赖模块级_last_server_index的起始值(测试跑的顺序会影响它) —— 只断言
-    # "连续两次调用不会选中同一个", 不断言具体从哪个开始.
-    ids = ["a", "b", "c"]
-    previous = next_server_id(ids)
-    for _ in range(10):
-        current = next_server_id(ids)
-        assert current != previous
-        previous = current
-
-
-def test_next_server_id_cycles_through_all_ids():
-    # 连续调用len(ids)次, 应该覆盖到每一个码至少一次(轮换, 不是随机漏选).
-    ids = ["a", "b", "c"]
-    seen = {next_server_id(ids) for _ in range(len(ids))}
-    assert seen == set(ids)
-
-
-def test_next_server_id_defaults_to_desert_server_ids():
-    # 不传参数时用模块内置的沙漠服务器码列表, 不是空列表/报错.
-    from utils import DESERT_SERVER_IDS
-    result = next_server_id()
-    assert result in DESERT_SERVER_IDS
