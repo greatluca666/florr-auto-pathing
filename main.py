@@ -537,6 +537,12 @@ if __name__ == "__main__":
     round_count = 0
     while True:
         round_count += 1
+        # 这轮"一条命"的计时起点 —— 死亡/开局画面处理、寻路、刷怪全算在内, 不再
+        # 只算auto_farming()自己跑的那一小段. 之前那版只算auto_farming()内部计时,
+        # 寻路卡住重试挣扎的时间(实测经常好几十秒到几分钟)不算进去, 跟玩家自己
+        # 感觉"这条命撑了多久"对不上——寻路挣扎本身也是"这个服务器不行"的信号,
+        # 不该被排除在外.
+        round_start_time = time.time()
         print(f"\n{'='*50}\n第 {round_count} 轮\n{'='*50}")
 
         # 每轮开头先检查: 死亡结算画面/开局菜单(掉线、被踢、或脚本刚启动时游戏
@@ -562,20 +568,23 @@ if __name__ == "__main__":
         # 寻路到目标区域
         if lazy_theta_pathing(location, [farming_area]):
             print("✅ 到达刷怪区域！")
-            completed_full_duration = auto_farming(farming_area, farming_duration)
+            auto_farming(farming_area, farming_duration)
         else:
             print("❌ 本轮未能到达目标区域")
             # 不传state: lazy_theta_pathing已设好具体状态(已死亡/菜单中/卡住/出错),
             # _merge_state只合并非None字段, 省略state就不会用泛泛的"出错"覆盖掉它.
             overlay.update(message="本轮未能到达目标区域")
             time.sleep(1)
-            completed_full_duration = False  # 压根没到达刷怪区域, 这轮刷怪时间等于0
+
+        # 这条命从round_start_time到现在到底撑了多久 —— 寻路+刷怪的时间都算进去了.
+        round_elapsed = time.time() - round_start_time
+        completed_full_duration = round_elapsed >= farming_duration
 
         if completed_full_duration:
             consecutive_short_rounds = 0
         else:
             consecutive_short_rounds += 1
-            print(f"⚠️ 本轮没刷满{farming_duration}秒 (连续{consecutive_short_rounds}次)")
+            print(f"⚠️ 这条命只撑了{round_elapsed:.0f}秒, 没到{farming_duration}秒 (连续{consecutive_short_rounds}次)")
             if consecutive_short_rounds >= CONSECUTIVE_SHORT_ROUND_LIMIT:
                 print(f"🌐 连续{consecutive_short_rounds}轮没刷满, 换个服务器...")
                 overlay.update(state="换服务器", message=f"连续{consecutive_short_rounds}轮没刷满, 切换中")
