@@ -76,6 +76,20 @@ def _send_cdp_command(method, params=None, timeout=5):
             "参数也不行); 2) florr.io标签页是不是在这个新窗口里打开的."
         )
     ws_url = tab["webSocketDebuggerUrl"]
+    if not hasattr(websocket, "create_connection"):
+        # PyPI上"websocket"和"websocket-client"是两个不相关的包, 都导入成
+        # `websocket`这个模块名, 装错/装重会互相覆盖 —— 实机在Windows上复现过
+        # (报错是"module 'websocket' has no attribute 'create_connection'",
+        # 不容易联想到"装错包了", 这里把原因和修法直接说清楚). 放在实际调用这里
+        # 检查, 不放在模块导入时 —— 导入时就抛的话main.py会直接启动不了, 换服务
+        # 器这个附加功能坏了不该连累寻路/刷怪这些正常功能, 让这条错误照样走
+        # switch_server()调用方那边已有的try/except, 不阻塞主循环.
+        raise RuntimeError(
+            "装的是错的'websocket'包 —— PyPI上有两个不同的包都叫这个模块名, "
+            "这个项目要的是'websocket-client', 不是单独的'websocket'. 修法:\n"
+            "    pip uninstall -y websocket websocket-client\n"
+            "    pip install websocket-client"
+        )
     ws = websocket.create_connection(ws_url, timeout=timeout)
     try:
         request_id = 1

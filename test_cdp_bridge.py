@@ -48,3 +48,20 @@ def test_capture_screenshot_raises_clear_error_when_no_tab_found():
     with patch("cdp_bridge.find_florr_tab", return_value=None):
         with pytest.raises(RuntimeError, match="florr.io标签页"):
             capture_screenshot()
+
+
+def test_eval_js_raises_clear_error_when_wrong_websocket_package_installed():
+    # 实机在Windows上复现过: 装的是PyPI上不相关的"websocket"包(不是
+    # "websocket-client"), 两个包都叫`websocket`这个模块名, 装错了就没有
+    # create_connection这个函数. 用一个没有create_connection属性的假模块
+    # 模拟这种情况, 不用真的卸载/装错包来测.
+    fake_tab = {"webSocketDebuggerUrl": "ws://x", "url": "https://florr.io/"}
+    fake_websocket_module = MagicMock(spec=[])  # spec=[]: 除了标准MagicMock属性,
+                                                 # 不允许访问任何没显式声明的属性,
+                                                 # hasattr(..., 'create_connection')
+                                                 # 会正确判False, 不会被MagicMock
+                                                 # 的自动属性生成骗过去.
+    with patch("cdp_bridge.find_florr_tab", return_value=fake_tab), \
+         patch("cdp_bridge.websocket", fake_websocket_module):
+        with pytest.raises(RuntimeError, match="websocket-client"):
+            eval_js("1 + 1")
