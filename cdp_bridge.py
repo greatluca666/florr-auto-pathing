@@ -2,14 +2,34 @@
 Tampermonkey之类的浏览器扩展, 也不用靠pyautogui点游戏画布上的像素(那条路在
 换服务器这个功能上反复卡住, 见switch_server()的历史).
 
-前提: Chrome得用--remote-debugging-port=9222这个参数启动(默认不开这个端口,
-出于安全考虑). 正常双击图标打开的Chrome不满足这个条件, 得完全退出Chrome后
-从命令行重新起:
+前提: Chrome得用三个参数一起启动(实机踩过坑确认的, 少一个都不行, 默认全部
+不开是出于安全考虑). 正常双击图标打开的Chrome不满足这些条件, 得完全退出
+Chrome后从命令行重新起:
 
     macOS:
-        open -a "Google Chrome" --args --remote-debugging-port=9222
+        osascript -e 'quit app "Google Chrome"'   # 先完全退出, 不然新参数不生效
+                                                     # (复用已有进程, 忽略--args)
+        open -a "Google Chrome" --args --remote-debugging-port=9222 \
+            "--remote-allow-origins=*" --user-data-dir="/tmp/chrome-debug-profile"
     Windows:
-        "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe" --remote-debugging-port=9222
+        "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe" ^
+            --remote-debugging-port=9222 --remote-allow-origins=* ^
+            --user-data-dir="C:\\chrome-debug-profile"
+
+三个参数各自的坑:
+  --remote-debugging-port=9222   光加这个不够, Chrome不会真的监听这个端口 ——
+                                   必须配合下面的--user-data-dir一起给(单独给会
+                                   静默失败, 端口测起来是Connection refused,
+                                   没有任何报错提示为什么).
+  --user-data-dir=...            指向一个独立的用户目录(不是默认Profile) ——
+                                   这意味着开出来的是全新的Chrome窗口, 没有你
+                                   原来的标签页/登录状态, 得在这个新窗口里重新
+                                   打开florr.io.
+  --remote-allow-origins=*       没有这个, CDP的WebSocket握手会被403拒绝
+                                   (Chrome自己的跨源保护, 报错信息里会直接把
+                                   这个参数名写出来).
+Shell里`*`记得加引号, 不然会被当成通配符展开(zsh下`--remote-allow-origins=*`
+不加引号会报"no matches found").
 
 这个模块只负责"找到florr.io那个标签页 + 往里面扔一段JS执行", 不掺杂具体要跑
 哪段JS(那是调用方, 比如switch_server(), 该关心的事).
@@ -47,9 +67,10 @@ def eval_js(expression, timeout=5):
     tab = find_florr_tab()
     if tab is None:
         raise RuntimeError(
-            "找不到florr.io标签页(CDP). 确认: 1) Chrome是不是用"
-            "--remote-debugging-port=9222启动的(正常双击图标打开的不算); "
-            "2) florr.io标签页是不是还开着."
+            "找不到florr.io标签页(CDP). 确认: 1) Chrome是不是用本模块文档里"
+            "那三个参数(--remote-debugging-port=9222 + --remote-allow-origins=* "
+            "+ --user-data-dir=...)一起启动的(正常双击图标打开的不算, 少一个"
+            "参数也不行); 2) florr.io标签页是不是在这个新窗口里打开的."
         )
     ws_url = tab["webSocketDebuggerUrl"]
     ws = websocket.create_connection(ws_url, timeout=timeout)
