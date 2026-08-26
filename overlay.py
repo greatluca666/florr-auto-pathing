@@ -1,13 +1,21 @@
 """悬浮状态窗 — 全屏运行main.py时显示寻路/移动进度.
 
-用PyObjC(AppKit)直接建原生窗口, 不用tkinter —— 实测tkinter的-topmost只能
-在同一个macOS Space内置顶, florr.io开的是原生全屏(独立Space)时, tkinter
+macOS: 用PyObjC(AppKit)直接建原生窗口, 不用tkinter —— 实测tkinter的-topmost
+只能在同一个macOS Space内置顶, florr.io开的是原生全屏(独立Space)时, tkinter
 窗口会跳到另一个桌面上, 根本盖不到游戏画面上。AppKit窗口配合
 NSWindowCollectionBehaviorCanJoinAllSpaces + FullScreenAuxiliary +
 screensaver级别的窗口层级(1000), 才能真正跨Space盖在全屏游戏上面。
+
+Windows: Windows没有macOS那种独立Space, 浏览器F11全屏是普通的无边框窗口
+(不是独占全屏), 常规-topmost就能盖上去, 所以用tkinter无边框窗口即可, 不需要
+AppKit那套技巧。但仍需win32扩展窗口样式做到点击穿透 + 不抢键盘焦点, 见
+_WindowsOverlay。
 """
 import sys
 import time
+
+_IS_MACOS = sys.platform == "darwin"
+_IS_WINDOWS = sys.platform == "win32"
 
 try:
     import AppKit
@@ -15,6 +23,16 @@ try:
 except ImportError:
     AppKit = None
     Foundation = None
+
+try:
+    import tkinter as tk
+except ImportError:
+    tk = None
+
+try:
+    import ctypes
+except ImportError:
+    ctypes = None
 
 
 def _format_elapsed(seconds):
@@ -189,16 +207,151 @@ class StatusOverlay:
         return None
 
 
+# --- Win32扩展窗口样式(GWL_EXSTYLE)常量, 用于点击穿透+不抢焦点+不进任务栏 ---
+_WIN_GWL_EXSTYLE = -20
+_WIN_WS_EX_LAYERED = 0x00080000
+_WIN_WS_EX_TRANSPARENT = 0x00000020
+_WIN_WS_EX_NOACTIVATE = 0x08000000
+_WIN_WS_EX_TOOLWINDOW = 0x00000080
+
+_BG_HEX = "#ff9900"  # 与_BG_COLOR同一个亮橙色, 供tkinter使用
+_FG_HEX = "#262626"  # 与mac版白值0.15对应的深灰(近黑)字色
+_FG_DIM_HEX = "#4d4d4d"  # 与mac版白值0.3对应, 给耗时这行用的浅一点的字色
+
+
+class _WindowsOverlay:
+    """Windows版悬浮窗 — tkinter无边框窗口 + Win32扩展窗口样式.
+
+    florr.io在Windows上一般是浏览器"F11"式无边框全屏(不是独占全屏的游戏),
+    常规-topmost窗口就能盖上去, 不需要macOS那套跨Space的screensaver级别技巧。
+    但仍需两件事保证main.py的输入不被打断:
+      - WS_EX_TRANSPARENT: 悬浮窗完全不吃鼠标点击, 点击穿透到游戏画面.
+      - WS_EX_NOACTIVATE:  悬浮窗永不抢键盘焦点(main.py靠空格键控制游戏).
+    """
+
+    _FIELDS = ("state", "pos", "target", "message")
+    _LABELS_ZH = {"state": "状态", "pos": "位置", "target": "目标", "message": "消息"}
+
+    def __init__(self):
+        self._start = time.time()
+        self._state = {"state": "-", "pos": None, "target": None, "message": "-"}
+        # 一旦update/close在窗口没了之后抛异常, 就锁死后续调用为空操作, 绝不再炸主程序.
+        self._dead = False
+
+        root = tk.Tk()
+        root.overrideredirect(True)  # 无标题栏/边框, 也不进Alt+Tab切换
+        root.attributes("-topmost", True)
+        root.attributes("-alpha", 0.92)
+        root.configure(bg=_BG_HEX)
+        root.geometry(f"{_WIDTH}x{_HEIGHT}+{_LEFT}+{_TOP_OFFSET}")
+        root.resizable(False, False)
+        self._root = root
+
+        self._apply_clickthrough_noactivate(root)
+
+        title = tk.Label(
+            root, text="florr auto-pathing", bg=_BG_HEX, fg=_FG_HEX,
+            font=("Segoe UI", 11, "bold"), anchor="w",
+        )
+        title.place(x=8, y=6, width=_WIDTH - 16, height=20)
+
+        self._field_labels = {}
+        for i, field in enumerate(self._FIELDS):
+            label = tk.Label(
+                root, text=f"{self._LABELS_ZH[field]}: -", bg=_BG_HEX, fg=_FG_HEX,
+                font=("Segoe UI", 10), anchor="w",
+            )
+            label.place(x=8, y=6 + (i + 1) * 22, width=_WIDTH - 16, height=20)
+            self._field_labels[field] = label
+
+        self._elapsed_label = tk.Label(
+            root, text="耗时: 00:00", bg=_BG_HEX, fg=_FG_DIM_HEX,
+            font=("Segoe UI", 8), anchor="w",
+        )
+        self._elapsed_label.place(
+            x=8, y=6 + (len(self._FIELDS) + 1) * 22, width=_WIDTH - 16, height=18,
+        )
+
+        root.update_idletasks()
+        root.update()
+
+    def _apply_clickthrough_noactivate(self, root):
+        """叠加WS_EX_TRANSPARENT/NOACTIVATE/TOOLWINDOW扩展样式.
+
+        root.winfo_id()拿到的是绘图表面的句柄, 其父窗口才是真正的顶层HWND
+        (overrideredirect窗口下两者常常是同一个, 但GetParent失败时兜底用
+        winfo_id()本身, 双保险不炸)。
+        """
+        hwnd = ctypes.windll.user32.GetParent(root.winfo_id())
+        if not hwnd:
+            hwnd = root.winfo_id()
+        get_style = ctypes.windll.user32.GetWindowLongW
+        set_style = ctypes.windll.user32.SetWindowLongW
+        style = get_style(hwnd, _WIN_GWL_EXSTYLE)
+        style |= (
+            _WIN_WS_EX_LAYERED | _WIN_WS_EX_TRANSPARENT
+            | _WIN_WS_EX_NOACTIVATE | _WIN_WS_EX_TOOLWINDOW
+        )
+        set_style(hwnd, _WIN_GWL_EXSTYLE, style)
+
+    def update(self, state=None, pos=None, target=None, message=None):
+        if self._dead:
+            return None
+        try:
+            self._state = _merge_state(
+                self._state, state=state, pos=pos, target=target, message=message,
+            )
+            for field in self._FIELDS:
+                value = self._state[field]
+                display = _format_pos(value) if field in ("pos", "target") else value
+                self._field_labels[field].configure(text=f"{self._LABELS_ZH[field]}: {display}")
+            self._elapsed_label.configure(
+                text=f"耗时: {_format_elapsed(time.time() - self._start)}"
+            )
+            # 部分游戏/浏览器切换全屏时会把自己重新拉到最顶层, 每次update都
+            # 重新断言一次-topmost, 防止悬浮窗被压到游戏画面下面.
+            self._root.attributes("-topmost", True)
+            self._root.update_idletasks()
+            self._root.update()
+        except Exception:
+            self._dead = True
+        return None
+
+    def close(self):
+        if self._dead:
+            return None
+        try:
+            self._root.destroy()
+            self._dead = True
+        except Exception:
+            self._dead = True
+        return None
+
+
 def create_overlay():
-    """建悬浮窗, 建不起来(没pyobjc/没display)就退化成空壳, 不炸主程序."""
-    if AppKit is None:
-        print("⚠️ 悬浮窗启动失败: pyobjc(AppKit) 不可用", file=sys.stderr)
-        return _NullOverlay()
-    try:
-        return StatusOverlay()
-    except Exception as e:
-        print(f"⚠️ 悬浮窗启动失败: {e}", file=sys.stderr)
-        return _NullOverlay()
+    """建悬浮窗, 建不起来(缺依赖/没display)就退化成空壳, 不炸主程序."""
+    if _IS_MACOS:
+        if AppKit is None:
+            print("⚠️ 悬浮窗启动失败: pyobjc(AppKit) 不可用", file=sys.stderr)
+            return _NullOverlay()
+        try:
+            return StatusOverlay()
+        except Exception as e:
+            print(f"⚠️ 悬浮窗启动失败: {e}", file=sys.stderr)
+            return _NullOverlay()
+
+    if _IS_WINDOWS:
+        if tk is None or ctypes is None:
+            print("⚠️ 悬浮窗启动失败: tkinter/ctypes 不可用", file=sys.stderr)
+            return _NullOverlay()
+        try:
+            return _WindowsOverlay()
+        except Exception as e:
+            print(f"⚠️ 悬浮窗启动失败: {e}", file=sys.stderr)
+            return _NullOverlay()
+
+    print(f"⚠️ 悬浮窗启动失败: 不支持的平台 {sys.platform}", file=sys.stderr)
+    return _NullOverlay()
 
 
 if __name__ == "__main__":
