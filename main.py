@@ -1,5 +1,6 @@
 from utils import *
-from overlay import create_overlay
+from overlay import create_overlay, show_fullscreen_confirm
+import cdp_bridge
 import time
 import random
 import afk_watch
@@ -514,6 +515,9 @@ def auto_farming(farming_area, duration=300):
 
 
 if __name__ == "__main__":
+    cdp_bridge.launch_dedicated_chrome()
+    show_fullscreen_confirm()
+
     apply_map("desert")
 
     # ===== 配置部分 =====
