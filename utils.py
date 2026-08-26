@@ -71,22 +71,6 @@ def scale_region(x, y, w, h):
     return [left, top, right - left, bottom - top]
 
 
-class _MouseScaleProperty:
-    """动态计算鼠标缩放比例, 这样测试里monkeypatch屏幕分辨率后MOUSE_SCALE会正确重算."""
-    def __eq__(self, other):
-        value = min(SCREEN_WIDTH / _REF_WIDTH, SCREEN_HEIGHT / _REF_HEIGHT)
-        return value == other
-
-    def __float__(self):
-        return float(min(SCREEN_WIDTH / _REF_WIDTH, SCREEN_HEIGHT / _REF_HEIGHT))
-
-    def __repr__(self):
-        return repr(float(self))
-
-
-MOUSE_SCALE = _MouseScaleProperty()
-
-
 def clamp_to_screen(x, y, margin=2):
     """把一个鼠标目标位置钳制在屏幕范围内(留一点margin) —— 防止小分辨率屏幕上
     算出来的转向偏移量把pyautogui.moveTo()的目标坐标推到屏幕外报错."""
@@ -94,6 +78,15 @@ def clamp_to_screen(x, y, margin=2):
         min(max(x, margin), SCREEN_WIDTH - margin),
         min(max(y, margin), SCREEN_HEIGHT - margin),
     )
+
+
+def __getattr__(name):
+    """PEP 562: module-level __getattr__ to dynamically compute MOUSE_SCALE.
+    这样每次访问utils.MOUSE_SCALE都会用当前的SCREEN_WIDTH/SCREEN_HEIGHT重新计算,
+    允许测试里monkeypatch屏幕分辨率后正确反映到MOUSE_SCALE的值."""
+    if name == "MOUSE_SCALE":
+        return min(SCREEN_WIDTH / _REF_WIDTH, SCREEN_HEIGHT / _REF_HEIGHT)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 MAP = ""
 

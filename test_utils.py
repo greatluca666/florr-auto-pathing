@@ -135,3 +135,4 @@ def test_mouse_scale_matches_min_of_axis_ratios(monkeypatch):
     monkeypatch.setattr(utils, "SCREEN_WIDTH", 960)
     monkeypatch.setattr(utils, "SCREEN_HEIGHT", 1080)
     assert utils.MOUSE_SCALE == 0.5  # min(960/1920, 1080/1080) == min(0.5, 1.0)
+    assert round(10 * utils.MOUSE_SCALE) == 5  # must work as a real float in arithmetic, like Task 2/4 will use it
