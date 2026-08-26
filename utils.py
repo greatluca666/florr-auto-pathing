@@ -152,7 +152,7 @@ def toggle_map():
 
 
 def calc_anti_stuck(borders, weight=1.0):
-    screen_center = np.array([960, 540])
+    screen_center = np.array([SCREEN_WIDTH / 2, SCREEN_HEIGHT / 2])
     total_force = np.array([0.0, 0.0])
 
     for point in borders:
@@ -164,8 +164,8 @@ def calc_anti_stuck(borders, weight=1.0):
         total_force += force_vector
 
     final_position = screen_center + total_force * weight
-    final_position[0] = np.clip(final_position[0], 0, 1920)
-    final_position[1] = np.clip(final_position[1], 0, 1080)
+    final_position[0] = np.clip(final_position[0], 0, SCREEN_WIDTH)
+    final_position[1] = np.clip(final_position[1], 0, SCREEN_HEIGHT)
     toggle_map()
     return final_position[0], final_position[1]
 
@@ -184,12 +184,12 @@ def execute_anti_stuck(duration=1.5):
     连续多轮"卡住→脱困→还是卡住"打印的坐标一模一样)。改成力小于阈值(以屏幕
     像素为单位, 5px)就当没找到有效方向, 退化成随机方向硬闯.
     """
-    pyautogui_img = pyautogui.screenshot(region=[0, 0, 1920, 1080])
+    pyautogui_img = pyautogui.screenshot(region=[0, 0, SCREEN_WIDTH, SCREEN_HEIGHT])
     opencv_img = cv2.cvtColor(np.array(pyautogui_img), cv2.COLOR_RGB2BGR)
     borders = check_map_border(opencv_img)
     suggested_position = calc_anti_stuck(borders)
     print(f"🧭 脱困: 朝 {suggested_position} 移动...")
-    screen_center = np.array([960, 540])
+    screen_center = np.array([SCREEN_WIDTH / 2, SCREEN_HEIGHT / 2])
     delta = suggested_position - screen_center
     max_delta = np.max(np.abs(delta))
     if max_delta < 5:
@@ -221,26 +221,28 @@ def execute_anti_stuck(duration=1.5):
 
 
 def keydown(direction, delta=500):
+    delta = round(delta * MOUSE_SCALE)
+    cx, cy = SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2
     if direction == "w":
-        pyautogui.moveTo(1920//2, 1080//2-delta)
+        pyautogui.moveTo(*clamp_to_screen(cx, cy - delta))
     if direction == "s":
-        pyautogui.moveTo(1920//2, 1080//2+delta)
+        pyautogui.moveTo(*clamp_to_screen(cx, cy + delta))
     if direction == "a":
-        pyautogui.moveTo(1920//2-delta, 1080//2)
+        pyautogui.moveTo(*clamp_to_screen(cx - delta, cy))
     if direction == "d":
-        pyautogui.moveTo(1920//2+delta, 1080//2)
+        pyautogui.moveTo(*clamp_to_screen(cx + delta, cy))
     if direction == "wa":
-        pyautogui.moveTo(1920//2-delta, 1080//2-delta)
+        pyautogui.moveTo(*clamp_to_screen(cx - delta, cy - delta))
     if direction == "wd":
-        pyautogui.moveTo(1920//2+delta, 1080//2-delta)
+        pyautogui.moveTo(*clamp_to_screen(cx + delta, cy - delta))
     if direction == "sa":
-        pyautogui.moveTo(1920//2-delta, 1080//2+delta)
+        pyautogui.moveTo(*clamp_to_screen(cx - delta, cy + delta))
     if direction == "sd":
-        pyautogui.moveTo(1920//2+delta, 1080//2+delta)
+        pyautogui.moveTo(*clamp_to_screen(cx + delta, cy + delta))
 
 
 def keyup(direction):
-    pyautogui.moveTo(1920//2, 1080//2)
+    pyautogui.moveTo(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2)
 
 
 def get_player_position(precise=False):
@@ -257,7 +259,7 @@ def get_player_position(precise=False):
 
 
 def abandon_game():
-    pyautogui.moveTo(307, 32)
+    pyautogui.moveTo(*scale_point(307, 32))
     pyautogui.doubleClick()
     pyautogui.doubleClick()
     pyautogui.doubleClick()
@@ -318,8 +320,8 @@ def switch_server(biome="desert"):
 
 
 _BUTTON_GREEN_RGB = (27, 203, 37)  # florr.io确认类按钮统一用这个绿色底(开始/继续都是)
-_START_BUTTON_POS = (1059, 527)     # 开局菜单"开始"按钮(还没进过局/或已经回到开局菜单)
-_CONTINUE_BUTTON_POS = (959, 634)   # 死亡结算画面"继续"按钮(注意: 跟开局菜单是两个完全不同的界面!)
+_START_BUTTON_POS = scale_point(1059, 527)     # 开局菜单"开始"按钮(还没进过局/或已经回到开局菜单), 1920x1080下量出来的
+_CONTINUE_BUTTON_POS = scale_point(959, 634)   # 死亡结算画面"继续"按钮(注意: 跟开局菜单是两个完全不同的界面!), 同样是1920x1080下量出来的
 
 
 def _green_button_ratio(pos, half_w=15, half_h=10):
@@ -328,8 +330,13 @@ def _green_button_ratio(pos, half_w=15, half_h=10):
     按钮上的文字/图标带黑色描边, 单点坐标很容易正好落在描边或图标上而不是纯色
     背景上, 只有采样一整块区域看绿色占比才稳. 实测按钮区域里文字+图标占比不小,
     纯绿色背景经常只剩10%~20%, 别把阈值定太高.
+
+    half_w/half_h默认值是1920x1080下量出来的采样半径, 换算到实际分辨率(至少
+    留1px, 否则超小分辨率下可能四舍五入成0导致采样区域是空的).
     """
     x, y = pos
+    half_w = max(1, scale_x(half_w))
+    half_h = max(1, scale_y(half_h))
     region = pyautogui.screenshot(region=[x - half_w, y - half_h, half_w * 2, half_h * 2])
     arr = np.array(region)[:, :, :3]
     match = np.all(np.abs(arr.astype(int) - np.array(_BUTTON_GREEN_RGB)) <= 25, axis=-1)
@@ -412,14 +419,14 @@ def click_start_game():
 
 
 def check_stage():
-    color = pyautogui.screenshot(region=[0, 0, 1920, 1080]).getpixel((316, 32))
+    full_screen = [0, 0, SCREEN_WIDTH, SCREEN_HEIGHT]
+    color = pyautogui.screenshot(region=full_screen).getpixel(scale_point(316, 32))
     if color == (187, 85, 85):
         return "in_game"
     elif color == (255, 255, 255):
         return "in_game_dead"
     else:
-        color = pyautogui.screenshot(
-            region=[0, 0, 1920, 1080]).getpixel((156, 35))
+        color = pyautogui.screenshot(region=full_screen).getpixel(scale_point(156, 35))
         if color == (155, 181, 107):
             return "in_menu"
         else:

@@ -1,7 +1,7 @@
 import numpy as np
 
 import utils
-from utils import if_in_area, _ensure_grayscale_2d, _pick_server_id
+from utils import if_in_area, _ensure_grayscale_2d, _pick_server_id, calc_anti_stuck
 
 
 def test_if_in_area_normal_corner_order():
@@ -136,3 +136,17 @@ def test_mouse_scale_matches_min_of_axis_ratios(monkeypatch):
     monkeypatch.setattr(utils, "SCREEN_HEIGHT", 1080)
     assert utils.MOUSE_SCALE == 0.5  # min(960/1920, 1080/1080) == min(0.5, 1.0)
     assert round(10 * utils.MOUSE_SCALE) == 5  # must work as a real float in arithmetic, like Task 2/4 will use it
+
+
+def test_calc_anti_stuck_clips_to_actual_screen_bounds_not_1920x1080(monkeypatch):
+    monkeypatch.setattr(utils, "SCREEN_WIDTH", 800)
+    monkeypatch.setattr(utils, "SCREEN_HEIGHT", 600)
+    # A single "wall" pixel far to the left of screen center pushes the
+    # suggested position hard to the right — enough to hit whatever the
+    # x-clip upper bound is. At the old hardcoded bound (1920) this would
+    # stay under it and the bug wouldn't show; at the new 800-wide bound
+    # it must clip to 800.
+    borders = [(-5000, 300)]
+    x, y = calc_anti_stuck(borders, weight=10000.0)
+    assert x == 800
+    assert 0 <= y <= 600
