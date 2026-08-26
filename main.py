@@ -183,14 +183,14 @@ def move_to_position(current_pos, target_pos, max_attempts=200, stall_limit=13, 
             return "stuck"
 
         # 移动鼠标指向目标
-        extend = max(min(dist * 45, 500), 50)
+        extend = max(min(dist * 45, 500), 50) * mouse_scale()
         if dist > 0:
             extend_x = extend * dx / dist
             extend_y = extend * dy / dist
         else:
             extend_x = extend_y = 0
 
-        mouse_pos = (1920 // 2 + extend_x, 1080 // 2 + extend_y)
+        mouse_pos = clamp_to_screen(SCREEN_WIDTH // 2 + extend_x, SCREEN_HEIGHT // 2 + extend_y)
         pyautogui.moveTo(mouse_pos)
 
         # 检查游戏状态
