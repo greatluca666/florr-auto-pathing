@@ -207,24 +207,63 @@ class StatusOverlay:
         return None
 
 
-# --- Win32扩展窗口样式(GWL_EXSTYLE)常量, 用于点击穿透+不抢焦点+不进任务栏 ---
+# --- Win32扩展窗口样式(GWL_EXSTYLE) + SetWindowPos/SetLayeredWindowAttributes常量 ---
 _WIN_GWL_EXSTYLE = -20
 _WIN_WS_EX_LAYERED = 0x00080000
 _WIN_WS_EX_TRANSPARENT = 0x00000020
 _WIN_WS_EX_NOACTIVATE = 0x08000000
 _WIN_WS_EX_TOOLWINDOW = 0x00000080
+_WIN_LWA_ALPHA = 0x2
+_WIN_HWND_TOPMOST = -1
+_WIN_SWP_NOMOVE = 0x0002
+_WIN_SWP_NOSIZE = 0x0001
+_WIN_SWP_NOACTIVATE = 0x0010
+_WIN_SWP_SHOWWINDOW = 0x0040
+_WIN_SWP_FRAMECHANGED = 0x0020
 
 _BG_HEX = "#ff9900"  # 与_BG_COLOR同一个亮橙色, 供tkinter使用
 _FG_HEX = "#262626"  # 与mac版白值0.15对应的深灰(近黑)字色
 _FG_DIM_HEX = "#4d4d4d"  # 与mac版白值0.3对应, 给耗时这行用的浅一点的字色
+_ALPHA_BYTE = int(0.92 * 255)  # 跟mac版0.92透明度对齐
+
+
+def _setup_user32():
+    """给用到的user32函数声明正确的argtypes/restype再返回user32.
+
+    不声明的话ctypes默认按C int(32位)编组参数, 但64位Windows上HWND是64位
+    指针 —— 不声明时GetParent/SetWindowLongW/SetWindowPos拿到的hwnd会被
+    截断成坏句柄, 静默操作在错误的(或无效的)窗口上, 不抛异常也看不到任何
+    效果。这就是"没有警告日志但悬浮窗压根不显示"的根因。
+    """
+    user32 = ctypes.windll.user32
+    user32.GetParent.restype = ctypes.c_void_p
+    user32.GetParent.argtypes = [ctypes.c_void_p]
+    user32.GetWindowLongW.restype = ctypes.c_long
+    user32.GetWindowLongW.argtypes = [ctypes.c_void_p, ctypes.c_int]
+    user32.SetWindowLongW.restype = ctypes.c_long
+    user32.SetWindowLongW.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_long]
+    user32.SetLayeredWindowAttributes.restype = ctypes.c_int
+    user32.SetLayeredWindowAttributes.argtypes = [
+        ctypes.c_void_p, ctypes.c_uint, ctypes.c_ubyte, ctypes.c_uint,
+    ]
+    user32.SetWindowPos.restype = ctypes.c_int
+    user32.SetWindowPos.argtypes = [
+        ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int, ctypes.c_int,
+        ctypes.c_int, ctypes.c_int, ctypes.c_uint,
+    ]
+    return user32
 
 
 class _WindowsOverlay:
-    """Windows版悬浮窗 — tkinter无边框窗口 + Win32扩展窗口样式.
+    """Windows版悬浮窗 — tkinter无边框窗口 + 纯win32 API做置顶/透明度/点击穿透.
 
     florr.io在Windows上一般是浏览器"F11"式无边框全屏(不是独占全屏的游戏),
     常规-topmost窗口就能盖上去, 不需要macOS那套跨Space的screensaver级别技巧。
-    但仍需两件事保证main.py的输入不被打断:
+    置顶/透明度/点击穿透全部用SetWindowPos/SetLayeredWindowAttributes/
+    SetWindowLongW直接做, 不用tkinter自己的-topmost/-alpha —— 两边都改同一个
+    底层窗口属性会打架(改GWL_EXSTYLE不配套重发SetLayeredWindowAttributes,
+    实测会导致窗口整个变不可见), 全交给win32 API一条路管到底更可靠。
+    另需两件事保证main.py的输入不被打断:
       - WS_EX_TRANSPARENT: 悬浮窗完全不吃鼠标点击, 点击穿透到游戏画面.
       - WS_EX_NOACTIVATE:  悬浮窗永不抢键盘焦点(main.py靠空格键控制游戏).
     """
@@ -240,14 +279,20 @@ class _WindowsOverlay:
 
         root = tk.Tk()
         root.overrideredirect(True)  # 无标题栏/边框, 也不进Alt+Tab切换
-        root.attributes("-topmost", True)
-        root.attributes("-alpha", 0.92)
         root.configure(bg=_BG_HEX)
         root.geometry(f"{_WIDTH}x{_HEIGHT}+{_LEFT}+{_TOP_OFFSET}")
         root.resizable(False, False)
+        # 先落一次事件循环, 确保win32那边真正建出HWND, 再去取winfo_id()才有效.
+        root.update_idletasks()
         self._root = root
 
-        self._apply_clickthrough_noactivate(root)
+        self._user32 = _setup_user32()
+        # winfo_id()是绘图表面的句柄, 其父窗口才是真正被DWM管理的顶层HWND
+        # (overrideredirect窗口下两者常常是同一个, GetParent失败就兜底用
+        # winfo_id()本身, 双保险不炸)。
+        hwnd = self._user32.GetParent(root.winfo_id())
+        self._hwnd = hwnd if hwnd else root.winfo_id()
+        self._apply_window_styles()
 
         title = tk.Label(
             root, text="florr auto-pathing", bg=_BG_HEX, fg=_FG_HEX,
@@ -275,24 +320,24 @@ class _WindowsOverlay:
         root.update_idletasks()
         root.update()
 
-    def _apply_clickthrough_noactivate(self, root):
-        """叠加WS_EX_TRANSPARENT/NOACTIVATE/TOOLWINDOW扩展样式.
-
-        root.winfo_id()拿到的是绘图表面的句柄, 其父窗口才是真正的顶层HWND
-        (overrideredirect窗口下两者常常是同一个, 但GetParent失败时兜底用
-        winfo_id()本身, 双保险不炸)。
-        """
-        hwnd = ctypes.windll.user32.GetParent(root.winfo_id())
-        if not hwnd:
-            hwnd = root.winfo_id()
-        get_style = ctypes.windll.user32.GetWindowLongW
-        set_style = ctypes.windll.user32.SetWindowLongW
-        style = get_style(hwnd, _WIN_GWL_EXSTYLE)
+    def _apply_window_styles(self):
+        """叠加点击穿透/不抢焦点/不进任务栏的扩展样式, 再强制置顶+设置透明度+显示."""
+        user32 = self._user32
+        hwnd = self._hwnd
+        style = user32.GetWindowLongW(hwnd, _WIN_GWL_EXSTYLE)
         style |= (
             _WIN_WS_EX_LAYERED | _WIN_WS_EX_TRANSPARENT
             | _WIN_WS_EX_NOACTIVATE | _WIN_WS_EX_TOOLWINDOW
         )
-        set_style(hwnd, _WIN_GWL_EXSTYLE, style)
+        user32.SetWindowLongW(hwnd, _WIN_GWL_EXSTYLE, style)
+        user32.SetLayeredWindowAttributes(hwnd, 0, _ALPHA_BYTE, _WIN_LWA_ALPHA)
+        # SWP_FRAMECHANGED: 改完GWL_EXSTYLE后必须带这个flag, 否则新样式不会
+        # 立即生效渲染(微软文档明确要求); 顺带把窗口顶到最上层+确保显示出来.
+        user32.SetWindowPos(
+            hwnd, _WIN_HWND_TOPMOST, 0, 0, 0, 0,
+            _WIN_SWP_NOMOVE | _WIN_SWP_NOSIZE | _WIN_SWP_NOACTIVATE
+            | _WIN_SWP_SHOWWINDOW | _WIN_SWP_FRAMECHANGED,
+        )
 
     def update(self, state=None, pos=None, target=None, message=None):
         if self._dead:
@@ -309,8 +354,11 @@ class _WindowsOverlay:
                 text=f"耗时: {_format_elapsed(time.time() - self._start)}"
             )
             # 部分游戏/浏览器切换全屏时会把自己重新拉到最顶层, 每次update都
-            # 重新断言一次-topmost, 防止悬浮窗被压到游戏画面下面.
-            self._root.attributes("-topmost", True)
+            # 重新断言一次置顶, 防止悬浮窗被压到游戏画面下面.
+            self._user32.SetWindowPos(
+                self._hwnd, _WIN_HWND_TOPMOST, 0, 0, 0, 0,
+                _WIN_SWP_NOMOVE | _WIN_SWP_NOSIZE | _WIN_SWP_NOACTIVATE,
+            )
             self._root.update_idletasks()
             self._root.update()
         except Exception:
