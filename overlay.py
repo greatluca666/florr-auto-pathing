@@ -84,6 +84,28 @@ _LEFT, _TOP_OFFSET = 20, 200
 # 亮色才能在任意游戏背景上都保证看得见.
 _BG_COLOR = (1.0, 0.6, 0.0, 0.92)  # R, G, B, alpha
 
+_CONFIRM_WIDTH, _CONFIRM_HEIGHT = 340, 150
+_CONFIRM_MESSAGE = "florr.io已就绪 — 手动进入全屏(F11)后点击下方按钮开始"
+_CONFIRM_BUTTON_LABEL = "开始运行"
+
+
+if Foundation is not None:
+    class _ConfirmButtonTarget(Foundation.NSObject):
+        """桥接NSButton点击事件回Python回调. 必须真的subclass NSObject, 类
+        定义本身就引用了Foundation —— 所以这个class只能在Foundation可用时
+        定义(Windows上pyobjc压根没装, Foundation是None, 定义这个class会在
+        import overlay.py时就报AttributeError, 必须用if守住, 不能让整个模块
+        导入失败, 拖累Windows上本来能正常工作的_WindowsOverlay)."""
+
+        def setCallback_(self, callback):
+            self._callback = callback
+
+        def buttonClicked_(self, sender):
+            if getattr(self, "_callback", None) is not None:
+                self._callback()
+else:
+    _ConfirmButtonTarget = None
+
 
 class StatusOverlay:
     _FIELDS = ("state", "pos", "target", "message")
@@ -205,6 +227,94 @@ class StatusOverlay:
         except Exception:
             self._dead = True
         return None
+
+
+class _MacConfirmDialog:
+    """真能点击的确认弹窗 —— 跟StatusOverlay不同, 不设ignoresMouseEvents_(那个
+    是给"不能抢游戏焦点"的状态HUD用的; 这个就是要能点). 复用StatusOverlay已经
+    验证过的跨Space技巧(screensaver层级+collectionBehavior), 保证florr.io进了
+    原生全屏Space之后这个弹窗依然显示在最上层、能点."""
+
+    def __init__(self):
+        self._confirmed = False
+
+        app = AppKit.NSApplication.sharedApplication()
+        app.setActivationPolicy_(AppKit.NSApplicationActivationPolicyAccessory)
+        self._app = app
+
+        screen_frame = AppKit.NSScreen.mainScreen().frame()
+        x = (screen_frame.size.width - _CONFIRM_WIDTH) / 2
+        y = (screen_frame.size.height - _CONFIRM_HEIGHT) / 2
+        rect = Foundation.NSMakeRect(x, y, _CONFIRM_WIDTH, _CONFIRM_HEIGHT)
+
+        window = AppKit.NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
+            rect, AppKit.NSWindowStyleMaskBorderless, AppKit.NSBackingStoreBuffered, False,
+        )
+        window.setLevel_(_SCREENSAVER_LEVEL)
+        window.setCollectionBehavior_(
+            AppKit.NSWindowCollectionBehaviorCanJoinAllSpaces
+            | AppKit.NSWindowCollectionBehaviorFullScreenAuxiliary
+            | AppKit.NSWindowCollectionBehaviorStationary
+        )
+        window.setOpaque_(False)
+        window.setBackgroundColor_(
+            AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(*_BG_COLOR)
+        )
+        self._window = window
+
+        content = window.contentView()
+
+        label = AppKit.NSTextField.alloc().initWithFrame_(
+            Foundation.NSMakeRect(12, _CONFIRM_HEIGHT - 90, _CONFIRM_WIDTH - 24, 70)
+        )
+        label.setStringValue_(_CONFIRM_MESSAGE)
+        label.setBezeled_(False)
+        label.setDrawsBackground_(False)
+        label.setEditable_(False)
+        label.setSelectable_(False)
+        label.setFont_(AppKit.NSFont.systemFontOfSize_(13))
+        label.setTextColor_(AppKit.NSColor.colorWithCalibratedWhite_alpha_(0.15, 1.0))
+        content.addSubview_(label)
+
+        # 保留target的强引用(self._target) —— PyObjC不会自动帮Python侧保住这个
+        # 对象, target提前被GC掉的话setTarget_指向的就是悬空对象, 点击不会
+        # 触发任何反应(没有异常, 静默不响应, 很难查).
+        self._target = _ConfirmButtonTarget.alloc().init()
+        self._target.setCallback_(self._on_confirmed)
+
+        button = AppKit.NSButton.alloc().initWithFrame_(
+            Foundation.NSMakeRect((_CONFIRM_WIDTH - 140) / 2, 16, 140, 32)
+        )
+        button.setTitle_(_CONFIRM_BUTTON_LABEL)
+        button.setBezelStyle_(AppKit.NSBezelStyleRounded)
+        button.setTarget_(self._target)
+        button.setAction_("buttonClicked:")
+        content.addSubview_(button)
+        self._button = button
+
+        window.orderFrontRegardless()
+        self._pump_events()
+
+    def _on_confirmed(self):
+        self._confirmed = True
+
+    def _pump_events(self):
+        while True:
+            event = self._app.nextEventMatchingMask_untilDate_inMode_dequeue_(
+                AppKit.NSEventMaskAny,
+                Foundation.NSDate.dateWithTimeIntervalSinceNow_(0),
+                AppKit.NSDefaultRunLoopMode,
+                True,
+            )
+            if event is None:
+                break
+            self._app.sendEvent_(event)
+
+    def wait_for_confirm(self):
+        while not self._confirmed:
+            self._pump_events()
+            time.sleep(0.05)
+        self._window.close()
 
 
 # --- Win32扩展窗口样式(GWL_EXSTYLE) + SetWindowPos/SetLayeredWindowAttributes常量 ---

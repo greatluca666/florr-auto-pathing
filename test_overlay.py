@@ -103,3 +103,11 @@ def test_status_overlay_update_latches_dead_on_exception(monkeypatch):
         monkeypatch.undo()
         overlay._dead = False
         overlay.close()
+
+
+def test_mac_confirm_dialog_click_sets_confirmed_and_wait_returns():
+    dialog = overlay_module._MacConfirmDialog()
+    assert dialog._confirmed is False
+    dialog._button.performClick_(None)  # 跟真实鼠标点击走同一条target/action路径
+    assert dialog._confirmed is True
+    dialog.wait_for_confirm()  # 已经confirmed了, 应该立刻返回(不阻塞)并关闭窗口
