@@ -30,6 +30,71 @@ if sys.platform == "win32":
         except Exception:
             pass
 
+try:
+    SCREEN_WIDTH, SCREEN_HEIGHT = pyautogui.size()
+except Exception:
+    # 没有真实显示器(比如headless CI)时pyautogui.size()可能取不到 —— 退化成
+    # 原来硬编码的1920x1080, 跟这个改动之前的行为完全一致, 不让import本身崩掉.
+    SCREEN_WIDTH, SCREEN_HEIGHT = 1920, 1080
+
+_REF_WIDTH, _REF_HEIGHT = 1920, 1080  # 下面这些函数里所有写死的坐标常量都是照这个分辨率量出来的
+
+
+def scale_x(value):
+    """把一个照1920宽量出来的x坐标/宽度, 换算成实际屏幕宽度下的等效值."""
+    return round(value * SCREEN_WIDTH / _REF_WIDTH)
+
+
+def scale_y(value):
+    """同scale_x, 换算y坐标/高度(照1080高量出来的)."""
+    return round(value * SCREEN_HEIGHT / _REF_HEIGHT)
+
+
+def scale_point(x, y):
+    return (scale_x(x), scale_y(y))
+
+
+def scale_region(x, y, w, h):
+    """把pyautogui.screenshot(region=[x,y,w,h])用的截图区域(照1920x1080量出来的)
+    换算成实际分辨率下的区域. 宽高各自按对应轴单独换算(不是简单乘同一个比例),
+    这样非16:9分辨率(宽高比跟1920x1080不一样)也不用另外分支处理 —— 跟
+    scale_x/scale_y是同一套"每根轴独立缩放"逻辑.
+
+    位置和宽高分开算两次scale_x/scale_y再相减(而不是直接scale_x(w)),是为了让
+    四舍五入的误差不累积: right-left的差值比"起点+独立换算的宽度"更贴近实际
+    截到的物理像素范围.
+    """
+    left = scale_x(x)
+    top = scale_y(y)
+    right = scale_x(x + w)
+    bottom = scale_y(y + h)
+    return [left, top, right - left, bottom - top]
+
+
+class _MouseScaleProperty:
+    """动态计算鼠标缩放比例, 这样测试里monkeypatch屏幕分辨率后MOUSE_SCALE会正确重算."""
+    def __eq__(self, other):
+        value = min(SCREEN_WIDTH / _REF_WIDTH, SCREEN_HEIGHT / _REF_HEIGHT)
+        return value == other
+
+    def __float__(self):
+        return float(min(SCREEN_WIDTH / _REF_WIDTH, SCREEN_HEIGHT / _REF_HEIGHT))
+
+    def __repr__(self):
+        return repr(float(self))
+
+
+MOUSE_SCALE = _MouseScaleProperty()
+
+
+def clamp_to_screen(x, y, margin=2):
+    """把一个鼠标目标位置钳制在屏幕范围内(留一点margin) —— 防止小分辨率屏幕上
+    算出来的转向偏移量把pyautogui.moveTo()的目标坐标推到屏幕外报错."""
+    return (
+        min(max(x, margin), SCREEN_WIDTH - margin),
+        min(max(y, margin), SCREEN_HEIGHT - margin),
+    )
+
 MAP = ""
 
 

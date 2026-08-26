@@ -1,5 +1,6 @@
 import numpy as np
 
+import utils
 from utils import if_in_area, _ensure_grayscale_2d, _pick_server_id
 
 
@@ -92,3 +93,45 @@ def test_pick_server_id_never_used_before_is_always_eligible():
     last_used = {"a": now - 60}
     result = _pick_server_id(ids, last_used, now, cooldown_seconds=1800)
     assert result == "brand_new"
+
+
+def test_scale_x_and_scale_y_are_identity_at_reference_resolution(monkeypatch):
+    monkeypatch.setattr(utils, "SCREEN_WIDTH", 1920)
+    monkeypatch.setattr(utils, "SCREEN_HEIGHT", 1080)
+    assert utils.scale_x(960) == 960
+    assert utils.scale_y(540) == 540
+
+
+def test_scale_point_scales_uniformly_on_larger_same_aspect_screen(monkeypatch):
+    monkeypatch.setattr(utils, "SCREEN_WIDTH", 2560)
+    monkeypatch.setattr(utils, "SCREEN_HEIGHT", 1440)
+    # 2560/1920 == 1440/1080 == 4/3: same 16:9 aspect ratio, uniform scale-up.
+    assert utils.scale_point(960, 540) == (1280, 720)
+
+
+def test_scale_point_scales_axes_independently_on_non_16_9_screen(monkeypatch):
+    monkeypatch.setattr(utils, "SCREEN_WIDTH", 2560)
+    monkeypatch.setattr(utils, "SCREEN_HEIGHT", 1080)  # ultrawide: width changes, height doesn't
+    x, y = utils.scale_point(1920, 1080)
+    assert x == 2560  # scaled by width ratio (2560/1920)
+    assert y == 1080  # scale_y ratio is 1, untouched
+
+
+def test_scale_region_scales_position_and_size_independently(monkeypatch):
+    monkeypatch.setattr(utils, "SCREEN_WIDTH", 3840)
+    monkeypatch.setattr(utils, "SCREEN_HEIGHT", 2160)
+    # get_map()'s reference crop region: [1600, 20, 300, 300] at 1920x1080.
+    assert utils.scale_region(1600, 20, 300, 300) == [3200, 40, 600, 600]
+
+
+def test_clamp_to_screen_keeps_point_inside_bounds_with_margin(monkeypatch):
+    monkeypatch.setattr(utils, "SCREEN_WIDTH", 1366)
+    monkeypatch.setattr(utils, "SCREEN_HEIGHT", 768)
+    assert utils.clamp_to_screen(-50, 2000) == (2, 766)
+    assert utils.clamp_to_screen(700, 400) == (700, 400)
+
+
+def test_mouse_scale_matches_min_of_axis_ratios(monkeypatch):
+    monkeypatch.setattr(utils, "SCREEN_WIDTH", 960)
+    monkeypatch.setattr(utils, "SCREEN_HEIGHT", 1080)
+    assert utils.MOUSE_SCALE == 0.5  # min(960/1920, 1080/1080) == min(0.5, 1.0)
