@@ -434,7 +434,28 @@ def check_stage():
 
 
 def get_map():
-    region = scale_region(1600, 20, 300, 300)
+    """截小地图区域. 不能直接套scale_region()的"宽高各自独立缩放" —— 2026-08-26
+    实机(1024x768)调试确认过, florr.io小地图控件不是那样缩放的: 用户拿
+    debug_screen_pos.py量出真实外框≈左上(797,20)~右下(1009,227), 跟
+    scale_region(1600,20,300,300)算出来的[853,14,160,214]对不上(偏窄, 外边框
+    整个漏在截图外, 拿debug_position_diag.py对着截图跑f8de60颜色匹配, 命中
+    像素数是0, 实锤截歪了)。
+
+    实测数据吻合的是: 控件整体按SCREEN_HEIGHT/1080统一缩放(不分宽高轴), 保持
+    正方形, 贴着屏幕右上角, 右边距/上边距也按同一个比例缩放 —— 右边距、下边界
+    跟实测几乎分毫不差, 左边界也基本对上. 1920x1080参照分辨率下这套公式退化成
+    跟原来完全一样的[1600,20,300,300], 不影响已验证过的16:9场景(1920x1080/
+    2560x1440/3840x2160这类等比分辨率, scale_x==scale_y==这里的scale, 结果
+    等价于按老公式算)。
+    """
+    scale = SCREEN_HEIGHT / _REF_HEIGHT
+    size = round(300 * scale)
+    right_margin = round(20 * scale)
+    top_margin = round(20 * scale)
+    right = SCREEN_WIDTH - right_margin
+    left = right - size
+    top = top_margin
+    region = [left, top, size, size]
     image = pyautogui.screenshot(region=region)
     image = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
     if image.shape[:2] != (300, 300):

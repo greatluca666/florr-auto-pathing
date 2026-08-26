@@ -79,21 +79,58 @@ Fix: after capturing the scaled region, `cv2.resize` it back down (or up) to exa
 before converting to the OpenCV image used by the rest of the pipeline. This keeps every existing
 map-space consumer working unmodified — they never see a resolution-dependent size.
 
-**Non-16:9 note (confirmed choice, not left open):** `scale_region` scales width and height by
-independent factors, so at a non-16:9 resolution the *captured* region before this resize is a
-non-square rectangle (e.g. ~400×300 at 2560×1080). Forcing that back to a 300×300 square is only
-geometrically correct under this spec's core assumption (the "Known risk" above) that florr.io
-stretches every UI element — including the minimap widget itself — independently per axis: under
-that model, the browser has already stretched the minimap's content by the same non-uniform factor
-`scale_region` used to size the capture, so this resize exactly cancels that stretch back out
-rather than introducing a new distortion. If the minimap widget instead turns out to hold a fixed
-square aspect regardless of window shape (the other branch of the same Known Risk), this resize
-would compress/stretch real minimap content and corrupt player-position detection at that
-resolution. This was raised during implementation and the user chose to keep `get_map()` as
-specified above rather than add aspect-preserving crop/pad logic against an equally-unverified
-alternative model — it is not a separate risk from the Known Risk already documented, just that
-risk's consequence specifically for `get_map()`. Real-machine verification (see below) covers this
-the same way it covers every other non-16:9 coordinate in this spec.
+**Non-16:9 update (real-machine evidence, supersedes the original "Non-16:9 note" below):**
+`get_map()` originally computed its capture region via `scale_region` (independent per-axis
+scaling), on the unverified assumption that florr.io stretches the minimap widget the same way
+it stretches everything else. **Real-machine testing at 1024×768 (2026-08-26) disproved this.**
+
+Evidence gathered: `debug_position_diag.py` (color-matches `get_map()`'s captured/resized image
+against the player marker's `f8de60` color, same tolerance as `get_player_location_on_map`) found
+**zero** matching pixels — `get_map()` wasn't even capturing the minimap's own black border, only
+a zoomed-in fragment of its interior. `debug_screen_pos.py` was then used to click the minimap
+widget's real on-screen top-left corner (measured: `(799, 20)`), and comparing the raw capture's
+edge brightness against `maps/desert.png`'s clean near-black border confirmed the crop was too
+small and offset. Automated contour detection on the full screenshot found the widget's true
+bounding box: top-left ≈ `(797, 20)`, bottom-right ≈ `(1009, 227)` — a ~212×207px square.
+
+`scale_region(1600, 20, 300, 300)` at 1024×768 predicts `[853, 14, 160, 214]` — a non-square,
+too-narrow, mis-positioned rectangle. The real widget instead: **stays square, scales uniformly
+by `SCREEN_HEIGHT / 1080` (not independently per axis), and is anchored to the top-right corner
+with margins that scale by that same factor.** Verified against all four measured edges: predicted
+right edge `1024 - round(20×768/1080) = 1010` vs measured `≈1009`; predicted bottom edge
+`round(20×768/1080) + round(300×768/1080) = 227` vs measured `≈227`; predicted left edge `797` vs
+measured `797` (exact); top edge had the largest error (predicted `14` vs measured `~20`, likely
+manual-click imprecision on a thin border) but was still far closer than the old formula.
+
+`get_map()` now computes its region directly from this formula instead of `scale_region`. At the
+1920×1080 reference resolution it reduces to the original `[1600, 20, 300, 300]` (no regression),
+and at any 16:9 resolution it's identical to what `scale_region` would have produced anyway (since
+`scale_x == scale_y` there) — the fix only changes behavior at non-16:9 resolutions, which is
+exactly where it was wrong. See `test_get_map_uses_height_based_uniform_scale_for_non_16_9` in
+`test_utils.py`.
+
+**Residual risk:** this formula is validated at exactly one non-16:9 resolution (1024×768). It's
+plausible but *not yet verified* at other non-16:9 shapes (ultrawide, portrait) or that every
+other UI element in this spec (buttons, `check_stage`'s pixel-signature points) follows the same
+height-uniform-scale rule rather than the original independent-axis assumption — those still carry
+the original "Known risk" below unless/until similarly measured. Do not assume this fix generalizes
+past `get_map()` without equivalent evidence.
+
+<details>
+<summary>Original speculative note (kept for history, no longer the operative model for <code>get_map()</code>)</summary>
+
+`scale_region` scales width and height by independent factors, so at a non-16:9 resolution the
+*captured* region before the 300×300 resize was a non-square rectangle (e.g. ~400×300 at
+2560×1080). Forcing that back to a 300×300 square would only be geometrically correct if florr.io
+stretched every UI element — including the minimap widget itself — independently per axis. If the
+minimap widget instead held a fixed square aspect regardless of window shape, that resize would
+compress/stretch real minimap content and corrupt player-position detection. This was raised
+during implementation and the user initially chose to ship as-is rather than guess between two
+equally-unverified models — the real-machine test above replaced that guess with evidence, and
+confirmed the second model (fixed/uniform scaling, not independent-axis stretch) was the correct
+one, at least for this widget at this resolution.
+
+</details>
 
 ## Changes by file
 

@@ -194,3 +194,28 @@ def test_get_map_is_a_no_op_resize_at_reference_resolution(monkeypatch):
     # Unchanged from the pre-this-plan behavior: region is already 300x300.
     assert captured["region"] == [1600, 20, 300, 300]
     assert image.shape[:2] == (300, 300)
+
+
+def test_get_map_uses_height_based_uniform_scale_for_non_16_9(monkeypatch):
+    """实机验证(见2026-08-26的调试会话): 1024x768下小地图真实边界实测约
+    左上(797,20)~右下(1009,227) —— 用debug_screen_pos.py量鼠标点 + 用
+    debug_position_diag.py对着get_map()的截图跑f8de60颜色匹配确认过, 独立轴
+    scale_region()那套公式(算出来是[853,14,160,214])截歪了: 宽度偏窄、外边框
+    整个漏在截图外, 匹配像素数是0. 换成"整体按SCREEN_HEIGHT/1080统一缩放、
+    保持正方形、贴右上角"的公式跟实测数据吻合(右/下边几乎分毫不差, 左边基本对上)。
+    """
+    monkeypatch.setattr(utils, "SCREEN_WIDTH", 1024)
+    monkeypatch.setattr(utils, "SCREEN_HEIGHT", 768)
+    captured = {}
+
+    def fake_screenshot(region):
+        captured["region"] = region
+        w, h = region[2], region[3]
+        return Image.new("RGB", (w, h), color=(10, 20, 30))
+
+    monkeypatch.setattr(utils.pyautogui, "screenshot", fake_screenshot)
+
+    image = utils.get_map()
+
+    assert captured["region"] == [797, 14, 213, 213]
+    assert image.shape[:2] == (300, 300)
