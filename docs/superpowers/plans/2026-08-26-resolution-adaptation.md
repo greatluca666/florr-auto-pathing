@@ -31,7 +31,7 @@
   - `utils.scale_y(value: float) -> int`
   - `utils.scale_point(x: float, y: float) -> tuple[int, int]`
   - `utils.scale_region(x: float, y: float, w: float, h: float) -> list[int]` (4-element `[left, top, width, height]`, matching the `region=[...]` shape `pyautogui.screenshot` already takes elsewhere in this file)
-  - `utils.MOUSE_SCALE: float` — `min(SCREEN_WIDTH/1920, SCREEN_HEIGHT/1080)`, for scaling mouse-steering *distances* (not absolute positions)
+  - `utils.mouse_scale() -> float` — `min(SCREEN_WIDTH/1920, SCREEN_HEIGHT/1080)`, for scaling mouse-steering *distances* (not absolute positions). **Amended during Task 1's fix round** (see ledger): originally specified as a plain `MOUSE_SCALE` module-level value, but a plain assignment can't be both (a) hermetically re-testable via `monkeypatch.setattr(utils, "SCREEN_WIDTH", ...)` and (b) usable via bare-name lookup inside `utils.py` itself and via `main.py`'s `from utils import *`. A `def mouse_scale():` function (recomputed on every call, same pattern as `scale_x`/`scale_y`) satisfies all three; a PEP 562 module `__getattr__` property does not — it only fires on external dotted access, not on internal bare-name lookups or on `import *`.
   - `utils.clamp_to_screen(x: float, y: float, margin: int = 2) -> tuple[float, float]`
 
 - [ ] **Step 1: Write the failing tests**
@@ -81,7 +81,8 @@ def test_clamp_to_screen_keeps_point_inside_bounds_with_margin(monkeypatch):
 def test_mouse_scale_matches_min_of_axis_ratios(monkeypatch):
     monkeypatch.setattr(utils, "SCREEN_WIDTH", 960)
     monkeypatch.setattr(utils, "SCREEN_HEIGHT", 1080)
-    assert utils.MOUSE_SCALE == 0.5  # min(960/1920, 1080/1080) == min(0.5, 1.0)
+    assert utils.mouse_scale() == 0.5  # min(960/1920, 1080/1080) == min(0.5, 1.0)
+    assert round(10 * utils.mouse_scale()) == 5  # must work as a real float in arithmetic, like Task 2/4 use it
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -135,7 +136,13 @@ def scale_region(x, y, w, h):
     return [left, top, right - left, bottom - top]
 
 
-MOUSE_SCALE = min(SCREEN_WIDTH / _REF_WIDTH, SCREEN_HEIGHT / _REF_HEIGHT)
+def mouse_scale():
+    """鼠标转向距离(不是绝对坐标)该乘的缩放系数. 写成函数(不是模块级常量), 跟
+    scale_x/scale_y同一套模式 —— 每次调用都从当前SCREEN_WIDTH/SCREEN_HEIGHT
+    重新算, 这样测试里monkeypatch这两个全局变量后, 调用方(不管是utils.py内部裸
+    调用还是外部utils.mouse_scale())拿到的都是按monkeypatch后的值算出来的结果.
+    """
+    return min(SCREEN_WIDTH / _REF_WIDTH, SCREEN_HEIGHT / _REF_HEIGHT)
 
 
 def clamp_to_screen(x, y, margin=2):
@@ -175,7 +182,7 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
 - Test: `test_utils.py`
 
 **Interfaces:**
-- Consumes: `SCREEN_WIDTH`, `SCREEN_HEIGHT`, `MOUSE_SCALE`, `scale_x`, `scale_y`, `scale_point`, `clamp_to_screen` (all from Task 1, same module — no import needed, just used directly).
+- Consumes: `SCREEN_WIDTH`, `SCREEN_HEIGHT`, `mouse_scale()`, `scale_x`, `scale_y`, `scale_point`, `clamp_to_screen` (all from Task 1, same module — no import needed, just used directly).
 - No new interfaces produced — this task only changes internals of existing functions. Signatures are unchanged.
 
 `calc_anti_stuck` is the only function here with no `pyautogui` call (pure `numpy` math), so it's the only one that gets a real TDD cycle. The rest (`execute_anti_stuck`, `keydown`, `keyup`, `abandon_game`, `_green_button_ratio`, `check_stage`) touch real mouse/screenshot APIs and — matching this repo's existing test coverage (none of them are unit-tested today either) — get mechanical edits + a full-suite regression run, not new tests. Real on-machine behavior is covered by the spec's "Verification" section, not by this plan.
@@ -316,7 +323,7 @@ Replace with:
 
 ```python
 def keydown(direction, delta=500):
-    delta = round(delta * MOUSE_SCALE)
+    delta = round(delta * mouse_scale())
     cx, cy = SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2
     if direction == "w":
         pyautogui.moveTo(*clamp_to_screen(cx, cy - delta))
@@ -591,7 +598,7 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
 - Modify: `main.py`, function `move_to_position` (currently around line 186–194)
 
 **Interfaces:**
-- Consumes: `SCREEN_WIDTH`, `SCREEN_HEIGHT`, `MOUSE_SCALE`, `clamp_to_screen` — already available in `main.py` via its existing `from utils import *` (line 1); no new import needed. (`main.py` already calls bare `pyautogui.moveTo(...)` elsewhere the same way, relying on this same wildcard import for the `pyautogui` name — same pattern, not a new one.)
+- Consumes: `SCREEN_WIDTH`, `SCREEN_HEIGHT`, `mouse_scale()`, `clamp_to_screen` — already available in `main.py` via its existing `from utils import *` (line 1); no new import needed. (`main.py` already calls bare `pyautogui.moveTo(...)` elsewhere the same way, relying on this same wildcard import for the `pyautogui` name — same pattern, not a new one. `mouse_scale` being a plain module-level function — not a PEP 562 lazy attribute — is exactly why `from utils import *` picks it up correctly; see the amendment note on `mouse_scale()` in Task 1.)
 - No new interfaces produced.
 
 No new automated test: `move_to_position` is a long, loop-driven, real-mouse/real-screenshot function with no existing unit test coverage (`test_main_smoke.py` only checks that `main` imports and exposes a few config constants) — matching that existing convention, this task is a mechanical edit verified by the full suite + a real-machine check later (see the spec's "Verification" section), not a new unit test invented just for this plan.
@@ -617,7 +624,7 @@ Replace with:
 
 ```python
         # 移动鼠标指向目标
-        extend = max(min(dist * 45, 500), 50) * MOUSE_SCALE
+        extend = max(min(dist * 45, 500), 50) * mouse_scale()
         if dist > 0:
             extend_x = extend * dx / dist
             extend_y = extend * dy / dist
