@@ -177,3 +177,40 @@ def test_launch_dedicated_chrome_retries_when_tab_not_found_yet():
         cdp_bridge.launch_dedicated_chrome()
     assert mock_poll.call_count == 2
     assert mock_input.call_count == 3  # 关闭确认 + 2次"已打开florr.io"确认(第一次没找到, 重试一次)
+
+
+def test_is_cdp_port_reachable_returns_false_when_port_not_listening():
+    with patch("cdp_bridge.urllib.request.urlopen", side_effect=URLError("refused")):
+        assert cdp_bridge._is_cdp_port_reachable() is False
+
+
+def test_is_cdp_port_reachable_returns_true_when_port_listening():
+    mock_resp = MagicMock()
+    with patch("cdp_bridge.urllib.request.urlopen", return_value=mock_resp):
+        assert cdp_bridge._is_cdp_port_reachable() is True
+
+
+def test_launch_dedicated_chrome_blames_user_when_port_reachable_but_no_florr_tab(capsys):
+    with patch("builtins.input", return_value="") as mock_input, \
+         patch("cdp_bridge._quit_all_chrome"), \
+         patch("cdp_bridge._launch_chrome_process"), \
+         patch("cdp_bridge._poll_for_florr_tab", side_effect=[None, {"url": "https://florr.io/"}]), \
+         patch("cdp_bridge._is_cdp_port_reachable", return_value=True):
+        cdp_bridge.launch_dedicated_chrome()
+    assert mock_input.call_count == 3
+    out = capsys.readouterr().out
+    assert "还没检测到florr.io标签页" in out
+    assert "CDP端口连不上" not in out
+
+
+def test_launch_dedicated_chrome_blames_chrome_when_port_unreachable(capsys):
+    with patch("builtins.input", return_value="") as mock_input, \
+         patch("cdp_bridge._quit_all_chrome"), \
+         patch("cdp_bridge._launch_chrome_process"), \
+         patch("cdp_bridge._poll_for_florr_tab", side_effect=[None, {"url": "https://florr.io/"}]), \
+         patch("cdp_bridge._is_cdp_port_reachable", return_value=False):
+        cdp_bridge.launch_dedicated_chrome()
+    assert mock_input.call_count == 3
+    out = capsys.readouterr().out
+    assert "CDP端口连不上" in out
+    assert "还没检测到florr.io标签页" not in out

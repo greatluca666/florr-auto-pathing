@@ -129,3 +129,12 @@ def test_show_fullscreen_confirm_falls_back_to_console_when_mac_dialog_construct
     with patch("builtins.input", return_value="") as mock_input:
         overlay_module.show_fullscreen_confirm()
     mock_input.assert_called_once()
+
+
+def test_show_fullscreen_confirm_falls_back_to_console_when_tk_is_none(monkeypatch):
+    monkeypatch.setattr(overlay_module, "_IS_MACOS", False)
+    monkeypatch.setattr(overlay_module, "_IS_WINDOWS", True)
+    monkeypatch.setattr(overlay_module, "tk", None)
+    with patch("builtins.input", return_value="") as mock_input:
+        overlay_module.show_fullscreen_confirm()
+    mock_input.assert_called_once()

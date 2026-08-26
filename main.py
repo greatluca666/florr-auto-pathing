@@ -6,8 +6,6 @@ import random
 import afk_watch
 import enemy_detect
 
-overlay = create_overlay()
-
 # ===== 索敌配置 (sszone敌怪检测/追击/规避) =====
 ENEMY_MODEL_PATH = "models/desert.pt"
 ENEMY_SCAN_INTERVAL = 0.3   # 秒, YOLO扫描节流间隔(不是每tick都跑, 推理有开销).
@@ -517,6 +515,7 @@ def auto_farming(farming_area, duration=300):
 if __name__ == "__main__":
     cdp_bridge.launch_dedicated_chrome()
     show_fullscreen_confirm()
+    overlay = create_overlay()
 
     apply_map("desert")
 

@@ -558,7 +558,7 @@ def create_overlay():
 
 def _console_fallback(reason):
     print(f"⚠️ 确认弹窗启动失败: {reason}, 改用控制台确认", file=sys.stderr)
-    input("请手动进入全屏后按回车继续: ")
+    input("请手动进入全屏(F11)后按回车继续: ")
 
 
 def show_fullscreen_confirm():
@@ -569,6 +569,7 @@ def show_fullscreen_confirm():
         if AppKit is None:
             return _console_fallback("pyobjc(AppKit) 不可用")
         try:
+            print("请在弹窗里手动进入全屏(F11)后点击「开始运行」")
             _MacConfirmDialog().wait_for_confirm()
             return
         except Exception as e:
@@ -578,6 +579,7 @@ def show_fullscreen_confirm():
         if tk is None:
             return _console_fallback("tkinter 不可用")
         try:
+            print("请在弹窗里手动进入全屏(F11)后点击「开始运行」")
             _WindowsConfirmDialog().wait_for_confirm()
             return
         except Exception as e:
