@@ -51,7 +51,7 @@ instead of stretching its UI — recalibrate the affected constant with `debug_s
 
 You need to run this code with florr.io tab on the top and fullscreen (any resolution).
 
-Go run `main.py`
+Go run `main.py`. To package it as a standalone Windows `.exe` instead, see [PACKAGING.md](PACKAGING.md).
 
 ```python
 if __name__ == "__main__":
