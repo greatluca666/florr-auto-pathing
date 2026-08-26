@@ -134,8 +134,8 @@ def test_clamp_to_screen_keeps_point_inside_bounds_with_margin(monkeypatch):
 def test_mouse_scale_matches_min_of_axis_ratios(monkeypatch):
     monkeypatch.setattr(utils, "SCREEN_WIDTH", 960)
     monkeypatch.setattr(utils, "SCREEN_HEIGHT", 1080)
-    assert utils.MOUSE_SCALE == 0.5  # min(960/1920, 1080/1080) == min(0.5, 1.0)
-    assert round(10 * utils.MOUSE_SCALE) == 5  # must work as a real float in arithmetic, like Task 2/4 will use it
+    assert utils.mouse_scale() == 0.5  # min(960/1920, 1080/1080) == min(0.5, 1.0)
+    assert round(10 * utils.mouse_scale()) == 5  # must work as a real float in arithmetic, like Task 2/4 will use it
 
 
 def test_calc_anti_stuck_clips_to_actual_screen_bounds_not_1920x1080(monkeypatch):

@@ -80,13 +80,13 @@ def clamp_to_screen(x, y, margin=2):
     )
 
 
-def __getattr__(name):
-    """PEP 562: module-level __getattr__ to dynamically compute MOUSE_SCALE.
-    这样每次访问utils.MOUSE_SCALE都会用当前的SCREEN_WIDTH/SCREEN_HEIGHT重新计算,
-    允许测试里monkeypatch屏幕分辨率后正确反映到MOUSE_SCALE的值."""
-    if name == "MOUSE_SCALE":
-        return min(SCREEN_WIDTH / _REF_WIDTH, SCREEN_HEIGHT / _REF_HEIGHT)
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+def mouse_scale():
+    """鼠标转向距离(不是绝对坐标)该乘的缩放系数. 写成函数(不是模块级常量), 跟
+    scale_x/scale_y同一套模式 —— 每次调用都从当前SCREEN_WIDTH/SCREEN_HEIGHT
+    重新算, 这样测试里monkeypatch这两个全局变量后, 调用方(不管是utils.py内部裸
+    调用还是外部utils.mouse_scale())拿到的都是按monkeypatch后的值算出来的结果.
+    """
+    return min(SCREEN_WIDTH / _REF_WIDTH, SCREEN_HEIGHT / _REF_HEIGHT)
 
 MAP = ""
 
@@ -221,7 +221,7 @@ def execute_anti_stuck(duration=1.5):
 
 
 def keydown(direction, delta=500):
-    delta = round(delta * MOUSE_SCALE)
+    delta = round(delta * mouse_scale())
     cx, cy = SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2
     if direction == "w":
         pyautogui.moveTo(*clamp_to_screen(cx, cy - delta))
