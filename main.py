@@ -193,13 +193,18 @@ def move_to_position(current_pos, target_pos, max_attempts=200, stall_limit=13, 
         mouse_pos = clamp_to_screen(SCREEN_WIDTH // 2 + extend_x, SCREEN_HEIGHT // 2 + extend_y)
         pyautogui.moveTo(mouse_pos)
 
-        # 检查游戏状态
-        stage = check_stage()
-        if stage == "in_game_dead":
+        # 检查游戏状态 —— 不用check_stage(): 它的in_game_dead/in_menu判定靠
+        # 探测固定像素点是不是某个精确RGB, 连1920x1080参照分辨率下都从没真正
+        # 触发过(见on_death_screen()的注释), 2026-08-26在1280x923上实测过更是
+        # 直接把"正常游戏中"误判成"in_game_dead"(探测点landed在别的白色UI上)。
+        # on_death_screen()/on_start_screen()是靠采样一块区域算颜色占比, 已经
+        # 经过缩放+实机验证, 顶层重试循环(lazy_theta_pathing)一直用的就是这套,
+        # 这里跟着统一, 不再有两条不一致的死亡检测逻辑.
+        if on_death_screen():
             reset_keyboard()
             overlay.update(state="已死亡")
             return "in_game_dead"
-        elif stage == "in_menu":
+        elif on_start_screen():
             reset_keyboard()
             overlay.update(state="菜单中")
             return "in_menu"
@@ -310,12 +315,11 @@ def lazy_theta_pathing(location, area=[]):
             execute_anti_stuck()
             continue
 
-        stage = check_stage()
-        if stage == "in_game_dead":
+        if on_death_screen():
             print("💀 玩家已死亡")
             overlay.update(state="已死亡")
             return False
-        elif stage == "in_menu":
+        elif on_start_screen():
             print("📋 玩家在菜单中")
             overlay.update(state="菜单中")
             return False
@@ -484,13 +488,12 @@ def auto_farming(farming_area, duration=300):
             move_count += 1
 
         # 检查游戏状态
-        stage = check_stage()
-        if stage == "in_game_dead":
+        if on_death_screen():
             print("💀 玩家已死亡")
             overlay.update(state="已死亡")
             exit_reason = "break"
             break
-        elif stage == "in_menu":
+        elif on_start_screen():
             print("📋 玩家在菜单中")
             overlay.update(state="菜单中")
             exit_reason = "break"
