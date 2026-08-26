@@ -4,7 +4,11 @@ from urllib.error import URLError
 
 import pytest
 
-from cdp_bridge import find_florr_tab, eval_js, capture_screenshot
+import cdp_bridge
+from cdp_bridge import (
+    find_florr_tab, eval_js, capture_screenshot,
+    _find_windows_chrome, _quit_all_chrome,
+)
 
 # 不能依赖"这台机器9222端口有没有真Chrome在监听"这种外部状态 —— 之前这样写过,
 # 开发机上真跑起了CDP-enabled Chrome后这些测试就全炸了(find_florr_tab意外真的
@@ -65,3 +69,34 @@ def test_eval_js_raises_clear_error_when_wrong_websocket_package_installed():
          patch("cdp_bridge.websocket", fake_websocket_module):
         with pytest.raises(RuntimeError, match="websocket-client"):
             eval_js("1 + 1")
+
+
+def test_find_windows_chrome_returns_none_when_no_candidate_exists():
+    with patch("cdp_bridge.os.path.isfile", return_value=False):
+        assert _find_windows_chrome() is None
+
+
+def test_find_windows_chrome_returns_first_existing_candidate():
+    existing = cdp_bridge._WINDOWS_CHROME_CANDIDATES[1]
+    with patch("cdp_bridge.os.path.isfile", side_effect=lambda p: p == existing):
+        assert _find_windows_chrome() == existing
+
+
+def test_quit_all_chrome_calls_taskkill_on_windows(monkeypatch):
+    monkeypatch.setattr(cdp_bridge.sys, "platform", "win32")
+    with patch("cdp_bridge.subprocess.run") as mock_run, \
+         patch("cdp_bridge.time.sleep"):
+        _quit_all_chrome()
+    mock_run.assert_called_once_with(
+        ["taskkill", "/IM", "chrome.exe", "/F"], capture_output=True
+    )
+
+
+def test_quit_all_chrome_calls_osascript_on_macos(monkeypatch):
+    monkeypatch.setattr(cdp_bridge.sys, "platform", "darwin")
+    with patch("cdp_bridge.subprocess.run") as mock_run, \
+         patch("cdp_bridge.time.sleep"):
+        _quit_all_chrome()
+    mock_run.assert_called_once_with(
+        ["osascript", "-e", 'quit app "Google Chrome"'], capture_output=True
+    )

@@ -36,6 +36,10 @@ Shell里`*`记得加引号, 不然会被当成通配符展开(zsh下`--remote-al
 """
 import base64
 import json
+import os
+import subprocess
+import sys
+import time
 import urllib.request
 import urllib.error
 
@@ -43,6 +47,30 @@ import websocket
 
 CDP_HOST = "127.0.0.1"
 CDP_PORT = 9222
+
+_WINDOWS_CHROME_CANDIDATES = [
+    r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+    r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+    os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe"),
+]
+
+
+def _find_windows_chrome():
+    """按几个常见安装路径挨个试, 都没有就返回None(调用方负责报错文案)."""
+    for path in _WINDOWS_CHROME_CANDIDATES:
+        if os.path.isfile(path):
+            return path
+    return None
+
+
+def _quit_all_chrome():
+    """强制退出所有Chrome进程 —— 专用CDP实例要求Chrome完全重启后新参数才生效
+    (见模块文档). 本来就没在跑不算失败, 静默吞掉非零退出码."""
+    if sys.platform == "win32":
+        subprocess.run(["taskkill", "/IM", "chrome.exe", "/F"], capture_output=True)
+    elif sys.platform == "darwin":
+        subprocess.run(["osascript", "-e", 'quit app "Google Chrome"'], capture_output=True)
+    time.sleep(1)  # 给进程真正退出、释放profile锁一点时间, 避免新实例抢锁失败
 
 
 def find_florr_tab():
