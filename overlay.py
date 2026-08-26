@@ -63,6 +63,12 @@ class _NullOverlay:
     def update(self, state=None, pos=None, target=None, message=None):
         return None
 
+    def show_warning(self, message):
+        return None
+
+    def hide_warning(self):
+        return None
+
     def close(self):
         return None
 
@@ -87,6 +93,11 @@ _BG_COLOR = (1.0, 0.6, 0.0, 0.92)  # R, G, B, alpha
 _CONFIRM_WIDTH, _CONFIRM_HEIGHT = 340, 150
 _CONFIRM_MESSAGE = "florr.io已就绪 — 手动进入全屏(F11)后点击下方按钮开始"
 _CONFIRM_BUTTON_LABEL = "开始运行"
+
+# 比StatusOverlay的小状态框、_MacConfirmDialog/_WindowsConfirmDialog都大 ——
+# 这个是给"连续检测不到玩家位置"这种需要用户立刻注意到的警告用的, 放屏幕
+# 正中央, 字也大, 不能让人错过.
+_WARNING_WIDTH, _WARNING_HEIGHT = 560, 200
 
 
 if Foundation is not None:
@@ -116,6 +127,10 @@ class StatusOverlay:
         self._state = {"state": "-", "pos": None, "target": None, "message": "-"}
         # 一旦update/close在窗口没了之后抛异常, 就锁死后续调用为空操作, 绝不再炸主程序.
         self._dead = False
+        # 警告弹窗惰性建一次, 后续show_warning/hide_warning只切换显示/隐藏 —— 跟
+        # StatusOverlay主窗口本身"建一次、update多次"是同一个模式.
+        self._warning_window = None
+        self._warning_label = None
 
         app = AppKit.NSApplication.sharedApplication()
         # Accessory: 不占Dock图标、不抢应用切换的焦点, 纯后台悬浮窗.
@@ -218,11 +233,78 @@ class StatusOverlay:
             self._dead = True
         return None
 
+    def show_warning(self, message):
+        """屏幕正中央弹一个大号警告(比如"连续多次检测不到玩家位置") —— 跟主HUD
+        一样点击穿透/不抢焦点(main.py这时候pyautogui还在正常操作鼠标键盘),
+        窗口只建一次, 重复调用只是更新文字+重新显示."""
+        if self._dead:
+            return None
+        try:
+            if self._warning_window is None:
+                screen_frame = AppKit.NSScreen.mainScreen().frame()
+                x = (screen_frame.size.width - _WARNING_WIDTH) / 2
+                y = (screen_frame.size.height - _WARNING_HEIGHT) / 2
+                rect = Foundation.NSMakeRect(x, y, _WARNING_WIDTH, _WARNING_HEIGHT)
+
+                window = AppKit.NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
+                    rect, AppKit.NSWindowStyleMaskBorderless, AppKit.NSBackingStoreBuffered, False,
+                )
+                window.setLevel_(_SCREENSAVER_LEVEL)
+                window.setCollectionBehavior_(
+                    AppKit.NSWindowCollectionBehaviorCanJoinAllSpaces
+                    | AppKit.NSWindowCollectionBehaviorFullScreenAuxiliary
+                    | AppKit.NSWindowCollectionBehaviorStationary
+                )
+                window.setOpaque_(False)
+                window.setBackgroundColor_(
+                    AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(*_BG_COLOR)
+                )
+                window.setIgnoresMouseEvents_(True)
+
+                label = AppKit.NSTextField.alloc().initWithFrame_(
+                    Foundation.NSMakeRect(20, 20, _WARNING_WIDTH - 40, _WARNING_HEIGHT - 40)
+                )
+                label.setBezeled_(False)
+                label.setDrawsBackground_(False)
+                label.setEditable_(False)
+                label.setSelectable_(False)
+                label.setFont_(AppKit.NSFont.boldSystemFontOfSize_(18))
+                label.setTextColor_(AppKit.NSColor.colorWithCalibratedWhite_alpha_(0.15, 1.0))
+                label.setAlignment_(AppKit.NSTextAlignmentCenter)
+                # 默认NSTextField单行截断, 这段文案太长必须显式开自动换行, 不然
+                # 大半句话会被裁掉看不见(实测验证过: cellSizeForBounds_算出来的
+                # 高度会随文字换行真的变高, 不开这两个的话文字会被切在一行里).
+                label.cell().setWraps_(True)
+                label.setUsesSingleLineMode_(False)
+                window.contentView().addSubview_(label)
+
+                self._warning_window = window
+                self._warning_label = label
+
+            self._warning_label.setStringValue_(message)
+            self._warning_window.orderFrontRegardless()
+            self._pump_events()
+        except Exception:
+            self._dead = True
+        return None
+
+    def hide_warning(self):
+        if self._dead or self._warning_window is None:
+            return None
+        try:
+            self._warning_window.orderOut_(None)
+            self._pump_events()
+        except Exception:
+            self._dead = True
+        return None
+
     def close(self):
         if self._dead:
             return None
         try:
             self._window.close()
+            if self._warning_window is not None:
+                self._warning_window.close()
             self._dead = True
         except Exception:
             self._dead = True
@@ -364,6 +446,26 @@ def _setup_user32():
     return user32
 
 
+def _apply_clickthrough_topmost(user32, hwnd):
+    """给hwnd叠加点击穿透/不抢焦点/不进任务栏的扩展样式, 再强制置顶+设置透明度+
+    显示. _WindowsOverlay的主HUD窗口和警告弹窗共用同一套win32调用(同一件事,
+    不该写两遍) —— 谁的hwnd传进来就处理谁."""
+    style = user32.GetWindowLongW(hwnd, _WIN_GWL_EXSTYLE)
+    style |= (
+        _WIN_WS_EX_LAYERED | _WIN_WS_EX_TRANSPARENT
+        | _WIN_WS_EX_NOACTIVATE | _WIN_WS_EX_TOOLWINDOW
+    )
+    user32.SetWindowLongW(hwnd, _WIN_GWL_EXSTYLE, style)
+    user32.SetLayeredWindowAttributes(hwnd, 0, _ALPHA_BYTE, _WIN_LWA_ALPHA)
+    # SWP_FRAMECHANGED: 改完GWL_EXSTYLE后必须带这个flag, 否则新样式不会
+    # 立即生效渲染(微软文档明确要求); 顺带把窗口顶到最上层+确保显示出来.
+    user32.SetWindowPos(
+        hwnd, _WIN_HWND_TOPMOST, 0, 0, 0, 0,
+        _WIN_SWP_NOMOVE | _WIN_SWP_NOSIZE | _WIN_SWP_NOACTIVATE
+        | _WIN_SWP_SHOWWINDOW | _WIN_SWP_FRAMECHANGED,
+    )
+
+
 class _WindowsOverlay:
     """Windows版悬浮窗 — tkinter无边框窗口 + 纯win32 API做置顶/透明度/点击穿透.
 
@@ -386,6 +488,12 @@ class _WindowsOverlay:
         self._state = {"state": "-", "pos": None, "target": None, "message": "-"}
         # 一旦update/close在窗口没了之后抛异常, 就锁死后续调用为空操作, 绝不再炸主程序.
         self._dead = False
+        # 警告弹窗惰性建一次(Toplevel挂在主HUD的root下, 不是独立的tk.Tk() ——
+        # 一个进程里开两个Tcl解释器是自找麻烦), 后续show_warning/hide_warning
+        # 只切换显示/隐藏.
+        self._warning_window = None
+        self._warning_label = None
+        self._warning_hwnd = None
 
         root = tk.Tk()
         root.overrideredirect(True)  # 无标题栏/边框, 也不进Alt+Tab切换
@@ -432,22 +540,7 @@ class _WindowsOverlay:
 
     def _apply_window_styles(self):
         """叠加点击穿透/不抢焦点/不进任务栏的扩展样式, 再强制置顶+设置透明度+显示."""
-        user32 = self._user32
-        hwnd = self._hwnd
-        style = user32.GetWindowLongW(hwnd, _WIN_GWL_EXSTYLE)
-        style |= (
-            _WIN_WS_EX_LAYERED | _WIN_WS_EX_TRANSPARENT
-            | _WIN_WS_EX_NOACTIVATE | _WIN_WS_EX_TOOLWINDOW
-        )
-        user32.SetWindowLongW(hwnd, _WIN_GWL_EXSTYLE, style)
-        user32.SetLayeredWindowAttributes(hwnd, 0, _ALPHA_BYTE, _WIN_LWA_ALPHA)
-        # SWP_FRAMECHANGED: 改完GWL_EXSTYLE后必须带这个flag, 否则新样式不会
-        # 立即生效渲染(微软文档明确要求); 顺带把窗口顶到最上层+确保显示出来.
-        user32.SetWindowPos(
-            hwnd, _WIN_HWND_TOPMOST, 0, 0, 0, 0,
-            _WIN_SWP_NOMOVE | _WIN_SWP_NOSIZE | _WIN_SWP_NOACTIVATE
-            | _WIN_SWP_SHOWWINDOW | _WIN_SWP_FRAMECHANGED,
-        )
+        _apply_clickthrough_topmost(self._user32, self._hwnd)
 
     def update(self, state=None, pos=None, target=None, message=None):
         if self._dead:
@@ -469,6 +562,57 @@ class _WindowsOverlay:
                 self._hwnd, _WIN_HWND_TOPMOST, 0, 0, 0, 0,
                 _WIN_SWP_NOMOVE | _WIN_SWP_NOSIZE | _WIN_SWP_NOACTIVATE,
             )
+            self._root.update_idletasks()
+            self._root.update()
+        except Exception:
+            self._dead = True
+        return None
+
+    def show_warning(self, message):
+        """屏幕正中央弹一个大号警告. Toplevel挂在主HUD的root下(共用同一个Tcl
+        解释器), 跟主HUD一样点击穿透/不抢焦点, 窗口只建一次, 重复调用只更新
+        文字+重新显示+重新断言置顶."""
+        if self._dead:
+            return None
+        try:
+            if self._warning_window is None:
+                win = tk.Toplevel(self._root)
+                win.overrideredirect(True)
+                win.configure(bg=_BG_HEX)
+
+                screen_w = self._root.winfo_screenwidth()
+                screen_h = self._root.winfo_screenheight()
+                x = (screen_w - _WARNING_WIDTH) // 2
+                y = (screen_h - _WARNING_HEIGHT) // 2
+                win.geometry(f"{_WARNING_WIDTH}x{_WARNING_HEIGHT}+{x}+{y}")
+                win.resizable(False, False)
+                win.update_idletasks()
+
+                hwnd = self._user32.GetParent(win.winfo_id())
+                self._warning_hwnd = hwnd if hwnd else win.winfo_id()
+
+                label = tk.Label(
+                    win, bg=_BG_HEX, fg=_FG_HEX, font=("Segoe UI", 16, "bold"),
+                    wraplength=_WARNING_WIDTH - 40, justify="center",
+                )
+                label.place(x=20, y=20, width=_WARNING_WIDTH - 40, height=_WARNING_HEIGHT - 40)
+
+                self._warning_window = win
+                self._warning_label = label
+
+            self._warning_label.configure(text=message)
+            _apply_clickthrough_topmost(self._user32, self._warning_hwnd)
+            self._root.update_idletasks()
+            self._root.update()
+        except Exception:
+            self._dead = True
+        return None
+
+    def hide_warning(self):
+        if self._dead or self._warning_window is None:
+            return None
+        try:
+            self._warning_window.withdraw()
             self._root.update_idletasks()
             self._root.update()
         except Exception:

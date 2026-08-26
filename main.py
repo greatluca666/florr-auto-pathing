@@ -269,21 +269,19 @@ def lazy_theta_pathing(location, area=[]):
             # 认出玩家标记(截图抖动之类), 单纯重试.
             retry_count += 1
             print(f"⚠️ 无法检测玩家位置，持续重试中 (第{retry_count}次)...")
+            overlay.update(state="无法检测位置", message=f"持续重试中 (第{retry_count}次)")
             if retry_count > 7:
                 # 连续7次都没检测到, 大概率不是截图抖动这种一过性噪声了 —— 常见
                 # 原因是地图被手动放大过(M键)导致小地图跟标定不对版, 或者窗口
-                # 掉出全屏. 这种情况用户不会一直盯着控制台, 提示放悬浮窗(消息字段)
-                # 而不是print——悬浮窗常驻画面上, 每轮重试都刷新保持可见, 直到
-                # 重新检测到位置(retry_count归零)为止, 不像log那样一闪而过.
-                overlay.update(
-                    state="无法检测位置",
-                    message="无法检测到位置，请查看地图是否放大（M键）或窗口是否全屏（F11）",
-                )
-            else:
-                overlay.update(state="无法检测位置", message=f"持续重试中 (第{retry_count}次)")
+                # 掉出全屏. 这种情况用户不会一直盯着控制台或者小状态框, 用屏幕
+                # 正中央的大号警告窗——常驻画面上, 每轮重试都刷新保持可见, 直到
+                # 重新检测到位置(下面的retry_count归零分支里hide_warning掉)为止.
+                overlay.show_warning("无法检测到位置，请查看地图是否放大（M键）或窗口是否全屏（F11）")
             time.sleep(1)
             continue
 
+        if retry_count > 7:
+            overlay.hide_warning()
         retry_count = 0
         print(f"\n📍 寻路: {pos} -> {location}")
         overlay.update(state="寻路中", pos=pos, target=location, message="规划路径...")

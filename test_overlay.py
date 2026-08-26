@@ -138,3 +138,61 @@ def test_show_fullscreen_confirm_falls_back_to_console_when_tk_is_none(monkeypat
     with patch("builtins.input", return_value="") as mock_input:
         overlay_module.show_fullscreen_confirm()
     mock_input.assert_called_once()
+
+
+def test_null_overlay_show_and_hide_warning_are_noops():
+    stub = overlay_module._NullOverlay()
+    assert stub.show_warning("无法检测到位置") is None
+    assert stub.hide_warning() is None
+
+
+def test_status_overlay_show_warning_builds_centered_window_once_and_reuses_it():
+    overlay = overlay_module.create_overlay()
+    assert isinstance(overlay, overlay_module.StatusOverlay)
+    try:
+        assert overlay._warning_window is None
+        overlay.show_warning("无法检测到位置，请查看地图是否放大（M键）或窗口是否全屏（F11）")
+        assert overlay._warning_window is not None
+        first_window = overlay._warning_window
+        assert overlay._dead is False
+
+        # 再调一次: 复用同一个窗口对象(不重新建), 只更新文字, 不炸.
+        overlay.show_warning("第二条不同的警告文案")
+        assert overlay._warning_window is first_window
+        assert overlay._dead is False
+
+        overlay.hide_warning()
+        assert overlay._dead is False
+    finally:
+        overlay.close()
+
+
+def test_status_overlay_hide_warning_before_any_show_is_noop():
+    overlay = overlay_module.create_overlay()
+    assert isinstance(overlay, overlay_module.StatusOverlay)
+    try:
+        assert overlay.hide_warning() is None
+        assert overlay._dead is False
+    finally:
+        overlay.close()
+
+
+def test_status_overlay_show_warning_latches_dead_on_exception(monkeypatch):
+    overlay = overlay_module.create_overlay()
+    assert isinstance(overlay, overlay_module.StatusOverlay)
+    try:
+        def raise_error(*args, **kwargs):
+            raise RuntimeError("window server gone")
+
+        monkeypatch.setattr(overlay, "_pump_events", raise_error)
+        assert overlay._dead is False
+        result = overlay.show_warning("无法检测到位置")
+        assert result is None
+        assert overlay._dead is True
+        # 锁死之后再调用也必须是no-op, 不再抛异常.
+        assert overlay.show_warning("再来一次") is None
+        assert overlay.hide_warning() is None
+    finally:
+        monkeypatch.undo()
+        overlay._dead = False
+        overlay.close()
