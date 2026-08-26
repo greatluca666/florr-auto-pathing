@@ -163,7 +163,7 @@ def test_select_action_flees_when_avoid_mob_in_range():
         _det("scorpion", "Ultra", (1100, 540)),   # 160px from center, 在触发半径内
         _det("sandstorm", "Common", (960, 700)),  # 优先级再高也不该盖过flee
     ]
-    action, payload = select_action(detections, avoid_trigger_px=400)
+    action, payload = select_action(detections, avoid_trigger_px=400, center=(960, 540))
     assert action == "flee"
     assert (1100, 540) in payload
 
@@ -173,7 +173,7 @@ def test_select_action_ignores_avoid_mob_outside_trigger_radius():
         _det("scorpion", "Ultra", (2000, 540)),   # 1040px, 远超触发半径
         _det("sandstorm", "Common", (1000, 560)),
     ]
-    action, target, hold_px = select_action(detections, avoid_trigger_px=400)
+    action, target, hold_px = select_action(detections, avoid_trigger_px=400, center=(960, 540))
     assert action == "chase"
     assert target["species"] == "sandstorm"
     assert hold_px is None
@@ -184,14 +184,14 @@ def test_select_action_chases_best_priority_candidate():
         _det("scorpion", "Common", (1000, 540)),
         _det("sand_centipede", "Rare", (1010, 540)),  # 稀有度更高, 该选它
     ]
-    action, target, hold_px = select_action(detections)
+    action, target, hold_px = select_action(detections, center=(960, 540))
     assert action == "chase"
     assert target["species"] == "sand_centipede"
 
 
 def test_select_action_holds_distance_for_cautious_target():
     detections = [_det("cactus", "Ultra", (1000, 540))]
-    action, target, hold_px = select_action(detections, cautious_hold_px=250)
+    action, target, hold_px = select_action(detections, cautious_hold_px=250, center=(960, 540))
     assert action == "chase"
     assert hold_px == 250
 
@@ -207,7 +207,7 @@ def test_select_action_flee_excludes_out_of_range_avoid_mobs():
         _det("scorpion", "Ultra", (1060, 540)),  # 100px, in range
         _det("beetle", "Ultra", (60, 540)),       # 900px, out of range — must not dilute the flee vector
     ]
-    action, payload = select_action(detections, avoid_trigger_px=400)
+    action, payload = select_action(detections, avoid_trigger_px=400, center=(960, 540))
     assert action == "flee"
     assert payload == [(1060, 540)]
 

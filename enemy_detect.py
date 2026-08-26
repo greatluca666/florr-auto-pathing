@@ -5,6 +5,8 @@ import numpy as np
 import pyautogui
 from ultralytics import YOLO
 
+import utils
+
 # florr.io稀有度色表(低到高). 来源: 一个公开的florr.io稀有度检测油猴脚本, 缺
 # Eternal档(脚本没更新到那个档, 借用Super当占位) —— 跟这个项目其它靠实测校准出来
 # 的颜色(比如玩家标记的f8de60)一样, 这张表投入实机使用前需要拿真实截图校准一遍,
@@ -111,10 +113,12 @@ def priority_score(species, rarity):
     return (RARITY_RANK[rarity], SPECIES_RANK[species])
 
 
-SCREEN_CENTER = (960, 540)  # 屏幕中心, 同时也是"停止移动"的鼠标位置约定(见
-                              # utils.keyup()) —— aim_mouse_target/flee_mouse_target
-                              # 在"保持距离"/"没有明确方向"时都退回这个值, 调用方
-                              # (main.py)靠跟这个常量比较来判断"这tick是不是故意停住"。
+SCREEN_CENTER = (utils.SCREEN_WIDTH / 2, utils.SCREEN_HEIGHT / 2)  # 屏幕中心, 同时也是
+                              # "停止移动"的鼠标位置约定(见utils.keyup()) ——
+                              # aim_mouse_target/flee_mouse_target在"保持距离"/
+                              # "没有明确方向"时都退回这个值, 调用方(main.py)靠跟这个
+                              # 常量比较来判断"这tick是不是故意停住"。跟utils.py共用
+                              # 同一份SCREEN_WIDTH/SCREEN_HEIGHT, 不再自己独立写死一份.
 
 
 def aim_mouse_target(target_pos, hold_px=None, center=SCREEN_CENTER, max_extend=500):
@@ -231,7 +235,7 @@ def scan_enemies(image=None, conf=0.4, model_path="models/desert.pt"):
     转手传给load_enemy_model() —— 不在这里写死, 让调用方(main.py)的配置常量
     真正管用, 不是摆设。"""
     if image is None:
-        screenshot = pyautogui.screenshot(region=[0, 0, 1920, 1080])
+        screenshot = pyautogui.screenshot(region=[0, 0, utils.SCREEN_WIDTH, utils.SCREEN_HEIGHT])
         image = cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2BGR)
 
     model = load_enemy_model(model_path)
