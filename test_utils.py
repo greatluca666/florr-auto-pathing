@@ -142,6 +142,7 @@ def test_mouse_scale_matches_min_of_axis_ratios(monkeypatch):
 def test_calc_anti_stuck_clips_to_actual_screen_bounds_not_1920x1080(monkeypatch):
     monkeypatch.setattr(utils, "SCREEN_WIDTH", 800)
     monkeypatch.setattr(utils, "SCREEN_HEIGHT", 600)
+    monkeypatch.setattr(utils, "toggle_map", lambda: None)
     # A single "wall" pixel far to the left of screen center pushes the
     # suggested position hard to the right — enough to hit whatever the
     # x-clip upper bound is. At the old hardcoded bound (1920) this would

@@ -453,7 +453,7 @@ def auto_farming(farming_area, duration=300):
             else:
                 overlay.update(state="索敌中", pos=current_pos,
                                 message=f"追击 {target['species']}({target['rarity']})")
-            pyautogui.moveTo(mouse_target)
+            pyautogui.moveTo(clamp_to_screen(*mouse_target))
             time.sleep(0.05)
             continue
 

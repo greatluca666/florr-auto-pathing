@@ -121,12 +121,20 @@ SCREEN_CENTER = (utils.SCREEN_WIDTH / 2, utils.SCREEN_HEIGHT / 2)  # 屏幕中�
                               # 同一份SCREEN_WIDTH/SCREEN_HEIGHT, 不再自己独立写死一份.
 
 
-def aim_mouse_target(target_pos, hold_px=None, center=SCREEN_CENTER, max_extend=500):
+def aim_mouse_target(target_pos, hold_px=None, center=SCREEN_CENTER, max_extend=None):
     """把目标的屏幕坐标换算成鼠标该移到的位置 —— 纯屏幕坐标系计算, 跟
     move_to_position()那套小地图坐标系是两套独立空间, 不能互相传参数。
     hold_px设了值时, 一旦已经进到这个距离内就不再继续靠近(退回屏幕中心, 停止
     输出"继续接近"的方向), 给CAUTIOUS档的怪用; hold_px=None时无视距离上限一直
-    往目标方向贴(只按max_extend限速度), 给ENGAGE档用。"""
+    往目标方向贴(只按max_extend限速度), 给ENGAGE档用。
+
+    max_extend默认None时按1920x1080参照值500乘utils.mouse_scale()换算 —— 跟
+    utils.keydown()的delta是同一种"1920x1080量出来的屏幕转向距离"，同样需要
+    按分辨率缩放(最终回归审查发现的缺口: 这条追击/规避的转向路径之前漏掉了,
+    utils.keydown()那条漫游路径缩放过了)。显式传值(比如测试里传500)会跳过这个
+    默认换算, 直接用调用方给的值 —— 保持既有调用点(测试)的行为不变。"""
+    if max_extend is None:
+        max_extend = 500 * utils.mouse_scale()
     tx, ty = target_pos
     cx, cy = center
     dx, dy = tx - cx, ty - cy
@@ -139,11 +147,16 @@ def aim_mouse_target(target_pos, hold_px=None, center=SCREEN_CENTER, max_extend=
     return (cx + dx / dist * extend, cy + dy / dist * extend)
 
 
-def flee_mouse_target(avoid_positions, center=SCREEN_CENTER, extend=400):
+def flee_mouse_target(avoid_positions, center=SCREEN_CENTER, extend=None):
     """算所有AVOID怪的排斥力合向量, 换算成鼠标该移到的位置(往远离它们的方向)。
     合力互相抵消成约0向量(比如两个AVOID怪分别在玩家两侧)时没有明确逃离方向,
     退回屏幕中心 —— 等同于"停止移动", 跟utils.keyup()把鼠标收回中心停止移动是
-    同一个约定。"""
+    同一个约定。
+
+    extend默认None时按1920x1080参照值400乘utils.mouse_scale()换算, 理由同
+    aim_mouse_target的max_extend。"""
+    if extend is None:
+        extend = 400 * utils.mouse_scale()
     cx, cy = center
     fx, fy = 0.0, 0.0
     for px, py in avoid_positions:
