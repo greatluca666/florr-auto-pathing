@@ -1,4 +1,5 @@
 import numpy as np
+from PIL import Image
 
 import utils
 from utils import if_in_area, _ensure_grayscale_2d, _pick_server_id, calc_anti_stuck
@@ -150,3 +151,45 @@ def test_calc_anti_stuck_clips_to_actual_screen_bounds_not_1920x1080(monkeypatch
     x, y = calc_anti_stuck(borders, weight=10000.0)
     assert x == 800
     assert 0 <= y <= 600
+
+
+def test_get_map_resizes_scaled_capture_back_to_300x300(monkeypatch):
+    monkeypatch.setattr(utils, "SCREEN_WIDTH", 3840)
+    monkeypatch.setattr(utils, "SCREEN_HEIGHT", 2160)
+    captured = {}
+
+    def fake_screenshot(region):
+        captured["region"] = region
+        w, h = region[2], region[3]
+        return Image.new("RGB", (w, h), color=(10, 20, 30))
+
+    monkeypatch.setattr(utils.pyautogui, "screenshot", fake_screenshot)
+
+    image = utils.get_map()
+
+    # At 4K (2x the 1920x1080 reference), the scaled minimap region should
+    # be captured at 600x600 (2x the reference 300x300)...
+    assert captured["region"] == [3200, 40, 600, 600]
+    # ...but get_map() must hand back exactly 300x300 regardless, since
+    # maps/*.png templates and every downstream map-space consumer assume
+    # that fixed pixel space.
+    assert image.shape[:2] == (300, 300)
+
+
+def test_get_map_is_a_no_op_resize_at_reference_resolution(monkeypatch):
+    monkeypatch.setattr(utils, "SCREEN_WIDTH", 1920)
+    monkeypatch.setattr(utils, "SCREEN_HEIGHT", 1080)
+    captured = {}
+
+    def fake_screenshot(region):
+        captured["region"] = region
+        w, h = region[2], region[3]
+        return Image.new("RGB", (w, h), color=(10, 20, 30))
+
+    monkeypatch.setattr(utils.pyautogui, "screenshot", fake_screenshot)
+
+    image = utils.get_map()
+
+    # Unchanged from the pre-this-plan behavior: region is already 300x300.
+    assert captured["region"] == [1600, 20, 300, 300]
+    assert image.shape[:2] == (300, 300)

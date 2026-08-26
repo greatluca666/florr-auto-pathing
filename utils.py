@@ -434,8 +434,16 @@ def check_stage():
 
 
 def get_map():
-    image = pyautogui.screenshot(region=[1600, 20, 1900-1600, 320-20])
+    region = scale_region(1600, 20, 300, 300)
+    image = pyautogui.screenshot(region=region)
     image = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
+    if image.shape[:2] != (300, 300):
+        # maps/anthell.png、maps/desert.png、maps/ocean.png都是固定300x300模板,
+        # 寻路/玩家定位那一整条链路(get_player_location_on_map、calibrate_player、
+        # lazy_theta_star)全部假设坐标就活在这个300x300像素空间里 —— 分辨率一变,
+        # scale_region()算出来的截图区域尺寸就不再是300x300了(比如4K下大概是
+        # 600x600), 截完必须resize回300x300, 不然玩家位置检测/寻路全错位.
+        image = cv2.resize(image, (300, 300), interpolation=cv2.INTER_AREA)
     return image
 
 
