@@ -48,6 +48,14 @@ import websocket
 CDP_HOST = "127.0.0.1"
 CDP_PORT = 9222
 
+_CHROME_PROFILE_DIR = os.path.join(
+    os.path.dirname(os.path.abspath(sys.argv[0])), "chrome-profile"
+)
+# sys.argv[0]: 打包成exe后是exe自己的路径, 脚本模式下是main.py的路径 —— 两种
+# 情况都想要"跟可执行文件同级". 不用sys.executable(那是python解释器本身的
+# 路径, 脚本模式下跟main.py不在同一目录, 只有frozen模式才等于exe路径, 两种
+# 场景表现不一致), sys.argv[0]在两种场景下语义更一致.
+
 _WINDOWS_CHROME_CANDIDATES = [
     r"C:\Program Files\Google\Chrome\Application\chrome.exe",
     r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
@@ -71,6 +79,60 @@ def _quit_all_chrome():
     elif sys.platform == "darwin":
         subprocess.run(["osascript", "-e", 'quit app "Google Chrome"'], capture_output=True)
     time.sleep(1)  # 给进程真正退出、释放profile锁一点时间, 避免新实例抢锁失败
+
+
+def _launch_chrome_process():
+    """带三个CDP参数 + 持久独立profile拉起一个全新空白Chrome窗口. 找不到Chrome
+    可执行文件(仅Windows需要按路径找; macOS靠`open -a`按应用名找, 找不到时
+    `open`自己会报错, 不用额外检测)时抛RuntimeError, 带清楚的安装引导."""
+    args = [
+        f"--remote-debugging-port={CDP_PORT}",
+        "--remote-allow-origins=*",
+        f"--user-data-dir={_CHROME_PROFILE_DIR}",
+        "--no-first-run",
+        "--no-default-browser-check",
+    ]
+    if sys.platform == "win32":
+        chrome_path = _find_windows_chrome()
+        if chrome_path is None:
+            raise RuntimeError("没找到Chrome, 请先安装: https://www.google.com/chrome/")
+        subprocess.Popen([chrome_path] + args)
+    elif sys.platform == "darwin":
+        subprocess.Popen(["open", "-a", "Google Chrome", "--args"] + args)
+    else:
+        raise RuntimeError(f"不支持的平台: {sys.platform}")
+
+
+def _poll_for_florr_tab(timeout, interval=1):
+    """每隔interval秒查一次find_florr_tab(), 直到找到或超时(超时返回None,
+    不抛异常 —— 调用方决定要不要重试)."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        tab = find_florr_tab()
+        if tab is not None:
+            return tab
+        time.sleep(interval)
+    return None
+
+
+def launch_dedicated_chrome():
+    """整条"准备专用Chrome"引导链路, main.py启动时调用一次. 面向不懂命令行的
+    用户, 全程只需要回车 —— 没有任何一步要求手动敲参数."""
+    input(
+        "⚠️ 即将关闭所有Chrome窗口以启动专用实例(未保存的标签页/内容会丢失).\n"
+        "   按回车继续, Ctrl+C取消: "
+    )
+    _quit_all_chrome()
+    _launch_chrome_process()
+
+    while True:
+        input(
+            "\n🌐 专用Chrome已启动. 请在这个新窗口里把你的florr账号迁移过来,"
+            "\n   迁移完成后打开florr.io, 回到这里按回车继续: "
+        )
+        if _poll_for_florr_tab(timeout=15) is not None:
+            return
+        print("   还没检测到florr.io标签页, 确认已经在那个新Chrome窗口里打开florr.io了? 重试一次.")
 
 
 def find_florr_tab():
