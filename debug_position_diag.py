@@ -10,13 +10,13 @@
 import time
 import cv2
 import numpy as np
-from utils import get_map, load_binary_map, MAP, scale_region, SCREEN_WIDTH, SCREEN_HEIGHT
+from utils import get_map, load_binary_map, MAP, minimap_capture_region, SCREEN_WIDTH, SCREEN_HEIGHT
 
 
 def main():
     print(f"检测到的分辨率: {SCREEN_WIDTH}x{SCREEN_HEIGHT}")
     print(f"当前MAP变量: {MAP!r} (空字符串说明还没调用过apply_map(), load_binary_map会失败, 不影响这次诊断)")
-    print(f"get_map()理论截图区域(scale_region(1600,20,300,300)): {scale_region(1600, 20, 300, 300)}")
+    print(f"get_map()理论截图区域(minimap_capture_region()): {minimap_capture_region()}")
     print("\n⏳ 5秒后截屏, 这段时间切到游戏窗口, 保持全屏、角色在场景里能看见小地图...\n")
     for i in range(5, 0, -1):
         print(f"   {i}...")

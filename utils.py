@@ -433,9 +433,9 @@ def check_stage():
             return "unknown"
 
 
-def get_map():
-    """截小地图区域. 不能直接套scale_region()的"宽高各自独立缩放" —— 2026-08-26
-    实机(1024x768)调试确认过, florr.io小地图控件不是那样缩放的: 用户拿
+def minimap_capture_region():
+    """算小地图该截屏幕哪块区域. 不能直接套scale_region()的"宽高各自独立缩放" ——
+    2026-08-26实机(1024x768)调试确认过, florr.io小地图控件不是那样缩放的: 用户拿
     debug_screen_pos.py量出真实外框≈左上(797,20)~右下(1009,227), 跟
     scale_region(1600,20,300,300)算出来的[853,14,160,214]对不上(偏窄, 外边框
     整个漏在截图外, 拿debug_position_diag.py对着截图跑f8de60颜色匹配, 命中
@@ -447,6 +447,12 @@ def get_map():
     跟原来完全一样的[1600,20,300,300], 不影响已验证过的16:9场景(1920x1080/
     2560x1440/3840x2160这类等比分辨率, scale_x==scale_y==这里的scale, 结果
     等价于按老公式算)。
+
+    单独拆成一个函数(不是内联在get_map()里), 是因为debug_position_diag.py这类
+    诊断脚本也需要打印"理论截图区域该是多少"来跟实机现象对比 —— 之前诊断脚本里
+    自己写了一份`scale_region(1600,20,300,300)`, get_map()的算法改了以后诊断脚本
+    那份没跟着改, 打印出来的区域是假的, 容易把人绕晕(实际问题跟这处不一致时看着
+    像还是没修好). 只留一份实现, 两边一起用, 不会再分叉.
     """
     scale = SCREEN_HEIGHT / _REF_HEIGHT
     size = round(300 * scale)
@@ -455,7 +461,11 @@ def get_map():
     right = SCREEN_WIDTH - right_margin
     left = right - size
     top = top_margin
-    region = [left, top, size, size]
+    return [left, top, size, size]
+
+
+def get_map():
+    region = minimap_capture_region()
     image = pyautogui.screenshot(region=region)
     image = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
     if image.shape[:2] != (300, 300):
@@ -510,7 +520,16 @@ def get_player_location_on_map(opencv_img, target_color, map, precise=False):
 
     for contour in contours:
         ((x, y), radius) = cv2.minEnclosingCircle(contour)
-        if radius > 2:
+        # radius>2这个阈值是照1920x1080实测调出来的(那分辨率下get_map()截图区域正好
+        # 是300x300, 不需要放大, 标记原始像素footprint最大最清晰). 2026-08-26实机
+        # (1024x768)调试确认过: 非参照分辨率下get_map()截到的原始区域比300x300小
+        # (这个例子里约209x212), resize放大回300x300时标记的像素footprint会跟着
+        # 缩水, 真实玩家标记量出来radius=1.90(debug_position_diag.py截到的失败瞬间
+        # 现场, 图里肉眼确认过是真标记, 不是噪声), 卡在>2这条线下面被当噪声滤掉 ——
+        # 帧与帧之间因为抗锯齿有±零点几像素抖动, 导致"有时候检测得到有时候检测不到"。
+        # 下调到>1, 给这种非参照分辨率下缩水的标记留出余量; 真正的噪声(孤立1像素)
+        # minEnclosingCircle算出来radius≈0.5, 仍然会被这条线滤掉.
+        if radius > 1:
             if precise:
                 position = (x, y)
                 return position
