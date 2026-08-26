@@ -49,7 +49,10 @@ from its original 1920x1080 calibration — see
 section for the one thing that isn't verified (non-16:9 windows, if florr.io turns out to letterbox
 instead of stretching its UI — recalibrate the affected constant with `debug_screen_pos.py` if so).
 
-You need to run this code with florr.io tab on the top and fullscreen (any resolution).
+`main.py`启动时会自动引导你准备好一个专用Chrome(退出现有Chrome、拉起新实例、
+提示迁移账号并打开florr.io) —— 全程只需要按回车/点确认按钮, 不用手动敲命令行.
+florr.io本身仍然需要全屏(任意分辨率), 但进全屏是流程里最后一步手动操作,
+点了确认按钮之后自动开始寻路/刷怪.
 
 Go run `main.py`. To package it as a standalone Windows `.exe` instead, see [PACKAGING.md](PACKAGING.md).
 

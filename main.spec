@@ -18,7 +18,7 @@ datas = []
 binaries = []
 hiddenimports = [
     "pyautogui", "pyscreeze", "pymsgbox", "pytweening", "pygetwindow", "mouseinfo",
-    "PIL", "websocket", "certifi",
+    "PIL", "websocket", "certifi", "tkinter",
 ]
 
 from PyInstaller.utils.hooks import collect_all

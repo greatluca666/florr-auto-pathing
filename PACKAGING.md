@@ -40,10 +40,24 @@ build keeps the exact same relative-path behavior the unpackaged
 
 ## Running the built exe
 
-Same as running `main.py` unpackaged: open florr.io in Chrome, fullscreen,
-tab on top, then double-click `florr-auto-pathing.exe` (or run it from a
-terminal if you want to see the round-by-round console output, which the
-build keeps — it's a console app, not windowed).
+Don't pre-open or pre-arrange anything in Chrome first — just double-click
+`florr-auto-pathing.exe` (or run it from a terminal if you want to see the
+round-by-round console output, which the build keeps — it's a console app,
+not windowed). The exe's bootstrap takes care of Chrome itself:
+
+1. It prints a warning and waits for Enter before force-closing all existing
+   Chrome windows (any pre-opened florr.io tab gets killed along with
+   everything else, so there's no point opening it beforehand).
+2. It launches a dedicated Chrome window of its own.
+3. It prompts you to migrate your florr account and open florr.io in that
+   new window, then press Enter.
+4. It shows a confirm dialog — go fullscreen (F11) manually and click the
+   button to start the bot loop.
+
+A `chrome-profile\` folder will appear next to the exe after the first run
+(the dedicated Chrome's persistent profile, so you don't have to re-migrate
+your account on every launch). Do **not** include it when zipping up the exe
+folder to distribute it — it holds a live florr.io session.
 
 ## Distributing it
 

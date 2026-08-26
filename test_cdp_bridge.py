@@ -4,7 +4,11 @@ from urllib.error import URLError
 
 import pytest
 
-from cdp_bridge import find_florr_tab, eval_js, capture_screenshot
+import cdp_bridge
+from cdp_bridge import (
+    find_florr_tab, eval_js, capture_screenshot,
+    _find_windows_chrome, _quit_all_chrome, _launch_chrome_process, _poll_for_florr_tab,
+)
 
 # 不能依赖"这台机器9222端口有没有真Chrome在监听"这种外部状态 —— 之前这样写过,
 # 开发机上真跑起了CDP-enabled Chrome后这些测试就全炸了(find_florr_tab意外真的
@@ -65,3 +69,148 @@ def test_eval_js_raises_clear_error_when_wrong_websocket_package_installed():
          patch("cdp_bridge.websocket", fake_websocket_module):
         with pytest.raises(RuntimeError, match="websocket-client"):
             eval_js("1 + 1")
+
+
+def test_find_windows_chrome_returns_none_when_no_candidate_exists():
+    with patch("cdp_bridge.os.path.isfile", return_value=False):
+        assert _find_windows_chrome() is None
+
+
+def test_find_windows_chrome_returns_first_existing_candidate():
+    existing = cdp_bridge._WINDOWS_CHROME_CANDIDATES[1]
+    with patch("cdp_bridge.os.path.isfile", side_effect=lambda p: p == existing):
+        assert _find_windows_chrome() == existing
+
+
+def test_quit_all_chrome_calls_taskkill_on_windows(monkeypatch):
+    monkeypatch.setattr(cdp_bridge.sys, "platform", "win32")
+    with patch("cdp_bridge.subprocess.run") as mock_run, \
+         patch("cdp_bridge.time.sleep"):
+        _quit_all_chrome()
+    mock_run.assert_called_once_with(
+        ["taskkill", "/IM", "chrome.exe", "/F"], capture_output=True
+    )
+
+
+def test_quit_all_chrome_calls_osascript_on_macos(monkeypatch):
+    monkeypatch.setattr(cdp_bridge.sys, "platform", "darwin")
+    with patch("cdp_bridge.subprocess.run") as mock_run, \
+         patch("cdp_bridge.time.sleep"):
+        _quit_all_chrome()
+    mock_run.assert_called_once_with(
+        ["osascript", "-e", 'quit app "Google Chrome"'], capture_output=True
+    )
+
+
+def test_launch_chrome_process_raises_when_windows_chrome_not_found(monkeypatch):
+    monkeypatch.setattr(cdp_bridge.sys, "platform", "win32")
+    with patch("cdp_bridge._find_windows_chrome", return_value=None):
+        with pytest.raises(RuntimeError, match="没找到Chrome"):
+            _launch_chrome_process()
+
+
+def test_launch_chrome_process_windows_passes_correct_args(monkeypatch):
+    monkeypatch.setattr(cdp_bridge.sys, "platform", "win32")
+    chrome_path = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
+    with patch("cdp_bridge._find_windows_chrome", return_value=chrome_path), \
+         patch("cdp_bridge.subprocess.Popen") as mock_popen:
+        _launch_chrome_process()
+    called_args = mock_popen.call_args[0][0]
+    assert called_args[0] == chrome_path
+    assert f"--remote-debugging-port={cdp_bridge.CDP_PORT}" in called_args
+    assert "--remote-allow-origins=*" in called_args
+    assert any(a.startswith("--user-data-dir=") for a in called_args)
+    assert "--no-first-run" in called_args
+    assert "--no-default-browser-check" in called_args
+
+
+def test_launch_chrome_process_macos_uses_open_dash_a(monkeypatch):
+    monkeypatch.setattr(cdp_bridge.sys, "platform", "darwin")
+    with patch("cdp_bridge.subprocess.Popen") as mock_popen:
+        _launch_chrome_process()
+    called_args = mock_popen.call_args[0][0]
+    assert called_args[:4] == ["open", "-a", "Google Chrome", "--args"]
+    assert f"--remote-debugging-port={cdp_bridge.CDP_PORT}" in called_args
+
+
+def test_poll_for_florr_tab_returns_tab_immediately_when_found():
+    fake_tab = {"url": "https://florr.io/", "id": "1"}
+    with patch("cdp_bridge.find_florr_tab", return_value=fake_tab), \
+         patch("cdp_bridge.time.sleep") as mock_sleep:
+        result = _poll_for_florr_tab(timeout=5)
+    assert result == fake_tab
+    mock_sleep.assert_not_called()
+
+
+def test_poll_for_florr_tab_returns_none_after_timeout():
+    with patch("cdp_bridge.find_florr_tab", return_value=None), \
+         patch("cdp_bridge.time.sleep"):
+        result = _poll_for_florr_tab(timeout=0.05, interval=0.01)
+    assert result is None
+
+
+def test_poll_for_florr_tab_retries_until_found():
+    with patch("cdp_bridge.find_florr_tab", side_effect=[None, None, {"url": "https://florr.io/"}]), \
+         patch("cdp_bridge.time.sleep") as mock_sleep:
+        result = _poll_for_florr_tab(timeout=5, interval=1)
+    assert result is not None
+    assert mock_sleep.call_count == 2
+
+
+def test_launch_dedicated_chrome_happy_path_calls_everything_once():
+    with patch("builtins.input", return_value="") as mock_input, \
+         patch("cdp_bridge._quit_all_chrome") as mock_quit, \
+         patch("cdp_bridge._launch_chrome_process") as mock_launch, \
+         patch("cdp_bridge._poll_for_florr_tab", return_value={"url": "https://florr.io/"}) as mock_poll:
+        cdp_bridge.launch_dedicated_chrome()
+    mock_quit.assert_called_once()
+    mock_launch.assert_called_once()
+    mock_poll.assert_called_once_with(timeout=15)
+    assert mock_input.call_count == 2  # 一次关闭确认 + 一次"已打开florr.io"确认
+
+
+def test_launch_dedicated_chrome_retries_when_tab_not_found_yet():
+    with patch("builtins.input", return_value="") as mock_input, \
+         patch("cdp_bridge._quit_all_chrome"), \
+         patch("cdp_bridge._launch_chrome_process"), \
+         patch("cdp_bridge._poll_for_florr_tab", side_effect=[None, {"url": "https://florr.io/"}]) as mock_poll:
+        cdp_bridge.launch_dedicated_chrome()
+    assert mock_poll.call_count == 2
+    assert mock_input.call_count == 3  # 关闭确认 + 2次"已打开florr.io"确认(第一次没找到, 重试一次)
+
+
+def test_is_cdp_port_reachable_returns_false_when_port_not_listening():
+    with patch("cdp_bridge.urllib.request.urlopen", side_effect=URLError("refused")):
+        assert cdp_bridge._is_cdp_port_reachable() is False
+
+
+def test_is_cdp_port_reachable_returns_true_when_port_listening():
+    mock_resp = MagicMock()
+    with patch("cdp_bridge.urllib.request.urlopen", return_value=mock_resp):
+        assert cdp_bridge._is_cdp_port_reachable() is True
+
+
+def test_launch_dedicated_chrome_blames_user_when_port_reachable_but_no_florr_tab(capsys):
+    with patch("builtins.input", return_value="") as mock_input, \
+         patch("cdp_bridge._quit_all_chrome"), \
+         patch("cdp_bridge._launch_chrome_process"), \
+         patch("cdp_bridge._poll_for_florr_tab", side_effect=[None, {"url": "https://florr.io/"}]), \
+         patch("cdp_bridge._is_cdp_port_reachable", return_value=True):
+        cdp_bridge.launch_dedicated_chrome()
+    assert mock_input.call_count == 3
+    out = capsys.readouterr().out
+    assert "还没检测到florr.io标签页" in out
+    assert "CDP端口连不上" not in out
+
+
+def test_launch_dedicated_chrome_blames_chrome_when_port_unreachable(capsys):
+    with patch("builtins.input", return_value="") as mock_input, \
+         patch("cdp_bridge._quit_all_chrome"), \
+         patch("cdp_bridge._launch_chrome_process"), \
+         patch("cdp_bridge._poll_for_florr_tab", side_effect=[None, {"url": "https://florr.io/"}]), \
+         patch("cdp_bridge._is_cdp_port_reachable", return_value=False):
+        cdp_bridge.launch_dedicated_chrome()
+    assert mock_input.call_count == 3
+    out = capsys.readouterr().out
+    assert "CDP端口连不上" in out
+    assert "还没检测到florr.io标签页" not in out
