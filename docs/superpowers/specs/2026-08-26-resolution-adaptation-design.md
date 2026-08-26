@@ -79,6 +79,22 @@ Fix: after capturing the scaled region, `cv2.resize` it back down (or up) to exa
 before converting to the OpenCV image used by the rest of the pipeline. This keeps every existing
 map-space consumer working unmodified — they never see a resolution-dependent size.
 
+**Non-16:9 note (confirmed choice, not left open):** `scale_region` scales width and height by
+independent factors, so at a non-16:9 resolution the *captured* region before this resize is a
+non-square rectangle (e.g. ~400×300 at 2560×1080). Forcing that back to a 300×300 square is only
+geometrically correct under this spec's core assumption (the "Known risk" above) that florr.io
+stretches every UI element — including the minimap widget itself — independently per axis: under
+that model, the browser has already stretched the minimap's content by the same non-uniform factor
+`scale_region` used to size the capture, so this resize exactly cancels that stretch back out
+rather than introducing a new distortion. If the minimap widget instead turns out to hold a fixed
+square aspect regardless of window shape (the other branch of the same Known Risk), this resize
+would compress/stretch real minimap content and corrupt player-position detection at that
+resolution. This was raised during implementation and the user chose to keep `get_map()` as
+specified above rather than add aspect-preserving crop/pad logic against an equally-unverified
+alternative model — it is not a separate risk from the Known Risk already documented, just that
+risk's consequence specifically for `get_map()`. Real-machine verification (see below) covers this
+the same way it covers every other non-16:9 coordinate in this spec.
+
 ## Changes by file
 
 **`utils.py`**
