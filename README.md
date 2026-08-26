@@ -43,9 +43,13 @@ full design and the rarity-color-table caveats.
 
 ## Implements
 
-For this is CLIENT-SIDE, so I haven't do any resolution support.
+Resolution is auto-detected at startup (`pyautogui.size()`) and every screen coordinate is scaled
+from its original 1920x1080 calibration — see
+`docs/superpowers/specs/2026-08-26-resolution-adaptation-design.md` for how, and its "Known risk"
+section for the one thing that isn't verified (non-16:9 windows, if florr.io turns out to letterbox
+instead of stretching its UI — recalibrate the affected constant with `debug_screen_pos.py` if so).
 
-You need to run this code in 1920x1080 with florr.io tab on the top and fullscreen.
+You need to run this code with florr.io tab on the top and fullscreen (any resolution).
 
 Go run `main.py`
 
