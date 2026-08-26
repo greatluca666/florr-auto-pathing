@@ -1,5 +1,6 @@
 import overlay as overlay_module
 from overlay import _format_elapsed, _format_pos, _merge_state
+from unittest.mock import patch
 
 
 def test_format_elapsed_zero():
@@ -111,3 +112,20 @@ def test_mac_confirm_dialog_click_sets_confirmed_and_wait_returns():
     dialog._button.performClick_(None)  # 跟真实鼠标点击走同一条target/action路径
     assert dialog._confirmed is True
     dialog.wait_for_confirm()  # 已经confirmed了, 应该立刻返回(不阻塞)并关闭窗口
+
+
+def test_show_fullscreen_confirm_falls_back_to_console_when_appkit_is_none(monkeypatch):
+    monkeypatch.setattr(overlay_module, "AppKit", None)
+    with patch("builtins.input", return_value="") as mock_input:
+        overlay_module.show_fullscreen_confirm()
+    mock_input.assert_called_once()
+
+
+def test_show_fullscreen_confirm_falls_back_to_console_when_mac_dialog_construction_fails(monkeypatch):
+    def raise_error(*args, **kwargs):
+        raise RuntimeError("no display")
+
+    monkeypatch.setattr(overlay_module, "_MacConfirmDialog", raise_error)
+    with patch("builtins.input", return_value="") as mock_input:
+        overlay_module.show_fullscreen_confirm()
+    mock_input.assert_called_once()

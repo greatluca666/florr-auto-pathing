@@ -486,6 +486,50 @@ class _WindowsOverlay:
         return None
 
 
+class _WindowsConfirmDialog:
+    """真能点击的确认弹窗. Windows不需要mac那套跨Space hack(F11全屏不换Space,
+    见_WindowsOverlay类文档开头那段说明), 也不需要_WindowsOverlay的win32点击
+    穿透样式 —— 这个窗口就是要能点的, 普通tkinter -topmost就够."""
+
+    def __init__(self):
+        self._confirmed = False
+
+        root = tk.Tk()
+        root.overrideredirect(True)
+        root.attributes("-topmost", True)
+        root.configure(bg=_BG_HEX)
+
+        screen_w = root.winfo_screenwidth()
+        screen_h = root.winfo_screenheight()
+        x = (screen_w - _CONFIRM_WIDTH) // 2
+        y = (screen_h - _CONFIRM_HEIGHT) // 2
+        root.geometry(f"{_CONFIRM_WIDTH}x{_CONFIRM_HEIGHT}+{x}+{y}")
+        self._root = root
+
+        label = tk.Label(
+            root, text=_CONFIRM_MESSAGE, bg=_BG_HEX, fg=_FG_HEX,
+            font=("Segoe UI", 11), wraplength=_CONFIRM_WIDTH - 24, justify="center",
+        )
+        label.pack(pady=(20, 10))
+
+        button = tk.Button(root, text=_CONFIRM_BUTTON_LABEL, command=self._on_confirmed)
+        button.pack(pady=10)
+        self._button = button
+
+        root.update_idletasks()
+        root.update()
+
+    def _on_confirmed(self):
+        self._confirmed = True
+
+    def wait_for_confirm(self):
+        while not self._confirmed:
+            self._root.update_idletasks()
+            self._root.update()
+            time.sleep(0.05)
+        self._root.destroy()
+
+
 def create_overlay():
     """建悬浮窗, 建不起来(缺依赖/没display)就退化成空壳, 不炸主程序."""
     if _IS_MACOS:
@@ -510,6 +554,36 @@ def create_overlay():
 
     print(f"⚠️ 悬浮窗启动失败: 不支持的平台 {sys.platform}", file=sys.stderr)
     return _NullOverlay()
+
+
+def _console_fallback(reason):
+    print(f"⚠️ 确认弹窗启动失败: {reason}, 改用控制台确认", file=sys.stderr)
+    input("请手动进入全屏后按回车继续: ")
+
+
+def show_fullscreen_confirm():
+    """弹一个真能点击的确认对话框, 阻塞到用户点击"开始运行"为止. 悬浮窗建不
+    出来就退化成控制台input()确认, 绝不崩主程序 —— 跟create_overlay()的
+    _NullOverlay降级哲学一致."""
+    if _IS_MACOS:
+        if AppKit is None:
+            return _console_fallback("pyobjc(AppKit) 不可用")
+        try:
+            _MacConfirmDialog().wait_for_confirm()
+            return
+        except Exception as e:
+            return _console_fallback(str(e))
+
+    if _IS_WINDOWS:
+        if tk is None:
+            return _console_fallback("tkinter 不可用")
+        try:
+            _WindowsConfirmDialog().wait_for_confirm()
+            return
+        except Exception as e:
+            return _console_fallback(str(e))
+
+    return _console_fallback(f"不支持的平台 {sys.platform}")
 
 
 if __name__ == "__main__":
