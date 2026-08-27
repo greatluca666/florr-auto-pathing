@@ -260,3 +260,63 @@ def test_download_and_extract_returns_false_on_corrupt_zip(tmp_path, monkeypatch
 
     assert result is False
     assert not (tmp_path / "florr-auto-afk-v1.1.1-auto.zip.download").exists()
+
+
+def test_ensure_florr_auto_afk_running_skips_entirely_on_non_windows(monkeypatch):
+    monkeypatch.setattr(afk_watch.sys, "platform", "darwin")
+    with patch("builtins.input") as mock_input, \
+         patch("afk_watch.subprocess.Popen") as mock_popen, \
+         patch("afk_watch.urllib.request.urlopen") as mock_urlopen:
+        afk_watch.ensure_florr_auto_afk_running()
+    mock_input.assert_not_called()
+    mock_popen.assert_not_called()
+    mock_urlopen.assert_not_called()
+
+
+def test_ensure_florr_auto_afk_running_opens_directly_when_already_installed(monkeypatch):
+    monkeypatch.setattr(afk_watch.sys, "platform", "win32")
+    with patch("afk_watch.os.path.isfile", return_value=True), \
+         patch("builtins.input") as mock_input, \
+         patch("afk_watch.subprocess.Popen") as mock_popen:
+        afk_watch.ensure_florr_auto_afk_running()
+    mock_input.assert_not_called()  # 已经装了, 不该问下载
+    mock_popen.assert_called_once_with([afk_watch._EXE_PATH])
+
+
+def test_ensure_florr_auto_afk_running_skips_when_user_declines_download(monkeypatch):
+    monkeypatch.setattr(afk_watch.sys, "platform", "win32")
+    with patch("afk_watch.os.path.isfile", return_value=False), \
+         patch("afk_watch._prompt_download_confirm", return_value=False), \
+         patch("afk_watch._download_and_extract") as mock_download, \
+         patch("afk_watch.subprocess.Popen") as mock_popen:
+        afk_watch.ensure_florr_auto_afk_running()
+    mock_download.assert_not_called()
+    mock_popen.assert_not_called()
+
+
+def test_ensure_florr_auto_afk_running_downloads_then_opens_when_confirmed(monkeypatch):
+    monkeypatch.setattr(afk_watch.sys, "platform", "win32")
+    with patch("afk_watch.os.path.isfile", return_value=False), \
+         patch("afk_watch._prompt_download_confirm", return_value=True), \
+         patch("afk_watch._download_and_extract", return_value=True) as mock_download, \
+         patch("afk_watch.subprocess.Popen") as mock_popen:
+        afk_watch.ensure_florr_auto_afk_running()
+    mock_download.assert_called_once()
+    mock_popen.assert_called_once_with([afk_watch._EXE_PATH])
+
+
+def test_ensure_florr_auto_afk_running_does_not_open_when_download_fails(monkeypatch):
+    monkeypatch.setattr(afk_watch.sys, "platform", "win32")
+    with patch("afk_watch.os.path.isfile", return_value=False), \
+         patch("afk_watch._prompt_download_confirm", return_value=True), \
+         patch("afk_watch._download_and_extract", return_value=False), \
+         patch("afk_watch.subprocess.Popen") as mock_popen:
+        afk_watch.ensure_florr_auto_afk_running()
+    mock_popen.assert_not_called()
+
+
+def test_ensure_florr_auto_afk_running_does_not_crash_when_popen_raises(monkeypatch):
+    monkeypatch.setattr(afk_watch.sys, "platform", "win32")
+    with patch("afk_watch.os.path.isfile", return_value=True), \
+         patch("afk_watch.subprocess.Popen", side_effect=OSError("no permission")):
+        afk_watch.ensure_florr_auto_afk_running()  # 不该抛异常

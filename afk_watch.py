@@ -165,3 +165,28 @@ def _download_and_extract():
     finally:
         if os.path.isfile(tmp_path):
             os.remove(tmp_path)
+
+
+def ensure_florr_auto_afk_running():
+    """确保florr-auto-afk在跑 —— 没装就问要不要下, 装了(不管刚下的还是本来就
+    有的)就打开它. 只在Windows上做, 其余平台整个跳过(florr-auto-afk是Windows
+    专属GUI程序). 全程不阻塞主流程 —— 这是可选增强, 不是寻路/刷怪的前提, 任何
+    一步失败/用户跳过都只打印一句提示, main.py照常往下走."""
+    if sys.platform != "win32":
+        return
+
+    if not os.path.isfile(_EXE_PATH):
+        if not _prompt_download_confirm():
+            print("   跳过florr-auto-afk, 之后AFK弹窗不会自动处理.")
+            return
+        if not _download_and_extract():
+            return  # 失败原因已经在_download_and_extract()里打印过了
+
+    try:
+        subprocess.Popen([_EXE_PATH])
+        print(
+            "🪟 已打开florr-auto-afk, 请在它的界面里点\"run\"按钮开启AFK弹窗"
+            "自动处理(不点也不影响寻路/刷怪, 只是不会自动处理AFK弹窗)."
+        )
+    except Exception as e:
+        print(f"⚠️ 打开florr-auto-afk失败(不影响主程序): {e}")
