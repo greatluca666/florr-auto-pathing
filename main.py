@@ -526,6 +526,7 @@ def auto_farming(farming_area, duration=300):
 
 if __name__ == "__main__":
     cdp_bridge.launch_dedicated_chrome()
+    afk_watch.ensure_florr_auto_afk_running()
     show_fullscreen_confirm()
     overlay = create_overlay()
 
