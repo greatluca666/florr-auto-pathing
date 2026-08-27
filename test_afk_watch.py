@@ -280,7 +280,9 @@ def test_ensure_florr_auto_afk_running_opens_directly_when_already_installed(mon
          patch("afk_watch.subprocess.Popen") as mock_popen:
         afk_watch.ensure_florr_auto_afk_running()
     mock_input.assert_not_called()  # 已经装了, 不该问下载
-    mock_popen.assert_called_once_with([afk_watch._EXE_PATH])
+    # cwd必须是它自己的安装目录 —— segment.exe内部读的是相对路径'./config.json',
+    # 它写的latest.log也落在CWD; 继承我们的CWD会让它一启动就FileNotFoundError.
+    mock_popen.assert_called_once_with([afk_watch._EXE_PATH], cwd=afk_watch._INSTALL_DIR)
 
 
 def test_ensure_florr_auto_afk_running_skips_when_user_declines_download(monkeypatch):
@@ -302,7 +304,7 @@ def test_ensure_florr_auto_afk_running_downloads_then_opens_when_confirmed(monke
          patch("afk_watch.subprocess.Popen") as mock_popen:
         afk_watch.ensure_florr_auto_afk_running()
     mock_download.assert_called_once()
-    mock_popen.assert_called_once_with([afk_watch._EXE_PATH])
+    mock_popen.assert_called_once_with([afk_watch._EXE_PATH], cwd=afk_watch._INSTALL_DIR)
 
 
 def test_ensure_florr_auto_afk_running_does_not_open_when_download_fails(monkeypatch):

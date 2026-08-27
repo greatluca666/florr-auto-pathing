@@ -183,7 +183,11 @@ def ensure_florr_auto_afk_running():
             return  # 失败原因已经在_download_and_extract()里打印过了
 
     try:
-        subprocess.Popen([_EXE_PATH])
+        # cwd=_INSTALL_DIR是必须的, 不能让它继承我们的CWD: segment.exe内部读的是
+        # 相对路径'./config.json'(get_config()), 继承我们的CWD时它一启动就
+        # FileNotFoundError: './config.json'挂掉; 而且它写的latest.log也落在CWD,
+        # 不指定的话LATEST_LOG_PATH指向的位置永远不会有文件, AFK检测静默失效.
+        subprocess.Popen([_EXE_PATH], cwd=_INSTALL_DIR)
         print(
             "🪟 已打开florr-auto-afk, 请在它的界面里点\"run\"按钮开启AFK弹窗"
             "自动处理(不点也不影响寻路/刷怪, 只是不会自动处理AFK弹窗)."
