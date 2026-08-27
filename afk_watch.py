@@ -7,17 +7,54 @@ florr-auto-afk只在检测到弹窗那一刻写一条会落盘的日志(`log_ret
 没法拿来当"解除暂停"信号用 —— 这里只能是触发器, 不是起止对: 看到触发行就暂停
 固定时长, 时间到自动恢复, 不去猜它到底解完没解完. 详见
 docs/superpowers/specs/2026-08-11-afk-check-coexistence-design.md.
+
+florr-auto-afk本身是完全独立的另一个程序(不是这个repo的一部分), 用户得自己
+有一份能跑. ensure_florr_auto_afk_running()负责在Windows上自动确保它在跑
+(没装就问要不要下, 装了就打开它); LATEST_LOG_PATH跟着它实际的安装位置算出来,
+不再是写死的个人路径. 详见
+docs/superpowers/specs/2026-08-27-afk-auto-bootstrap-design.md.
 """
 import os
+import ssl
+import subprocess
+import sys
 import time
+import urllib.request
+import zipfile
 
-# florr-auto-afk.exe在VM里的部署目录是C:\Users\luca\Desktop\florr-auto-afk-v1.1.1-auto,
-# 双击exe时CWD是exe自身所在目录, latest.log就落在这个目录下.
-LATEST_LOG_PATH = "C:/Users/luca/Desktop/florr-auto-afk-v1.1.1-auto/latest.log"
+import certifi
+
+# florr-auto-afk发行包解压后自带这个顶层目录名, 直接沿用不改名.
+_INSTALL_DIR_NAME = "florr-auto-afk-v1.1.1-auto"
+# 实测过release zip内部结构确认的真实可执行文件名 —— 不是"florr-auto-afk.exe"
+# 这种直觉猜测的名字.
+_EXE_NAME = "segment.exe"
+_DOWNLOAD_URL = (
+    "https://github.com/sunluca668/auto-afk/releases/download/"
+    "123er4/florr-auto-afk-v1.1.1-auto.zip"
+)
+
+# 跟cdp_bridge.py的_CHROME_PROFILE_DIR同一个套路: 打包成exe后是exe自己所在
+# 目录, 脚本模式下是main.py所在目录 —— 两种场景下"跟可执行文件同级"语义一致,
+# 不用sys.executable(脚本模式下那是python解释器路径, 跟main.py不在同一目录).
+_INSTALL_ROOT = os.path.dirname(os.path.abspath(sys.argv[0]))
+_INSTALL_DIR = os.path.join(_INSTALL_ROOT, _INSTALL_DIR_NAME)
+_EXE_PATH = os.path.join(_INSTALL_DIR, _EXE_NAME)
+
+# florr-auto-afk.exe(现在自动下载安装到_INSTALL_DIR了)双击时CWD是它自己所在
+# 目录, latest.log就落在这个目录下.
+LATEST_LOG_PATH = os.path.join(_INSTALL_DIR, "latest.log")
 # 覆盖YOLO检测+分割+拖拽执行的时间; 若在florr-auto-afk配置里关掉moveAfterAFK可以调低.
 PAUSE_SECONDS = 12
 
 _FOUND_MARKER = "EVENT: Found AFK window"
+
+# server_lookup.py的_SSL_CONTEXT/_USER_AGENT原样复制 —— Windows上urllib默认
+# 不读系统证书链, 显式传certifi的证书链才不会CERTIFICATE_VERIFY_FAILED(见
+# venv-setup-deps项目memory的certifi那条). 两个都是模块私有常量, 不跨模块
+# import, 沿用这个repo"平台/职责专属模块各自小段重复"的既有约定.
+_SSL_CONTEXT = ssl.create_default_context(cafile=certifi.where())
+_USER_AGENT = "florr-auto-pathing (github.com/greatluca666/florr-auto-pathing)"
 
 _last_offset = 0
 _pause_until = 0.0

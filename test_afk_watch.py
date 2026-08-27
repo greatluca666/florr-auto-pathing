@@ -1,3 +1,4 @@
+import os
 import time
 
 import afk_watch
@@ -142,3 +143,19 @@ def test_poll_afk_pause_warns_once_when_log_unreadable(tmp_path, monkeypatch, ca
     assert afk_watch.poll_afk_pause() is False
     captured = capsys.readouterr()
     assert captured.out.count("⚠️") == 1
+
+
+def test_latest_log_path_is_computed_from_install_dir():
+    assert afk_watch.LATEST_LOG_PATH == os.path.join(afk_watch._INSTALL_DIR, "latest.log")
+
+
+def test_install_dir_is_named_after_the_release_folder():
+    assert afk_watch._INSTALL_DIR == os.path.join(
+        afk_watch._INSTALL_ROOT, "florr-auto-afk-v1.1.1-auto"
+    )
+
+
+def test_exe_path_uses_the_real_executable_name_not_florr_auto_afk_exe():
+    # 实测过release zip内部结构确认的真实文件名 —— 不是"florr-auto-afk.exe"
+    # 这种直觉猜测的名字, 写死一个测试防止以后被改错.
+    assert afk_watch._EXE_PATH == os.path.join(afk_watch._INSTALL_DIR, "segment.exe")
