@@ -1,5 +1,8 @@
+import io
 import os
 import time
+import zipfile
+from unittest.mock import MagicMock, patch
 
 import afk_watch
 
@@ -159,3 +162,101 @@ def test_exe_path_uses_the_real_executable_name_not_florr_auto_afk_exe():
     # 实测过release zip内部结构确认的真实文件名 —— 不是"florr-auto-afk.exe"
     # 这种直觉猜测的名字, 写死一个测试防止以后被改错.
     assert afk_watch._EXE_PATH == os.path.join(afk_watch._INSTALL_DIR, "segment.exe")
+
+
+def test_prompt_download_confirm_returns_true_on_enter(monkeypatch):
+    monkeypatch.setattr("builtins.input", lambda _: "")
+    assert afk_watch._prompt_download_confirm() is True
+
+
+def test_prompt_download_confirm_returns_false_on_n(monkeypatch):
+    monkeypatch.setattr("builtins.input", lambda _: "n")
+    assert afk_watch._prompt_download_confirm() is False
+
+
+def test_prompt_download_confirm_returns_false_on_n_case_insensitive_with_whitespace(monkeypatch):
+    monkeypatch.setattr("builtins.input", lambda _: "  N  ")
+    assert afk_watch._prompt_download_confirm() is False
+
+
+def test_prompt_download_confirm_prints_url_size_and_destination(monkeypatch):
+    # input()的提示文本是作为参数传给input(...)的, 不是print()出来的 —— capsys
+    # 抓不到. 换个把prompt参数记下来的假input, 直接断言参数内容.
+    captured_prompt = {}
+
+    def fake_input(prompt):
+        captured_prompt["text"] = prompt
+        return ""
+
+    monkeypatch.setattr("builtins.input", fake_input)
+    afk_watch._prompt_download_confirm()
+    assert afk_watch._DOWNLOAD_URL in captured_prompt["text"]
+    assert afk_watch._INSTALL_DIR in captured_prompt["text"]
+
+
+def _fake_zip_bytes():
+    """造一个真实的、内存里的zip文件内容, 里面有一个占位文件 —— 用来让
+    zipfile.ZipFile(真实的模块, 不mock)在测试里真的能解压出东西, 断言解压
+    后的文件确实落在了预期目录, 而不是只断言"函数被调用过"这种空心测试."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("florr-auto-afk-v1.1.1-auto/segment.exe", b"fake exe content")
+    return buf.getvalue()
+
+
+def _fake_response(body):
+    """假的urlopen返回值: 支持with语句, 第一次read()给全部内容, 第二次给空
+    表示读完."""
+    resp = MagicMock()
+    resp.headers = {"Content-Length": str(len(body))}
+    resp.read.side_effect = [body, b""]
+    resp.__enter__ = lambda self: resp
+    resp.__exit__ = lambda self, *a: False
+    return resp
+
+
+def test_download_and_extract_success(tmp_path, monkeypatch):
+    monkeypatch.setattr(afk_watch, "_INSTALL_ROOT", str(tmp_path))
+    monkeypatch.setattr(
+        afk_watch, "_INSTALL_DIR", str(tmp_path / "florr-auto-afk-v1.1.1-auto")
+    )
+
+    with patch(
+        "afk_watch.urllib.request.urlopen", return_value=_fake_response(_fake_zip_bytes())
+    ):
+        result = afk_watch._download_and_extract()
+
+    assert result is True
+    extracted_exe = tmp_path / "florr-auto-afk-v1.1.1-auto" / "segment.exe"
+    assert extracted_exe.read_bytes() == b"fake exe content"
+    # 临时zip用完就删, 不该留在目标目录里.
+    assert not (tmp_path / "florr-auto-afk-v1.1.1-auto.zip.download").exists()
+
+
+def test_download_and_extract_returns_false_and_cleans_up_on_network_error(tmp_path, monkeypatch):
+    monkeypatch.setattr(afk_watch, "_INSTALL_ROOT", str(tmp_path))
+    monkeypatch.setattr(
+        afk_watch, "_INSTALL_DIR", str(tmp_path / "florr-auto-afk-v1.1.1-auto")
+    )
+
+    with patch("afk_watch.urllib.request.urlopen", side_effect=OSError("network unreachable")):
+        result = afk_watch._download_and_extract()
+
+    assert result is False
+    assert not (tmp_path / "florr-auto-afk-v1.1.1-auto.zip.download").exists()
+
+
+def test_download_and_extract_returns_false_on_corrupt_zip(tmp_path, monkeypatch):
+    monkeypatch.setattr(afk_watch, "_INSTALL_ROOT", str(tmp_path))
+    monkeypatch.setattr(
+        afk_watch, "_INSTALL_DIR", str(tmp_path / "florr-auto-afk-v1.1.1-auto")
+    )
+
+    with patch(
+        "afk_watch.urllib.request.urlopen",
+        return_value=_fake_response(b"this is not a zip file"),
+    ):
+        result = afk_watch._download_and_extract()
+
+    assert result is False
+    assert not (tmp_path / "florr-auto-afk-v1.1.1-auto.zip.download").exists()

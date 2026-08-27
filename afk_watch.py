@@ -116,3 +116,52 @@ def poll_afk_pause():
             print(f"⏸️  检测到florr-auto-afk发现AFK弹窗, 暂停操作{PAUSE_SECONDS}秒...")
             break
     return time.time() < _pause_until
+
+
+def _prompt_download_confirm():
+    """问用户要不要下载florr-auto-afk. 回车/任何不是'n'的输入都算同意;
+    输入n(不分大小写, 允许前后空白)算跳过."""
+    answer = input(
+        f"\n🤖 没检测到florr-auto-afk(AFK弹窗自动处理用). 现在下载吗?\n"
+        f"   来源: {_DOWNLOAD_URL}\n"
+        f"   大小: 约260MB, 解压到: {_INSTALL_DIR}\n"
+        f"   (回车=下载, 输入n=跳过, 之后AFK弹窗不会自动处理): "
+    )
+    return answer.strip().lower() != "n"
+
+
+def _download_and_extract():
+    """流式下载到临时文件+zipfile解压, 完了删掉临时zip. 网络失败/zip损坏都
+    不抛异常出去 —— 返回False, 让调用方(ensure_florr_auto_afk_running())
+    决定怎么继续, 主程序不受影响."""
+    tmp_path = os.path.join(_INSTALL_ROOT, f"{_INSTALL_DIR_NAME}.zip.download")
+    try:
+        req = urllib.request.Request(_DOWNLOAD_URL, headers={"User-Agent": _USER_AGENT})
+        with urllib.request.urlopen(req, timeout=30, context=_SSL_CONTEXT) as resp:
+            total = int(resp.headers.get("Content-Length", 0))
+            downloaded = 0
+            with open(tmp_path, "wb") as f:
+                while True:
+                    chunk = resp.read(1024 * 1024)  # 1MB一块
+                    if not chunk:
+                        break
+                    f.write(chunk)
+                    downloaded += len(chunk)
+                    if total:
+                        print(
+                            f"\r   下载中... {downloaded / 1e6:.0f}MB / {total / 1e6:.0f}MB",
+                            end="",
+                        )
+            print()  # 结束下载进度那行, 换行
+
+        with zipfile.ZipFile(tmp_path) as zf:
+            zf.extractall(_INSTALL_ROOT)
+
+        print(f"✅ florr-auto-afk已下载解压到 {_INSTALL_DIR}")
+        return True
+    except Exception as e:
+        print(f"⚠️ 下载/解压florr-auto-afk失败(不影响主程序, 之后AFK弹窗不会自动处理): {e}")
+        return False
+    finally:
+        if os.path.isfile(tmp_path):
+            os.remove(tmp_path)
