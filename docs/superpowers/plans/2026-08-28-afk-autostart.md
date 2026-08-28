@@ -656,7 +656,8 @@ git commit -m "feat: start florr-auto-afk silently and verify it began detecting
 ## Task 5: 切到打过补丁的release(**依赖附录A的构建产物**)
 
 **Files:**
-- Modify: `afk_watch.py:28-46`(`_INSTALL_DIR_NAME`、`_DOWNLOAD_URL`、模块docstring)
+- Modify: `afk_watch.py`(模块docstring、`_INSTALL_DIR_NAME`、`_DOWNLOAD_URL`、新增`_DOWNLOAD_SHA256`、`_STARTED_MARKER`、`_REQUIRED_CONFIG`、`_DEFAULT_CONFIG`、`_download_and_extract()`)
+- Test: `test_afk_watch.py`(改9个既有测试 + 追加2条新测试)
 
 **Interfaces:**
 - Consumes: 附录A产出的release zip URL
@@ -668,58 +669,58 @@ git commit -m "feat: start florr-auto-afk silently and verify it began detecting
 
 **最终 review 要求一并折进这个 task 的四件事**(2026-08-28,Tasks 1-4 落地之后追加):
 
-1. **`_DOWNLOAD_URL` 加 SHA-256 校验** —— 我们下 260MB 然后 `Popen` 它。改常量的时候顺手钉一个 `_DOWNLOAD_SHA256`,下完用 `hashlib` 核对,不对就当下载失败(打印原因、返回 False)。托管方能对同一个 tag `--clobber` 覆盖 asset,没校验就等于无条件执行远端换过的二进制
-2. **`_STARTED_MARKER` 换成更严的信号,或者加模型文件体检** —— `Segment process started` 是**父进程**在 `segment_process.start()` 之后立刻写的(`segment.py:202`),子进程还没加载任何模型;模型坏了我们照样打 `✅`。可选:改用 `Running indefinitely`(`segment.py:41`,子进程里 `test_environment()` + 模型加载之后才写,`save=True`),代价是耦合 `runs.runningCountDown == -1` —— 那就把 `runningCountDown: -1` 也加进 `_REQUIRED_CONFIG`(顺带避免它跑 X 分钟后自己关掉)
-3. **`_DEFAULT_CONFIG` 跟 `_DOWNLOAD_URL` 要同版本** —— 换 URL 的时候如果 fork 的 `config.json` 有变(比如加了 `autoStart` 默认键),`_DEFAULT_CONFIG` 得同步,没有任何自动检查会抓到这俩漂移
-4. **更新用户文档** —— `docs/bilibili/视频2-安装教程-脚本与分镜.md:41` 还在教观众点 run 按钮/给按钮打红框。**Task 5 之前不要改**:现在那个 exe 确实还得手点,提前改反而是错的
+1. ~~**`_DOWNLOAD_URL` 加 SHA-256 校验**~~ —— **已做**(2026-08-28)。`_DOWNLOAD_SHA256 = "74488ef5...e7d74"`,`_download_and_extract()`边下边`hashlib.sha256().update(chunk)`,下完不符就打印期望/实际两个摘要并返回False,解压之前就停住
+2. ~~**`_STARTED_MARKER` 换成更严的信号**~~ —— **已做**(2026-08-28),按括号里那个可选方案走:marker换成子进程写的`Running indefinitely`,`runningCountDown: -1`一起进了`_REQUIRED_CONFIG`
+3. ~~**`_DEFAULT_CONFIG` 跟 `_DOWNLOAD_URL` 要同版本**~~ —— **已做**(2026-08-28)。fork发行包的`config.json`只在`runs`最前面多了`"autoStart": false`,其余跟`git show v1.1.1:config.json`逐键一致;`_DEFAULT_CONFIG`已补上这个键(值仍由`_REQUIRED_CONFIG`覆盖成`true`)
+4. **更新用户文档** —— **还没做**(Task 5 落地后已解锁)。`docs/bilibili/视频2-安装教程-脚本与分镜.md`还在教观众点 run 按钮/给按钮打红框,而且第11行的"下 260MB"要改成约350MB。那个目录目前还没进git,不在本 task 的提交范围里
 
-`_START_TIMEOUT_SECONDS = 90` 落地后要按实机真实耗时调(见附录A9)。
+`_START_TIMEOUT_SECONDS = 90` 落地后要按实机真实耗时调(见附录A9)。**注意换marker之后余量变小了**:它比父进程那条晚,还要多等一个首次运行的`test_environment()`。
 
-- [ ] **Step 1: 改常量**
+- [x] **Step 1: 改常量**
+
+**实际落地的值**(zip名跟官方原件同名,不是`-autostart-auto.zip` —— 见下面Step 1b):
 
 ```python
 # 打过autoStart补丁的fork构建(见docs/superpowers/specs/2026-08-28-afk-autostart-design.md
-# 附录A). 故意跟官方原版用不同的目录名: 已经装了旧版官方包的用户, _EXE_PATH是存在的,
+# 第一部分). 故意跟官方原版用不同的目录名: 已经装了旧版官方包的用户, _EXE_PATH是存在的,
 # 不换名字就永远不会重新下载, 而旧版那个exe没有autoStart, 每次都白等到超时.
 _INSTALL_DIR_NAME = "florr-auto-afk-v1.1.1-autostart"
 _EXE_NAME = "segment.exe"
 _DOWNLOAD_URL = (
-    # 附录A的Actions产物, 形如:
-    "https://github.com/<你的账号>/florr-auto-afk/releases/download/"
-    "v1.1.1-autostart/florr-auto-afk-v1.1.1-autostart-auto.zip"
+    "https://github.com/greatluca666/florr-auto-afk/releases/download/"
+    "v1.1.1/florr-auto-afk-v1.1.1-auto.zip"
 )
+_DOWNLOAD_SHA256 = "74488ef58966d123ace6d19ebb11c05d7ac8ee992abd949289714a8a866e7d74"
 ```
 
-- [ ] **Step 2: 更新模块docstring**
+下载确认提示里的大小跟着asset实际值改成`约350MB`(347,277,698字节)。
 
-`afk_watch.py`开头那段里,把"(已经在跑就不动, 没装就问要不要下, 装了没跑就打开它)"改成:
+- [x] **Step 1b: 修正asset名预期 —— 附录A5故意没做**
 
-```
-(已经在跑就不动, 没装就问要不要下, 装了没跑就静默打开并确认它真的开始检测). 自动
-启动依赖config里的runs.autoStart —— 那是打了补丁的fork才有的开关, 官方原版没有,
-用官方包会一直走到"请手动点run"那条提示. 详见
-docs/superpowers/specs/2026-08-28-afk-autostart-design.md.
-```
+原计划(A5)把fork的`constants.py`里`VERSION_INFO`改成`"1.1.1-autostart"`,release tag和zip名会跟着变成`v1.1.1-autostart` / `florr-auto-afk-v1.1.1-autostart-auto.zip`。**没有那么做**:同一个常量还要喂给它自己的更新检查,`check_update()`里的`parse_version()`是`tuple(map(int, version.split('.')))`(`segment_utils.py:171-175`),非数字后缀直接`ValueError`。
 
-- [ ] **Step 3: 检查别处有没有写死旧URL/旧目录名**
+所以tag是`v1.1.1`、asset名`florr-auto-afk-v1.1.1-auto.zip`,跟官方原件同名 —— A7/A8里写的那个`-autostart-auto.zip`预期作废。**区分官方原件靠URL里的账号名,不是文件名**;`-autostart`后缀只留在我们自己的`_INSTALL_DIR_NAME`上(那才是"强制旧安装重新下载"要的东西)。
+
+- [x] **Step 2: 更新模块docstring**
+
+`afk_watch.py`开头那段里,把"(已经在跑就不动, 没装就问要不要下, 装了没跑就打开它)"改成"装了没跑就静默打开并确认它真的开始检测",并补一段说清楚:`_DOWNLOAD_URL`钉的是`greatluca666/florr-auto-afk`(GPL-3.0 fork,`v1.1.1` + 一个`runs.autoStart`开关),官方原版没这个键 —— 改回上游就等于每次启动都白等满`_START_TIMEOUT_SECONDS`再回落到"请手动点run"。详见`docs/superpowers/specs/2026-08-28-afk-autostart-design.md`。
+
+- [x] **Step 3: 检查别处有没有写死旧URL/旧目录名**
 
 ```bash
 grep -rn "florr-auto-afk-v1.1.1-auto\|sunluca668" --include="*.py" --include="*.md" --include="*.spec" --include="*.bat" . | grep -v "^./docs/superpowers/"
 ```
 
-命中的地方(README/PACKAGING/build脚本之类)一并改成新的名字和URL。`docs/superpowers/`下的历史spec/plan是当时的记录,不改。
+结果:除`afk_watch.py`/`test_afk_watch.py`外,只剩`docs/bilibili/`(还没进git,见上面第4条)。README/PACKAGING/build脚本里一处都没有。`docs/superpowers/`下的历史spec/plan是当时的记录,不改。
 
-- [ ] **Step 4: 跑全套测试**
+- [x] **Step 4: 跑全套测试**
 
 Run: `venv/bin/python -m pytest -q`
-Expected: 全部PASS(测试不断言URL常量,这步只是确认没手抖改坏别的东西)。
+Expected: 全部PASS。**注意**:钉了`_DOWNLOAD_SHA256`之后,原来那几个喂假zip的`_download_and_extract`测试全会红(假zip对不上真摘要)—— 修法是在测试里`monkeypatch.setattr(afk_watch, "_DOWNLOAD_SHA256", hashlib.sha256(payload).hexdigest())`现算,**不能**削弱生产校验、也不要把假摘要写成字面量。marker改了之后`_wait_for_segment_started`那几条的日志fixture也要跟着换成`Running indefinitely`。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
-```bash
-git add afk_watch.py
-git commit -m "feat: download the autoStart-patched florr-auto-afk build"
-```
+实际分了三个commit:下载侧(常量 + SHA-256校验)、启动确认侧(marker + `runningCountDown` + `_DEFAULT_CONFIG`)、文档。
 
 ---
 
@@ -784,6 +785,8 @@ git checkout -b autostart v1.1.1
 
 release tag和zip名都是从这个常量推出来的,改了才能一眼跟官方原件区分开,不会哪天下错。
 
+> **最终没做,故意的** —— 见Task 5 Step 1b:这个常量还要喂给`check_update()`里的`parse_version()`(`tuple(map(int, version.split('.')))`),带非数字后缀那边直接`ValueError`。tag/asset名因此跟官方原件同名,区分靠账号名。
+
 - [ ] **A6: 提交并推到fork的`main`**
 
 它的workflow只在`push`到`main`时触发(`on: push: branches: ["main"]`),所以必须落在`main`上:
@@ -799,6 +802,8 @@ git push -f fork autostart:main
 
 产物应该是release `v1.1.1-autostart`,asset名`florr-auto-afk-v1.1.1-autostart-auto.zip`(名字里那个`-auto`后缀是v1.1.1 workflow自己写死的,跟本功能无关)。
 
+> **实际**:A5没做,所以release是`v1.1.1`、asset名`florr-auto-afk-v1.1.1-auto.zip`(347,277,698字节),见Task 5 Step 1b。
+
 Actions红了大概率是构建腐烂:它用的是第三方action `sayyid5416/pyinstaller@v1` + 2025年的`py311-requirements.txt`,隔了一年多依赖解析可能已经不通。先看日志,通常是给`torch`/`ultralytics`钉版本就能过。
 
 - [ ] **A8: 把asset URL填进Task 5的`_DOWNLOAD_URL`**
@@ -810,7 +815,7 @@ Actions红了大概率是构建腐烂:它用的是第三方action `sayyid5416/py
 在Windows那台上跑`main.py`,确认三件事:
 1. florr-auto-afk自己起来了,窗口是最小化状态(没挡游戏)
 2. 控制台打出`✅ AFK弹窗自动处理已开启`(不是超时那条)
-3. `<安装目录>/latest.log`里能看到`Segment process started`
+3. `<安装目录>/latest.log`里能看到`Running indefinitely`(Task 5把marker从父进程那条`Segment process started`换成了这条,见Task 5折进来的第2件事)
 
-第2条超时但第3条有 → 说明marker文本对不上或者90秒不够,回来调`_STARTED_MARKER`/`_START_TIMEOUT_SECONDS`。
+第2条超时但第3条有 → 说明marker文本对不上或者90秒不够,回来调`_STARTED_MARKER`/`_START_TIMEOUT_SECONDS`。第3条也没有、但有`Segment process started` → 子进程起了但没进检测循环,先看`latest.log`里有没有`YOLO models are corrupted`。
 
