@@ -1,4 +1,5 @@
 import io
+import json
 import os
 import time
 import zipfile
@@ -397,3 +398,71 @@ def test_ensure_florr_auto_afk_running_does_not_open_second_instance_when_alread
     mock_input.assert_not_called()    # 在跑就说明装过了, 更不该问下载
     mock_download.assert_not_called()
     assert "已经在跑" in capsys.readouterr().out
+
+
+def _read_json(path):
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def test_write_afk_config_overwrites_our_keys_and_keeps_the_rest(tmp_path, monkeypatch):
+    install_dir = _patch_install_paths(monkeypatch, tmp_path)
+    install_dir.mkdir()
+    (install_dir / "config.json").write_text(json.dumps({
+        "runs": {"autoStart": False, "moveAfterAFK": True, "idleTimeThreshold": 10},
+        "advanced": {"verbose": False, "mouseSpeed": 250},
+        "yoloConfig": {"segModel": "./models/afk-seg.pt"},
+    }))
+
+    assert afk_watch._write_afk_config() is True
+
+    config = _read_json(install_dir / "config.json")
+    assert config["runs"]["autoStart"] is True
+    assert config["runs"]["autoTakeOverWhenIdle"] is False
+    assert config["runs"]["moveAfterAFK"] is False
+    assert config["advanced"]["verbose"] is True
+    assert config["advanced"]["skipUpdate"] is True
+    # 用户自己调过的键不能被冲掉 —— 我们只负责自己依赖的那几个.
+    assert config["runs"]["idleTimeThreshold"] == 10
+    assert config["advanced"]["mouseSpeed"] == 250
+    assert config["yoloConfig"] == {"segModel": "./models/afk-seg.pt"}
+
+
+def test_write_afk_config_creates_minimal_config_when_file_missing(tmp_path, monkeypatch):
+    install_dir = _patch_install_paths(monkeypatch, tmp_path)
+    install_dir.mkdir()
+
+    assert afk_watch._write_afk_config() is True
+
+    config = _read_json(install_dir / "config.json")
+    assert config["runs"]["autoStart"] is True
+    assert config["advanced"]["skipUpdate"] is True
+
+
+def test_write_afk_config_rebuilds_when_json_is_corrupt(tmp_path, monkeypatch):
+    install_dir = _patch_install_paths(monkeypatch, tmp_path)
+    install_dir.mkdir()
+    (install_dir / "config.json").write_text("{this is not json")
+
+    assert afk_watch._write_afk_config() is True
+
+    config = _read_json(install_dir / "config.json")
+    assert config["runs"]["autoStart"] is True
+
+
+def test_write_afk_config_replaces_section_that_is_not_a_dict(tmp_path, monkeypatch):
+    # 真见过配置被写坏成标量的情况; .update()会在这种值上炸AttributeError.
+    install_dir = _patch_install_paths(monkeypatch, tmp_path)
+    install_dir.mkdir()
+    (install_dir / "config.json").write_text(json.dumps({"runs": 5}))
+
+    assert afk_watch._write_afk_config() is True
+    assert _read_json(install_dir / "config.json")["runs"]["autoStart"] is True
+
+
+def test_write_afk_config_returns_false_without_raising_when_dir_missing(tmp_path, monkeypatch, capsys):
+    # install目录压根不存在(用户手动删了/解压失败): 写不进去, 但不能把主程序带崩.
+    _patch_install_paths(monkeypatch, tmp_path / "nope")
+
+    assert afk_watch._write_afk_config() is False
+    assert "config.json" in capsys.readouterr().out

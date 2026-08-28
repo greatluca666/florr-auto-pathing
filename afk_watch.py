@@ -14,6 +14,7 @@ florr-auto-afk本身是完全独立的另一个程序(不是这个repo的一部�
 实际的安装位置算出来, 不再是写死的个人路径. 详见
 docs/superpowers/specs/2026-08-27-afk-auto-bootstrap-design.md.
 """
+import json
 import os
 import ssl
 import subprocess
@@ -177,6 +178,53 @@ def _download_and_extract():
     finally:
         if os.path.isfile(tmp_path):
             os.remove(tmp_path)
+
+
+# 我们依赖的配置键 —— 只覆盖这几个, config.json里其余键(用户自己调的mouseSpeed
+# 之类)原样保留. autoStart是fork里加的开关(见
+# docs/superpowers/specs/2026-08-28-afk-autostart-design.md第一部分), 其余四个的
+# 理由见 docs/superpowers/specs/2026-08-11-afk-check-coexistence-design.md.
+_REQUIRED_CONFIG = {
+    "runs": {
+        "autoStart": True,              # 启动即开始检测, 不用手点"run"
+        "autoTakeOverWhenIdle": False,  # 我们一直在动鼠标, 它的idle门永远不触发
+        "moveAfterAFK": False,          # 它解完题的WASD乱走会跟我们的移动打架
+    },
+    "advanced": {
+        "verbose": True,                # 保证事件真的落进latest.log
+        "skipUpdate": True,             # 免得启动时联网查模型更新, 拖时间/失败
+    },
+}
+
+
+def _write_afk_config():
+    """把我们依赖的几个键写进florr-auto-afk自己的config.json, 其它键原样保留.
+    文件不存在/JSON坏了就从空的开始, 写一份只含这几个键的最小config —— 它的
+    get_config()对其余键有默认值兜底. 失败只打印警告返回False, 不抛 —— 配置没写上
+    最多是"还得手点run", 不该拦住寻路/刷怪."""
+    config_path = os.path.join(_INSTALL_DIR, "config.json")
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            config = json.load(f)
+        if not isinstance(config, dict):
+            config = {}
+    except Exception:
+        config = {}
+
+    for section, values in _REQUIRED_CONFIG.items():
+        section_config = config.get(section)
+        if not isinstance(section_config, dict):
+            section_config = {}
+        section_config.update(values)
+        config[section] = section_config
+
+    try:
+        with open(config_path, "w", encoding="utf-8") as f:
+            json.dump(config, f, indent=4, ensure_ascii=False)
+        return True
+    except Exception as e:
+        print(f"⚠️ 写florr-auto-afk的config.json失败(可能还需要手动点run): {e}")
+        return False
 
 
 def _is_florr_auto_afk_running():
