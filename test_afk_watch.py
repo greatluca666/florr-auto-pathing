@@ -640,6 +640,24 @@ def test_write_afk_config_still_writes_when_backing_up_the_original_fails(
     assert "⚠️" in capsys.readouterr().out
 
 
+def test_write_afk_config_forces_running_count_down_to_minus_one(tmp_path, monkeypatch):
+    # 两个理由都要它是-1: (1) _STARTED_MARKER等的"Running indefinitely"只在这个值
+    # 是-1时才写(否则写的是"Running for X minutes", segment.py:36-46), 用户调过它
+    # 我们就永远确认不到启动; (2) 非-1意味着它跑满X分钟自己退出
+    # (segment.py:61 "Countdown Ends, program exiting"), 挂机中途AFK处理静默失效.
+    install_dir = _patch_install_paths(monkeypatch, tmp_path)
+    install_dir.mkdir()
+    (install_dir / "config.json").write_text(json.dumps({
+        "runs": {"runningCountDown": 30, "idleTimeThreshold": 10},
+    }))
+
+    assert afk_watch._write_afk_config() is True
+
+    config = _read_json(install_dir / "config.json")
+    assert config["runs"]["runningCountDown"] == -1
+    assert config["runs"]["idleTimeThreshold"] == 10  # 同section里的其它键照旧不动
+
+
 def test_write_afk_config_does_not_mutate_the_default_config_constant(tmp_path, monkeypatch):
     # 合并是就地.update()的 —— 不深拷贝的话第一次重建就把模块级默认值改成了我们的
     # 强制值, 同一次运行里第二次重建拿到的底就不是"出厂设置"了.
@@ -650,7 +668,9 @@ def test_write_afk_config_does_not_mutate_the_default_config_constant(tmp_path, 
 
     assert afk_watch._DEFAULT_CONFIG["runs"]["moveAfterAFK"] is True
     assert afk_watch._DEFAULT_CONFIG["runs"]["autoTakeOverWhenIdle"] is True
-    assert "autoStart" not in afk_watch._DEFAULT_CONFIG["runs"]
+    # fork发行包自带的config.json里autoStart默认是false(单独跑它时行为跟官方一致),
+    # _DEFAULT_CONFIG是那份文件的抄本 —— 键要在, 值不能被我们的强制值改成True.
+    assert afk_watch._DEFAULT_CONFIG["runs"]["autoStart"] is False
 
 
 def test_write_afk_config_forced_keys_win_over_the_shipped_defaults(tmp_path, monkeypatch):
@@ -696,17 +716,17 @@ def test_wait_for_segment_started_true_when_marker_written_after_offset(tmp_path
     monkeypatch.setattr(afk_watch, "LATEST_LOG_PATH", str(log_path))
     start_offset = log_path.stat().st_size
     with open(log_path, "a") as f:
-        f.write("[new] <segment.py:202> INFO: Segment process started\n")
+        f.write("[new] <segment.py:41> <afk_thread()> INFO: Running indefinitely\n")
 
     with patch("afk_watch.time.sleep"):
         assert afk_watch._wait_for_segment_started(start_offset, timeout=0.05, interval=0.01) is True
 
 
 def test_wait_for_segment_started_ignores_marker_from_a_previous_run(tmp_path, monkeypatch):
-    # 这条是这个函数存在的理由: 日志是追加的, 上次运行的"started"还在文件里,
+    # 这条是这个函数存在的理由: 日志是追加的, 上次运行的那条还在文件里,
     # 整文件搜就会立刻误判成功, 于是"其实没起来"永远不会被发现.
     log_path = tmp_path / "latest.log"
-    log_path.write_text("[old run] INFO: Segment process started\n")
+    log_path.write_text("[old run] <segment.py:41> <afk_thread()> INFO: Running indefinitely\n")
     monkeypatch.setattr(afk_watch, "LATEST_LOG_PATH", str(log_path))
     start_offset = log_path.stat().st_size
 
@@ -714,14 +734,20 @@ def test_wait_for_segment_started_ignores_marker_from_a_previous_run(tmp_path, m
         assert afk_watch._wait_for_segment_started(start_offset, timeout=0.05, interval=0.01) is False
 
 
-def test_wait_for_segment_started_matches_variant_with_trailing_period(tmp_path, monkeypatch):
-    # v1.1.1里两处都会写: segment.py:202不带句号, :234带句号. 子串匹配两个都要命中.
+def test_wait_for_segment_started_ignores_the_parent_processs_own_started_line(tmp_path, monkeypatch):
+    # "Segment process started"是父进程在segment_process.start()之后立刻写的
+    # (segment.py:201-202), 那会儿子进程连YOLO模型都还没开始加载 —— 模型坏了
+    # 它照样会写这句. 拿它当"已开始检测"是假阳性, 所以我们等的是子进程里的
+    # "Running indefinitely"(模型加载成功 + test_environment()跑完之后才写).
     log_path = tmp_path / "latest.log"
-    log_path.write_text("INFO: Segment process started.\n")
+    log_path.write_text(
+        "[new] <segment.py:202> <start_segment_process()> INFO: Segment process started\n"
+        "[new] <segment.py:234> <toggle_segment_process()> INFO: Segment process started.\n"
+    )
     monkeypatch.setattr(afk_watch, "LATEST_LOG_PATH", str(log_path))
 
     with patch("afk_watch.time.sleep"):
-        assert afk_watch._wait_for_segment_started(0, timeout=0.05, interval=0.01) is True
+        assert afk_watch._wait_for_segment_started(0, timeout=0.05, interval=0.01) is False
 
 
 def test_wait_for_segment_started_false_without_raising_when_log_never_appears(tmp_path, monkeypatch):
@@ -734,7 +760,7 @@ def test_wait_for_segment_started_rereads_from_start_when_log_shrank(tmp_path, m
     # 它启动时若发现latest.log不存在会新建(segment_utils.py:113), 用户也可能手动
     # 删掉 —— 文件比划线时还小就说明不是同一份, 从头读.
     log_path = tmp_path / "latest.log"
-    log_path.write_text("INFO: Segment process started\n")
+    log_path.write_text("INFO: Running indefinitely\n")
     monkeypatch.setattr(afk_watch, "LATEST_LOG_PATH", str(log_path))
 
     with patch("afk_watch.time.sleep"):
@@ -745,7 +771,7 @@ def test_wait_for_segment_started_does_not_touch_poll_module_state(tmp_path, mon
     # poll_afk_pause()的offset状态是另一套账 —— 确认这个函数没顺手改掉它, 否则
     # 主循环第一次poll的"跳到文件末尾"行为会变.
     log_path = tmp_path / "latest.log"
-    log_path.write_text("INFO: Segment process started\n")
+    log_path.write_text("INFO: Running indefinitely\n")
     monkeypatch.setattr(afk_watch, "LATEST_LOG_PATH", str(log_path))
     monkeypatch.setattr(afk_watch, "_last_offset", 0)
     monkeypatch.setattr(afk_watch, "_initialized", False)

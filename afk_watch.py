@@ -78,10 +78,24 @@ PAUSE_SECONDS = 12
 _FOUND_MARKER = "EVENT: Found AFK window"
 
 # florr-auto-afk真正进入检测状态时写的日志(log_ret的save默认True会落盘).
-# v1.1.1里两处都会写这句, segment.py:234那处末尾带句号 —— 用子串匹配都能命中.
-_STARTED_MARKER = "Segment process started"
+# 挑的是**子进程**写的那条, 不是父进程那条 —— v1.1.1点一次run会分出两层进程:
+#   父: start_segment_process()在segment_process.start()之后立刻写
+#       "Segment process started"(segment.py:201-202, toggle那处:234还带个句号),
+#       此时子进程连YOLO都还没开始加载 —— 模型坏了它照样写这句, 拿它当"已开始
+#       检测"是假阳性, 我们会打✅然后一整局都没人处理AFK弹窗.
+#   子: run_segment()先加载afk-seg.pt和afk-det.pt(segment.py:158-159), 失败就
+#       删掉这两个模型和models/version然后直接return, 压根不会spawn afk_thread;
+#       只有加载成功才起afk_thread(), 它跑完test_environment()、再在
+#       runningCountDown == -1时写"Running indefinitely"(segment.py:36-41).
+# 所以这句落盘 = 模型真加载上了、环境自检跑完了、检测循环马上开始转.
+# 代价是它耦合runs.runningCountDown == -1(否则那个分支写的是"Running for X
+# minutes"), 所以那个键也进了_REQUIRED_CONFIG.
+_STARTED_MARKER = "Running indefinitely"
 # 等它起来的上限: PyInstaller解包 + torch + 两个YOLO模型加载, 它自己FAQ说初始化
-# 要10秒以上, 慢机器上留足余量. 超时只是少一句确认, 不影响主程序继续跑.
+# 要10秒以上, 慢机器上留足余量. 上面那条marker还要再多等一个test_environment()
+# (一次YOLO预测 + 一次duration=1的pyautogui.moveTo, 只有首次运行会跑 —— 它跑完
+# 会把advanced.environment写成true), 所以余量比字面上看起来小一些.
+# 超时只是少一句确认, 不影响主程序继续跑.
 _START_TIMEOUT_SECONDS = 90
 
 # server_lookup.py的_SSL_CONTEXT/_USER_AGENT原样复制 —— Windows上urllib默认
@@ -230,8 +244,9 @@ def _download_and_extract():
             os.remove(tmp_path)
 
 
-# florr-auto-afk v1.1.1发行包自带的config.json原文, 用`cd ~/florr-auto-afk &&
-# git show v1.1.1:config.json`取的, 一个键都没删没改没猜.
+# _DOWNLOAD_URL钉的那个fork发行包自带的config.json原文, 一个键都没删没改没猜
+# (fork只在runs最前面多了个autoStart, 其余跟`git show v1.1.1:config.json`一致).
+# 换_DOWNLOAD_URL时这份要跟着核对 —— 没有任何自动检查能抓到这俩漂移.
 #
 # 重建配置时必须以它为底, 不能从{}开始: 上游的get_config()就是
 # `load(open("./config.json"))`(segment_utils.py:27-29), 对缺键没有任何默认值兜底,
@@ -241,9 +256,11 @@ def _download_and_extract():
 # —— 少一个键segment.exe连GUI都来不及画就KeyError死掉, 用户只会看到我们打印的
 # "🪟 已在后台打开florr-auto-afk", 然后被叫去点一个根本不存在的窗口里的run.
 #
-# 注意这里没有runs.autoStart: 那是我们这份fork加的键, 由_REQUIRED_CONFIG补上.
+# autoStart在这儿是false(fork发行包的默认值, 单独跑它时行为跟官方原版一致),
+# 我们要的true由_REQUIRED_CONFIG盖上去.
 _DEFAULT_CONFIG = {
     "runs": {
+        "autoStart": False,
         "autoTakeOverWhenIdle": True,
         "runningCountDown": -1,
         "moveAfterAFK": True,
@@ -284,10 +301,12 @@ _DEFAULT_CONFIG = {
     },
 }
 
-# 我们依赖的配置键 —— 只覆盖这三个, config.json里其余键(用户自己调的mouseSpeed
+# 我们依赖的配置键 —— 只覆盖这四个, config.json里其余键(用户自己调的mouseSpeed
 # 之类)原样保留. autoStart是fork里加的开关(见
-# docs/superpowers/specs/2026-08-28-afk-autostart-design.md第一部分), 另两个的
-# 理由见 docs/superpowers/specs/2026-08-11-afk-check-coexistence-design.md.
+# docs/superpowers/specs/2026-08-28-afk-autostart-design.md第一部分),
+# autoTakeOverWhenIdle和moveAfterAFK的理由见
+# docs/superpowers/specs/2026-08-11-afk-check-coexistence-design.md,
+# runningCountDown的理由写在下面那几行注释里.
 #
 # 曾经还强制过advanced里的两个键, 都撤了, 别再加回来:
 # - verbose: 加它的理由是"保证事件真的落进latest.log", 而这是错的 ——
@@ -303,6 +322,13 @@ _REQUIRED_CONFIG = {
         "autoStart": True,              # 启动即开始检测, 不用手点"run"
         "autoTakeOverWhenIdle": False,  # 我们一直在动鼠标, 它的idle门永远不触发
         "moveAfterAFK": False,          # 它解完题的WASD乱走会跟我们的移动打架
+        # 两个理由都指向-1: (1) _STARTED_MARKER等的那句"Running indefinitely"只在
+        # 这个值是-1时才写(否则走的是"Running for X minutes"那支, segment.py:41-46),
+        # 用户自己调过它我们就永远确认不到启动, 白等满超时再叫他手点run;
+        # (2) 非-1意味着它跑满X分钟就自己退出(segment.py:61 "Countdown Ends,
+        # program exiting"), 长时间挂机时AFK处理会中途静默消失 —— 正好是这套东西
+        # 最不能出的故障.
+        "runningCountDown": -1,
     },
 }
 
@@ -467,6 +493,7 @@ def ensure_florr_auto_afk_running():
         print("✅ AFK弹窗自动处理已开启")
     else:
         print(
-            "⚠️ 没能确认florr-auto-afk已开始检测(autoStart没生效, 或者初始化特别慢). "
+            "⚠️ 没能确认florr-auto-afk已开始检测(autoStart没生效 / 初始化特别慢 / "
+            "YOLO模型损坏 —— 最后这种它会自己删掉模型, 下次启动时重下). "
             "需要的话去它窗口里手动点\"run\"(不点也不影响寻路/刷怪, 只是AFK弹窗不会自动处理)."
         )
