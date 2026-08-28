@@ -152,6 +152,11 @@ git commit -m "fix: extract florr-auto-afk into its own install dir"
 
 ## Task 2: `_write_afk_config()` —— 启动前写好它的config.json
 
+> **⚠️ 事后修订(2026-08-28,最终 review 的修复波之后)** —— 这一节的代码块**已经过时**,别照抄。落地的代码在 [afk_watch.py](../../../afk_watch.py),权威说明在 [design 的 `### 2`](../specs/2026-08-28-afk-autostart-design.md)。三处变了:
+> 1. **强制的键从 5 个减到 3 个**(`runs.autoStart` / `runs.autoTakeOverWhenIdle` / `runs.moveAfterAFK`)。`advanced.verbose` 去掉了 —— 我当时给的理由(保证事件落盘)是错的,`log_ret("Found AFK window", ...)` 无条件落盘,verbose 只管控制台那些硬编码 `save=False` 的行。`advanced.skipUpdate` 去掉了 —— 强制它会永久关掉上游唯一的模型自修复(`segment.py:158-165` 加载失败时删掉两个 `.pt` 和 `models/version`,等下次 `update_models()` 重下,而那个重下只看 `skipUpdate`)
+> 2. **重建的底不是 `{}`,是 `_DEFAULT_CONFIG`** —— 发行包自带的那份完整 config.json(`git show v1.1.1:config.json`)。我当时写的"它的 `get_config()` 对其余键有默认值兜底"是**假的**:`segment_utils.py:27-29` 就是裸的 `open` + `json.load`,~38 个直接下标点,其中 `segment_utils.py:266` 是 import 期求值的默认参数 `speed=get_config()["advanced"]["mouseSpeed"]` —— 只写我们那几个键的话,`segment.exe` 在 GUI 出来之前就 `KeyError` 挂掉
+> 3. **读不出来的原文件先改名成 `config.json.bak`** 再写新的,不直接冲掉
+
 **Files:**
 - Modify: `afk_watch.py`(顶部加`import json`;在`_download_and_extract()`后面加常量`_REQUIRED_CONFIG`和函数`_write_afk_config()`)
 - Test: `test_afk_watch.py`(文件末尾追加)
@@ -660,6 +665,15 @@ git commit -m "feat: start florr-auto-afk silently and verify it began detecting
 **⚠️ 这个task卡在附录A上** —— Task 1-4全部可以先做完提交。附录A的Actions绿了、release zip拿到URL之后再做这个。
 
 **为什么要顺手改`_INSTALL_DIR_NAME`:** 已经装了旧版(没补丁的官方v1.1.1)的用户,`_EXE_PATH`是存在的 → `ensure_florr_auto_afk_running()`不会重新下载 → 那份exe没有`autoStart`,每次都走到超时提示。换个目录名,打过补丁的这版就落到全新目录,不会被旧安装挡住。
+
+**最终 review 要求一并折进这个 task 的四件事**(2026-08-28,Tasks 1-4 落地之后追加):
+
+1. **`_DOWNLOAD_URL` 加 SHA-256 校验** —— 我们下 260MB 然后 `Popen` 它。改常量的时候顺手钉一个 `_DOWNLOAD_SHA256`,下完用 `hashlib` 核对,不对就当下载失败(打印原因、返回 False)。托管方能对同一个 tag `--clobber` 覆盖 asset,没校验就等于无条件执行远端换过的二进制
+2. **`_STARTED_MARKER` 换成更严的信号,或者加模型文件体检** —— `Segment process started` 是**父进程**在 `segment_process.start()` 之后立刻写的(`segment.py:202`),子进程还没加载任何模型;模型坏了我们照样打 `✅`。可选:改用 `Running indefinitely`(`segment.py:41`,子进程里 `test_environment()` + 模型加载之后才写,`save=True`),代价是耦合 `runs.runningCountDown == -1` —— 那就把 `runningCountDown: -1` 也加进 `_REQUIRED_CONFIG`(顺带避免它跑 X 分钟后自己关掉)
+3. **`_DEFAULT_CONFIG` 跟 `_DOWNLOAD_URL` 要同版本** —— 换 URL 的时候如果 fork 的 `config.json` 有变(比如加了 `autoStart` 默认键),`_DEFAULT_CONFIG` 得同步,没有任何自动检查会抓到这俩漂移
+4. **更新用户文档** —— `docs/bilibili/视频2-安装教程-脚本与分镜.md:41` 还在教观众点 run 按钮/给按钮打红框。**Task 5 之前不要改**:现在那个 exe 确实还得手点,提前改反而是错的
+
+`_START_TIMEOUT_SECONDS = 90` 落地后要按实机真实耗时调(见附录A9)。
 
 - [ ] **Step 1: 改常量**
 
