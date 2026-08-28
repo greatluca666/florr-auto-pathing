@@ -50,6 +50,13 @@ PAUSE_SECONDS = 12
 
 _FOUND_MARKER = "EVENT: Found AFK window"
 
+# florr-auto-afk真正进入检测状态时写的日志(log_ret的save默认True会落盘).
+# v1.1.1里两处都会写这句, segment.py:234那处末尾带句号 —— 用子串匹配都能命中.
+_STARTED_MARKER = "Segment process started"
+# 等它起来的上限: PyInstaller解包 + torch + 两个YOLO模型加载, 它自己FAQ说初始化
+# 要10秒以上, 慢机器上留足余量. 超时只是少一句确认, 不影响主程序继续跑.
+_START_TIMEOUT_SECONDS = 90
+
 # server_lookup.py的_SSL_CONTEXT/_USER_AGENT原样复制 —— Windows上urllib默认
 # 不读系统证书链, 显式传certifi的证书链才不会CERTIFICATE_VERIFY_FAILED(见
 # venv-setup-deps项目memory的certifi那条). 两个都是模块私有常量, 不跨模块
@@ -236,6 +243,39 @@ def _write_afk_config():
     except Exception as e:
         print(f"⚠️ 写florr-auto-afk的config.json失败(可能还需要手动点run): {e}")
         return False
+
+
+def _current_log_size():
+    """latest.log当前字节数, 文件不存在算0. 用来在启动前划一条线 —— 它是用'a'
+    追加打开的(segment_utils.py), 跨次运行不清空, 整文件搜marker会把上次运行的
+    记录误判成本次启动成功."""
+    try:
+        return os.path.getsize(LATEST_LOG_PATH)
+    except OSError:
+        return 0
+
+
+def _wait_for_segment_started(start_offset, timeout=_START_TIMEOUT_SECONDS, interval=1.0):
+    """轮询latest.log在start_offset之后的新增内容, 等它写出"检测已启动"那条.
+    找到返回True, 超时返回False —— 不抛异常, 调用方只是打印不同的提示.
+
+    每轮都从start_offset重读一遍尾巴, 不做增量offset推进: 这段日志很小, 重读几十
+    次的代价远小于维护offset的复杂度, 也天然没有"marker刚好被切在两次读中间"的漏检.
+    """
+    deadline = time.time() + timeout
+    while True:
+        try:
+            size = os.path.getsize(LATEST_LOG_PATH)
+            with open(LATEST_LOG_PATH, "r", encoding="utf-8", errors="ignore") as f:
+                # 比划线时还小说明不是同一份文件了(被删/被换), 从头读.
+                f.seek(0 if size < start_offset else start_offset)
+                if _STARTED_MARKER in f.read():
+                    return True
+        except Exception:
+            pass  # 文件还没出现: 它还在初始化, 继续等
+        if time.time() >= deadline:
+            return False
+        time.sleep(interval)
 
 
 def _is_florr_auto_afk_running():

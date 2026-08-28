@@ -497,3 +497,82 @@ def test_write_afk_config_stays_quiet_when_config_file_does_not_exist_yet(
 
     assert afk_watch._write_afk_config() is True
     assert capsys.readouterr().out == ""
+
+
+def test_current_log_size_returns_zero_when_file_missing(tmp_path, monkeypatch):
+    monkeypatch.setattr(afk_watch, "LATEST_LOG_PATH", str(tmp_path / "nope.log"))
+    assert afk_watch._current_log_size() == 0
+
+
+def test_current_log_size_returns_real_size(tmp_path, monkeypatch):
+    log_path = tmp_path / "latest.log"
+    log_path.write_text("hello")
+    monkeypatch.setattr(afk_watch, "LATEST_LOG_PATH", str(log_path))
+    assert afk_watch._current_log_size() == 5
+
+
+def test_wait_for_segment_started_true_when_marker_written_after_offset(tmp_path, monkeypatch):
+    log_path = tmp_path / "latest.log"
+    log_path.write_text("[old] EVENT: something else\n")
+    monkeypatch.setattr(afk_watch, "LATEST_LOG_PATH", str(log_path))
+    start_offset = log_path.stat().st_size
+    with open(log_path, "a") as f:
+        f.write("[new] <segment.py:202> INFO: Segment process started\n")
+
+    with patch("afk_watch.time.sleep"):
+        assert afk_watch._wait_for_segment_started(start_offset, timeout=0.05, interval=0.01) is True
+
+
+def test_wait_for_segment_started_ignores_marker_from_a_previous_run(tmp_path, monkeypatch):
+    # 这条是这个函数存在的理由: 日志是追加的, 上次运行的"started"还在文件里,
+    # 整文件搜就会立刻误判成功, 于是"其实没起来"永远不会被发现.
+    log_path = tmp_path / "latest.log"
+    log_path.write_text("[old run] INFO: Segment process started\n")
+    monkeypatch.setattr(afk_watch, "LATEST_LOG_PATH", str(log_path))
+    start_offset = log_path.stat().st_size
+
+    with patch("afk_watch.time.sleep"):
+        assert afk_watch._wait_for_segment_started(start_offset, timeout=0.05, interval=0.01) is False
+
+
+def test_wait_for_segment_started_matches_variant_with_trailing_period(tmp_path, monkeypatch):
+    # v1.1.1里两处都会写: segment.py:202不带句号, :234带句号. 子串匹配两个都要命中.
+    log_path = tmp_path / "latest.log"
+    log_path.write_text("INFO: Segment process started.\n")
+    monkeypatch.setattr(afk_watch, "LATEST_LOG_PATH", str(log_path))
+
+    with patch("afk_watch.time.sleep"):
+        assert afk_watch._wait_for_segment_started(0, timeout=0.05, interval=0.01) is True
+
+
+def test_wait_for_segment_started_false_without_raising_when_log_never_appears(tmp_path, monkeypatch):
+    monkeypatch.setattr(afk_watch, "LATEST_LOG_PATH", str(tmp_path / "never.log"))
+    with patch("afk_watch.time.sleep"):
+        assert afk_watch._wait_for_segment_started(0, timeout=0.05, interval=0.01) is False
+
+
+def test_wait_for_segment_started_rereads_from_start_when_log_shrank(tmp_path, monkeypatch):
+    # 它启动时若发现latest.log不存在会新建(segment_utils.py:113), 用户也可能手动
+    # 删掉 —— 文件比划线时还小就说明不是同一份, 从头读.
+    log_path = tmp_path / "latest.log"
+    log_path.write_text("INFO: Segment process started\n")
+    monkeypatch.setattr(afk_watch, "LATEST_LOG_PATH", str(log_path))
+
+    with patch("afk_watch.time.sleep"):
+        assert afk_watch._wait_for_segment_started(9999, timeout=0.05, interval=0.01) is True
+
+
+def test_wait_for_segment_started_does_not_touch_poll_module_state(tmp_path, monkeypatch):
+    # poll_afk_pause()的offset状态是另一套账 —— 确认这个函数没顺手改掉它, 否则
+    # 主循环第一次poll的"跳到文件末尾"行为会变.
+    log_path = tmp_path / "latest.log"
+    log_path.write_text("INFO: Segment process started\n")
+    monkeypatch.setattr(afk_watch, "LATEST_LOG_PATH", str(log_path))
+    monkeypatch.setattr(afk_watch, "_last_offset", 0)
+    monkeypatch.setattr(afk_watch, "_initialized", False)
+
+    with patch("afk_watch.time.sleep"):
+        afk_watch._wait_for_segment_started(0, timeout=0.05, interval=0.01)
+
+    assert afk_watch._last_offset == 0
+    assert afk_watch._initialized is False
