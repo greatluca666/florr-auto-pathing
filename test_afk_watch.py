@@ -1,3 +1,4 @@
+import hashlib
 import io
 import json
 import os
@@ -154,8 +155,11 @@ def test_latest_log_path_is_computed_from_install_dir():
 
 
 def test_install_dir_is_our_own_chosen_folder_name():
+    # 名字里的-autostart后缀是我们自己加的(release tag和zip名里都没有这个词):
+    # 已经装过旧版官方包的机器上_EXE_PATH是存在的, 不换目录名就永远不会重新下载,
+    # 而那份exe没有autoStart, 每次启动都白等到超时.
     assert afk_watch._INSTALL_DIR == os.path.join(
-        afk_watch._INSTALL_ROOT, "florr-auto-afk-v1.1.1-auto"
+        afk_watch._INSTALL_ROOT, "florr-auto-afk-v1.1.1-autostart"
     )
 
 
@@ -193,16 +197,28 @@ def test_prompt_download_confirm_prints_url_size_and_destination(monkeypatch):
     afk_watch._prompt_download_confirm()
     assert afk_watch._DOWNLOAD_URL in captured_prompt["text"]
     assert afk_watch._INSTALL_DIR in captured_prompt["text"]
+    # 体积得跟_DOWNLOAD_URL钉的那个asset对得上(347,277,698字节) —— 换release时
+    # 这句会提醒把提示里的数字一起改, 别让用户按旧数字估等待时间.
+    assert "350MB" in captured_prompt["text"]
 
 
 def _patch_install_paths(monkeypatch, tmp_path):
     """把三个安装路径常量都指到tmp_path下 —— _EXE_PATH也要patch, 不然
-    _download_and_extract()新增的"解压完exe在不在"检查会去看真实机器上的路径."""
-    install_dir = tmp_path / "florr-auto-afk-v1.1.1-auto"
+    _download_and_extract()新增的"解压完exe在不在"检查会去看真实机器上的路径.
+
+    目录名从_INSTALL_DIR_NAME推出来, 不写字面量: 那个常量改名时(比如这次加
+    -autostart后缀)下面断言"临时zip已删掉"的路径才不会悄悄指向一个压根不可能
+    存在的地方, 变成永远通过的假断言."""
+    install_dir = tmp_path / afk_watch._INSTALL_DIR_NAME
     monkeypatch.setattr(afk_watch, "_INSTALL_ROOT", str(tmp_path))
     monkeypatch.setattr(afk_watch, "_INSTALL_DIR", str(install_dir))
     monkeypatch.setattr(afk_watch, "_EXE_PATH", str(install_dir / "segment.exe"))
     return install_dir
+
+
+def _tmp_zip_path(tmp_path):
+    """_download_and_extract()下载时用的临时文件路径(下完就该被删掉)."""
+    return tmp_path / f"{afk_watch._INSTALL_DIR_NAME}.zip.download"
 
 
 def _fake_zip_bytes():
@@ -241,19 +257,31 @@ def _fake_response(body):
     return resp
 
 
-def test_download_and_extract_success(tmp_path, monkeypatch):
-    _patch_install_paths(monkeypatch, tmp_path)
+def _patch_expected_digest(monkeypatch, payload):
+    """把_DOWNLOAD_SHA256改成这份假zip自己的摘要.
 
-    with patch(
-        "afk_watch.urllib.request.urlopen", return_value=_fake_response(_fake_zip_bytes())
-    ):
+    生产常量钉的是真release那347MB asset的摘要, 假zip当然对不上 —— 不patch的话
+    下面这些测试全都停在校验那一步, 断言的"解压/结构检查"行为压根跑不到.
+    现算而不是抄一个字面量摘要: fixture内容一改就自动跟着走, 也不会有人手抖把
+    假摘要粘回生产常量里.
+    """
+    monkeypatch.setattr(
+        afk_watch, "_DOWNLOAD_SHA256", hashlib.sha256(payload).hexdigest()
+    )
+
+
+def test_download_and_extract_success(tmp_path, monkeypatch):
+    install_dir = _patch_install_paths(monkeypatch, tmp_path)
+    payload = _fake_zip_bytes()
+    _patch_expected_digest(monkeypatch, payload)
+
+    with patch("afk_watch.urllib.request.urlopen", return_value=_fake_response(payload)):
         result = afk_watch._download_and_extract()
 
     assert result is True
-    extracted_exe = tmp_path / "florr-auto-afk-v1.1.1-auto" / "segment.exe"
-    assert extracted_exe.read_bytes() == b"fake exe content"
+    assert (install_dir / "segment.exe").read_bytes() == b"fake exe content"
     # 临时zip用完就删, 不该留在目标目录里.
-    assert not (tmp_path / "florr-auto-afk-v1.1.1-auto.zip.download").exists()
+    assert not _tmp_zip_path(tmp_path).exists()
 
 
 def test_download_and_extract_returns_false_and_cleans_up_on_network_error(tmp_path, monkeypatch):
@@ -263,27 +291,55 @@ def test_download_and_extract_returns_false_and_cleans_up_on_network_error(tmp_p
         result = afk_watch._download_and_extract()
 
     assert result is False
-    assert not (tmp_path / "florr-auto-afk-v1.1.1-auto.zip.download").exists()
+    assert not _tmp_zip_path(tmp_path).exists()
+
+
+def test_download_and_extract_returns_false_when_sha256_does_not_match(
+    tmp_path, monkeypatch, capsys
+):
+    # release asset能被持有者用同一个tag覆盖(gh release upload --clobber), 而这个
+    # zip里就是我们下一步要Popen的exe —— 摘要对不上必须停在解压之前, 一个文件都
+    # 不能落地. 故意不patch _DOWNLOAD_SHA256: 真常量对不上这份假zip, 正是要测的情况.
+    _patch_install_paths(monkeypatch, tmp_path)
+    payload = _fake_zip_bytes()
+
+    with patch("afk_watch.urllib.request.urlopen", return_value=_fake_response(payload)):
+        result = afk_watch._download_and_extract()
+
+    assert result is False
+    # 解压目录压根不该被建出来, 临时zip也得清掉.
+    assert not (tmp_path / afk_watch._INSTALL_DIR_NAME).exists()
+    assert not _tmp_zip_path(tmp_path).exists()
+    out = capsys.readouterr().out
+    assert "⚠️" in out
+    # 两个摘要都要印: 正常原因是release重新构建了而常量没跟着改, 得让人能一眼对比.
+    assert afk_watch._DOWNLOAD_SHA256 in out
+    assert hashlib.sha256(payload).hexdigest() in out
 
 
 def test_download_and_extract_returns_false_on_corrupt_zip(tmp_path, monkeypatch):
     _patch_install_paths(monkeypatch, tmp_path)
+    payload = b"this is not a zip file"
+    _patch_expected_digest(monkeypatch, payload)
 
     with patch(
         "afk_watch.urllib.request.urlopen",
-        return_value=_fake_response(b"this is not a zip file"),
+        return_value=_fake_response(payload),
     ):
         result = afk_watch._download_and_extract()
 
     assert result is False
-    assert not (tmp_path / "florr-auto-afk-v1.1.1-auto.zip.download").exists()
+    assert not _tmp_zip_path(tmp_path).exists()
 
 
 def test_download_and_extract_returns_false_when_zip_has_no_exe(tmp_path, monkeypatch):
     _patch_install_paths(monkeypatch, tmp_path)
+    payload = _fake_zip_without_exe_bytes()
+    _patch_expected_digest(monkeypatch, payload)
+
     with patch(
         "afk_watch.urllib.request.urlopen",
-        return_value=_fake_response(_fake_zip_without_exe_bytes()),
+        return_value=_fake_response(payload),
     ):
         result = afk_watch._download_and_extract()
     assert result is False

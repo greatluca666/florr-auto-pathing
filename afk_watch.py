@@ -10,11 +10,19 @@ docs/superpowers/specs/2026-08-11-afk-check-coexistence-design.md.
 
 florr-auto-afk本身是完全独立的另一个程序(不是这个repo的一部分), 用户得自己
 有一份能跑. ensure_florr_auto_afk_running()负责在Windows上自动确保它在跑
-(已经在跑就不动, 没装就问要不要下, 装了没跑就打开它); LATEST_LOG_PATH跟着它
-实际的安装位置算出来, 不再是写死的个人路径. 详见
+(已经在跑就不动, 没装就问要不要下, 装了没跑就静默打开并确认它真的开始检测);
+LATEST_LOG_PATH跟着它实际的安装位置算出来, 不再是写死的个人路径. 详见
 docs/superpowers/specs/2026-08-27-afk-auto-bootstrap-design.md.
+
+"不用手点run"这件事官方原版做不到 —— _DOWNLOAD_URL钉的是我们自己那份打过补丁的
+fork: greatluca666/florr-auto-afk(GPL-3.0, 从上游Shiny-Ladybug/florr-auto-afk
+的v1.1.1开出来, 只加了一个runs.autoStart开关 —— GUI起来时读到它就自己调
+toggle_segment_process()并把窗口最小化). 官方release没有这个键, 把_DOWNLOAD_URL
+改回上游的话每次启动都会白等满_START_TIMEOUT_SECONDS秒, 然后回落到"请手动点run"
+那条提示. 详见docs/superpowers/specs/2026-08-28-afk-autostart-design.md.
 """
 import copy
+import hashlib
 import json
 import os
 import ssl
@@ -30,14 +38,29 @@ import certifi
 # 用`Compress-Archive -Path ./dist/segment/*`打的包), 所以_download_and_extract()
 # 是解压到这个目录里, 而不是解压到它旁边 —— 别看着名字像"沿用发行包的目录名"就把
 # extractall()改回_INSTALL_ROOT, 那会把4500个文件直接铺在main.py旁边.
-_INSTALL_DIR_NAME = "florr-auto-afk-v1.1.1-auto"
+#
+# 末尾的-autostart是我们自己加的后缀(release tag和zip名里都没有这个词, 见下面
+# _DOWNLOAD_URL): 已经装过旧版官方包的机器上_EXE_PATH是存在的, 不换目录名就永远
+# 不会重新下载, 而那份exe没有autoStart, 每次启动都白等到超时.
+_INSTALL_DIR_NAME = "florr-auto-afk-v1.1.1-autostart"
 # 实测过release zip内部结构确认的真实可执行文件名 —— 不是"florr-auto-afk.exe"
 # 这种直觉猜测的名字.
 _EXE_NAME = "segment.exe"
+# 我们那份fork的Actions产物(见模块docstring). tag(v1.1.1)和zip名跟官方原件一模
+# 一样, 是故意的: 这俩都是从fork里constants.py的VERSION_INFO推出来的, 而同一个
+# 常量还要喂给它自己的更新检查 —— parse_version()是
+# `tuple(map(int, version.split('.')))`(segment_utils.py:171-175), 写成
+# "1.1.1-autostart"那边直接ValueError. 所以区分官方原件靠的是URL里的账号名,
+# 不是文件名.
 _DOWNLOAD_URL = (
-    "https://github.com/sunluca668/auto-afk/releases/download/"
-    "123er4/florr-auto-afk-v1.1.1-auto.zip"
+    "https://github.com/greatluca666/florr-auto-afk/releases/download/"
+    "v1.1.1/florr-auto-afk-v1.1.1-auto.zip"
 )
+# 下完先核对再解压: 这是347MB的一包exe, 解压完我们直接Popen它. release asset能被
+# 持有者用同一个tag覆盖掉(gh release upload --clobber), 不校验就等于无条件执行一个
+# 远端随时能换内容的二进制. 重新构建/换release时这个值必须跟着更新, 否则所有人都
+# 会卡在"下载校验失败".
+_DOWNLOAD_SHA256 = "74488ef58966d123ace6d19ebb11c05d7ac8ee992abd949289714a8a866e7d74"
 
 # 跟cdp_bridge.py的_CHROME_PROFILE_DIR同一个套路: 打包成exe后是exe自己所在
 # 目录, 脚本模式下是main.py所在目录 —— 两种场景下"跟可执行文件同级"语义一致,
@@ -136,19 +159,21 @@ def _prompt_download_confirm():
     answer = input(
         f"\n🤖 没检测到florr-auto-afk(AFK弹窗自动处理用). 现在下载吗?\n"
         f"   来源: {_DOWNLOAD_URL}\n"
-        f"   大小: 约260MB, 解压到: {_INSTALL_DIR}\n"
+        f"   大小: 约350MB, 解压到: {_INSTALL_DIR}\n"
         f"   (回车=下载, 输入n=跳过, 之后AFK弹窗不会自动处理): "
     )
     return answer.strip().lower() != "n"
 
 
 def _download_and_extract():
-    """流式下载到临时文件+zipfile解压, 完了删掉临时zip. 网络失败/zip损坏都
-    不抛异常出去 —— 返回False, 让调用方(ensure_florr_auto_afk_running())
-    决定怎么继续, 主程序不受影响."""
+    """流式下载到临时文件 → 核对SHA-256 → zipfile解压, 完了删掉临时zip. 网络失败/
+    校验不过/zip损坏都不抛异常出去 —— 返回False, 让调用方
+    (ensure_florr_auto_afk_running())决定怎么继续, 主程序不受影响."""
     tmp_path = os.path.join(_INSTALL_ROOT, f"{_INSTALL_DIR_NAME}.zip.download")
     try:
         req = urllib.request.Request(_DOWNLOAD_URL, headers={"User-Agent": _USER_AGENT})
+        # 边下边算摘要, 不下完再回头读一遍文件: 347MB多走一趟完整磁盘IO纯属白费.
+        digest = hashlib.sha256()
         with urllib.request.urlopen(req, timeout=30, context=_SSL_CONTEXT) as resp:
             total = int(resp.headers.get("Content-Length", 0))
             downloaded = 0
@@ -158,6 +183,7 @@ def _download_and_extract():
                     if not chunk:
                         break
                     f.write(chunk)
+                    digest.update(chunk)
                     downloaded += len(chunk)
                     if total:
                         print(
@@ -165,6 +191,19 @@ def _download_and_extract():
                             end="",
                         )
             print()  # 结束下载进度那行, 换行
+
+        actual_sha256 = digest.hexdigest()
+        if actual_sha256 != _DOWNLOAD_SHA256:
+            # 校验不过就当下载失败, 一个文件都不解出来: 这包里是我们下一步要Popen的
+            # exe, asset内容跟钉的摘要不一样时唯一安全的做法是停在这儿(finally会把
+            # 临时zip删掉). 最常见的原因不是被人换包, 而是release重新构建了而
+            # _DOWNLOAD_SHA256没跟着改 —— 所以两个摘要都印出来, 好一眼对比.
+            print(
+                "⚠️ florr-auto-afk下载校验失败(SHA-256不符, 已丢弃, 之后AFK弹窗不会自动处理):\n"
+                f"   期望: {_DOWNLOAD_SHA256}\n"
+                f"   实际: {actual_sha256}"
+            )
+            return False
 
         with zipfile.ZipFile(tmp_path) as zf:
             # 解压到_INSTALL_DIR而不是_INSTALL_ROOT: 官方release zip没有顶层
