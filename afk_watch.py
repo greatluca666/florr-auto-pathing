@@ -10,8 +10,8 @@ docs/superpowers/specs/2026-08-11-afk-check-coexistence-design.md.
 
 florr-auto-afk本身是完全独立的另一个程序(不是这个repo的一部分), 用户得自己
 有一份能跑. ensure_florr_auto_afk_running()负责在Windows上自动确保它在跑
-(没装就问要不要下, 装了就打开它); LATEST_LOG_PATH跟着它实际的安装位置算出来,
-不再是写死的个人路径. 详见
+(已经在跑就不动, 没装就问要不要下, 装了没跑就打开它); LATEST_LOG_PATH跟着它
+实际的安装位置算出来, 不再是写死的个人路径. 详见
 docs/superpowers/specs/2026-08-27-afk-auto-bootstrap-design.md.
 """
 import os
@@ -167,12 +167,39 @@ def _download_and_extract():
             os.remove(tmp_path)
 
 
+def _is_florr_auto_afk_running():
+    """查segment.exe是不是已经有实例在跑(只在Windows上有意义, 调用方保证).
+
+    tasklist找不到匹配进程时退出码照样是0, 只是往stdout印一句"INFO: No tasks
+    are running which match the specified criteria." —— 不能靠returncode判断,
+    只能看输出里有没有那个进程名. 查不了(tasklist不存在/输出解码失败)就当"没在
+    跑", 保持加这个检测之前的行为: 顶多多开一个, 不会因为探测失败就不开.
+    """
+    try:
+        result = subprocess.run(
+            ["tasklist", "/FI", f"IMAGENAME eq {_EXE_NAME}", "/NH"],
+            capture_output=True,
+            text=True,
+            errors="ignore",  # 中文Windows的tasklist输出不是UTF-8, 别因为解码炸掉
+        )
+        return _EXE_NAME.lower() in (result.stdout or "").lower()
+    except Exception:
+        return False
+
+
 def ensure_florr_auto_afk_running():
-    """确保florr-auto-afk在跑 —— 没装就问要不要下, 装了(不管刚下的还是本来就
-    有的)就打开它. 只在Windows上做, 其余平台整个跳过(florr-auto-afk是Windows
-    专属GUI程序). 全程不阻塞主流程 —— 这是可选增强, 不是寻路/刷怪的前提, 任何
-    一步失败/用户跳过都只打印一句提示, main.py照常往下走."""
+    """确保florr-auto-afk在跑 —— 已经在跑就什么都不做, 没装就问要不要下, 装了
+    (不管刚下的还是本来就有的)就打开它. 只在Windows上做, 其余平台整个跳过
+    (florr-auto-afk是Windows专属GUI程序). 全程不阻塞主流程 —— 这是可选增强,
+    不是寻路/刷怪的前提, 任何一步失败/用户跳过都只打印一句提示, main.py照常
+    往下走."""
     if sys.platform != "win32":
+        return
+
+    # 在跑就直接返回, 连"装没装"都不用查(能跑起来说明装过了 —— 哪怕是用户自己
+    # 另一份拷贝, 也不该再开一个). 多开两个实例会各自做YOLO拖拽, 互相抢鼠标.
+    if _is_florr_auto_afk_running():
+        print("✅ florr-auto-afk已经在跑, 不重复打开.")
         return
 
     if not os.path.isfile(_EXE_PATH):

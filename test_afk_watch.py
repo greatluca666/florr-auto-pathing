@@ -276,6 +276,7 @@ def test_ensure_florr_auto_afk_running_skips_entirely_on_non_windows(monkeypatch
 def test_ensure_florr_auto_afk_running_opens_directly_when_already_installed(monkeypatch):
     monkeypatch.setattr(afk_watch.sys, "platform", "win32")
     with patch("afk_watch.os.path.isfile", return_value=True), \
+         patch("afk_watch._is_florr_auto_afk_running", return_value=False), \
          patch("builtins.input") as mock_input, \
          patch("afk_watch.subprocess.Popen") as mock_popen:
         afk_watch.ensure_florr_auto_afk_running()
@@ -288,6 +289,7 @@ def test_ensure_florr_auto_afk_running_opens_directly_when_already_installed(mon
 def test_ensure_florr_auto_afk_running_skips_when_user_declines_download(monkeypatch):
     monkeypatch.setattr(afk_watch.sys, "platform", "win32")
     with patch("afk_watch.os.path.isfile", return_value=False), \
+         patch("afk_watch._is_florr_auto_afk_running", return_value=False), \
          patch("afk_watch._prompt_download_confirm", return_value=False), \
          patch("afk_watch._download_and_extract") as mock_download, \
          patch("afk_watch.subprocess.Popen") as mock_popen:
@@ -299,6 +301,7 @@ def test_ensure_florr_auto_afk_running_skips_when_user_declines_download(monkeyp
 def test_ensure_florr_auto_afk_running_downloads_then_opens_when_confirmed(monkeypatch):
     monkeypatch.setattr(afk_watch.sys, "platform", "win32")
     with patch("afk_watch.os.path.isfile", return_value=False), \
+         patch("afk_watch._is_florr_auto_afk_running", return_value=False), \
          patch("afk_watch._prompt_download_confirm", return_value=True), \
          patch("afk_watch._download_and_extract", return_value=True) as mock_download, \
          patch("afk_watch.subprocess.Popen") as mock_popen:
@@ -310,6 +313,7 @@ def test_ensure_florr_auto_afk_running_downloads_then_opens_when_confirmed(monke
 def test_ensure_florr_auto_afk_running_does_not_open_when_download_fails(monkeypatch):
     monkeypatch.setattr(afk_watch.sys, "platform", "win32")
     with patch("afk_watch.os.path.isfile", return_value=False), \
+         patch("afk_watch._is_florr_auto_afk_running", return_value=False), \
          patch("afk_watch._prompt_download_confirm", return_value=True), \
          patch("afk_watch._download_and_extract", return_value=False), \
          patch("afk_watch.subprocess.Popen") as mock_popen:
@@ -320,5 +324,50 @@ def test_ensure_florr_auto_afk_running_does_not_open_when_download_fails(monkeyp
 def test_ensure_florr_auto_afk_running_does_not_crash_when_popen_raises(monkeypatch):
     monkeypatch.setattr(afk_watch.sys, "platform", "win32")
     with patch("afk_watch.os.path.isfile", return_value=True), \
+         patch("afk_watch._is_florr_auto_afk_running", return_value=False), \
          patch("afk_watch.subprocess.Popen", side_effect=OSError("no permission")):
         afk_watch.ensure_florr_auto_afk_running()  # 不该抛异常
+
+
+def _fake_tasklist_result(stdout):
+    result = MagicMock()
+    result.stdout = stdout
+    return result
+
+
+def test_is_florr_auto_afk_running_true_when_tasklist_lists_the_exe():
+    listed = (
+        "segment.exe                   9128 Console                    1    271,204 K\n"
+    )
+    with patch("afk_watch.subprocess.run", return_value=_fake_tasklist_result(listed)):
+        assert afk_watch._is_florr_auto_afk_running() is True
+
+
+def test_is_florr_auto_afk_running_false_when_tasklist_reports_no_tasks():
+    # tasklist找不到匹配进程时退出码照样是0, 只是往stdout印这句 —— 不能靠
+    # returncode判断, 只能看输出里有没有那个进程名.
+    no_tasks = 'INFO: No tasks are running which match the specified criteria.\n'
+    with patch("afk_watch.subprocess.run", return_value=_fake_tasklist_result(no_tasks)):
+        assert afk_watch._is_florr_auto_afk_running() is False
+
+
+def test_is_florr_auto_afk_running_false_when_tasklist_unavailable():
+    with patch("afk_watch.subprocess.run", side_effect=OSError("tasklist not found")):
+        assert afk_watch._is_florr_auto_afk_running() is False
+
+
+def test_ensure_florr_auto_afk_running_does_not_open_second_instance_when_already_running(
+    monkeypatch, capsys
+):
+    # 用户报的bug: 不检测就无条件Popen —— florr-auto-afk已经在跑时会开出第二个
+    # 实例, 两个都在做YOLO拖拽, 互相抢鼠标.
+    monkeypatch.setattr(afk_watch.sys, "platform", "win32")
+    with patch("afk_watch._is_florr_auto_afk_running", return_value=True), \
+         patch("builtins.input") as mock_input, \
+         patch("afk_watch.subprocess.Popen") as mock_popen, \
+         patch("afk_watch._download_and_extract") as mock_download:
+        afk_watch.ensure_florr_auto_afk_running()
+    mock_popen.assert_not_called()
+    mock_input.assert_not_called()    # 在跑就说明装过了, 更不该问下载
+    mock_download.assert_not_called()
+    assert "已经在跑" in capsys.readouterr().out
