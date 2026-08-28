@@ -672,7 +672,7 @@ git commit -m "feat: start florr-auto-afk silently and verify it began detecting
 1. ~~**`_DOWNLOAD_URL` 加 SHA-256 校验**~~ —— **已做**(2026-08-28)。`_DOWNLOAD_SHA256 = "74488ef5...e7d74"`,`_download_and_extract()`边下边`hashlib.sha256().update(chunk)`,下完不符就打印期望/实际两个摘要并返回False,解压之前就停住
 2. ~~**`_STARTED_MARKER` 换成更严的信号**~~ —— **已做**(2026-08-28),按括号里那个可选方案走:marker换成子进程写的`Running indefinitely`,`runningCountDown: -1`一起进了`_REQUIRED_CONFIG`
 3. ~~**`_DEFAULT_CONFIG` 跟 `_DOWNLOAD_URL` 要同版本**~~ —— **已做**(2026-08-28)。fork发行包的`config.json`只在`runs`最前面多了`"autoStart": false`,其余跟`git show v1.1.1:config.json`逐键一致;`_DEFAULT_CONFIG`已补上这个键(值仍由`_REQUIRED_CONFIG`覆盖成`true`)
-4. **更新用户文档** —— **还没做**(Task 5 落地后已解锁)。`docs/bilibili/视频2-安装教程-脚本与分镜.md`还在教观众点 run 按钮/给按钮打红框,而且第11行的"下 260MB"要改成约350MB。那个目录目前还没进git,不在本 task 的提交范围里
+4. **更新用户文档** —— ✅ 已做(2026-08-28,Task 5 的修复轮里)。`docs/bilibili/视频2-安装教程-脚本与分镜.md` 的第11行和第7镜:尺寸改成约350MB,去掉"点一下 run"的口播和给按钮打红框的指示,改成"它自己起来、自己最小化,控制台打出 `✅ AFK弹窗自动处理已开启` 就成了",只在超时警告那种情况下才提手动点 run。那个目录还没进 git,所以不在提交范围里
 
 `_START_TIMEOUT_SECONDS = 90` 落地后要按实机真实耗时调(见附录A9)。**注意换marker之后余量变小了**:它比父进程那条晚,还要多等一个首次运行的`test_environment()`。
 
@@ -819,3 +819,31 @@ Actions红了大概率是构建腐烂:它用的是第三方action `sayyid5416/py
 
 第2条超时但第3条有 → 说明marker文本对不上或者90秒不够,回来调`_STARTED_MARKER`/`_START_TIMEOUT_SECONDS`。第3条也没有、但有`Segment process started` → 子进程起了但没进检测循环,先看`latest.log`里有没有`YOLO models are corrupted`。
 
+
+---
+
+## 遗留(deferred) —— review 提过、决定先不做的
+
+Tasks 1-5 的 review 一共提了约 20 条 Minor,下面是还值得记着的。都不影响当前行为,按需再捡。
+
+**配置写入(`_write_afk_config()`)**
+- 非原子写:`open(..., "w")` 先截断再 `json.dump`,中途失败会毁掉用户配置。临时文件 + `os.replace` 三行可闭合
+- `.bak` 只有一份:第二次写坏会把第一次备份的真配置覆盖掉(复合丢失路径)
+- rename 在 write 之前:极端情况下(rename 成功、write 失败)一个 `config.json` 都不剩
+- `ensure_ascii=False` 写 raw UTF-8。上游自己也是这么写的,所以不算缺陷,只是注意
+
+**启动确认(`_wait_for_segment_started()`)**
+- 完全静默的 `except Exception`,跟 `_read_new_lines()` 的 warn-once 不一致 —— `LATEST_LOG_PATH` 配错会换来一次静默的满超时
+- 失败路径最多超预算一个 `interval`(生产默认 ~91 秒而不是 90)
+- "至少读一次再判超时"这条不变量没有测试锁定(`timeout=0` + marker 已存在 → True 就能锁)
+- 文件变短就从 0 重读,理论上给"轮转后的尾巴里还留着旧 marker"开了误判的门(概率极低)
+
+**下载/校验**
+- `_fake_response()` 一次性给全部 payload → 所有下载测试都是单 chunk,增量哈希这个性质没被锁
+- `test_download_and_extract_returns_false_on_digest_mismatch` 里 `assert _DOWNLOAD_SHA256 in out` 比的是原始常量,而输出打的是归一化后的值 —— 哪天真按 certutil 格式粘贴常量,这条测试会挂(生产行为是对的)
+- 校验失败的提示只给两个 digest,没给用户下一步(输入 n 跳过 / 更新本程序)
+- 重新构建的 playbook 只写了一半:已经装过的机器压根不会再走 `_download_and_extract()`,只有换 `_INSTALL_DIR_NAME` 才碰得到它们
+
+**其它**
+- 已经跑过旧版的机器上,`main.py` 旁边散落的那 ~4500 个文件没有清理路径(不是数据丢失,只是占地方);`skipUpdate: true` 也还留在那份 config 里,我们现在不碰这个键了
+- `docs/bilibili/视频2-安装教程-脚本与分镜.md:36` 的"AFK 那个程序还要再占 300M"没改 —— 光 zip 就 347MB,解压后更大,得在 Windows 上量一次才好写准
