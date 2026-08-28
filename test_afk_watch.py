@@ -466,3 +466,34 @@ def test_write_afk_config_returns_false_without_raising_when_dir_missing(tmp_pat
 
     assert afk_watch._write_afk_config() is False
     assert "config.json" in capsys.readouterr().out
+
+
+def test_write_afk_config_warns_when_existing_config_cannot_be_read(tmp_path, monkeypatch, capsys):
+    # 文件在、但读不出来: 下面的重建会把用户自己调过的键(mouseSpeed/yoloConfig之类)
+    # 全冲掉, 不能一声不响就干了. 这里用真实的触发方式复现 —— 中文Windows上
+    # florr-auto-afk按系统locale(GBK)写了带中文的值, 我们按utf-8读直接
+    # UnicodeDecodeError; 不是"JSON语法坏了"那种一眼能看出来的情况.
+    install_dir = _patch_install_paths(monkeypatch, tmp_path)
+    install_dir.mkdir()
+    (install_dir / "config.json").write_bytes(
+        '{"advanced": {"note": "中文"}}'.encode("gbk")
+    )
+
+    assert afk_watch._write_afk_config() is True
+
+    out = capsys.readouterr().out
+    assert "⚠️" in out
+    assert "config.json" in out
+    # 照样重建出能用的最小config —— 读失败不等于撂挑子不写.
+    assert _read_json(install_dir / "config.json")["runs"]["autoStart"] is True
+
+
+def test_write_afk_config_stays_quiet_when_config_file_does_not_exist_yet(
+    tmp_path, monkeypatch, capsys
+):
+    # 首次运行(刚解压完, 还没有config.json)是正常路径, 别拿警告吓用户.
+    install_dir = _patch_install_paths(monkeypatch, tmp_path)
+    install_dir.mkdir()
+
+    assert afk_watch._write_afk_config() is True
+    assert capsys.readouterr().out == ""

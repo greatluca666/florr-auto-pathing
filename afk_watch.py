@@ -200,16 +200,27 @@ _REQUIRED_CONFIG = {
 def _write_afk_config():
     """把我们依赖的几个键写进florr-auto-afk自己的config.json, 其它键原样保留.
     文件不存在/JSON坏了就从空的开始, 写一份只含这几个键的最小config —— 它的
-    get_config()对其余键有默认值兜底. 失败只打印警告返回False, 不抛 —— 配置没写上
+    get_config()对其余键有默认值兜底(文件本来就在、只是读不出来时会先警告一句,
+    那种情况下用户自己调过的键会丢). 失败只打印警告返回False, 不抛 —— 配置没写上
     最多是"还得手点run", 不该拦住寻路/刷怪."""
     config_path = os.path.join(_INSTALL_DIR, "config.json")
+    # 读之前先记下文件在不在(isfile放在try里面: 这个函数承诺绝不抛, 连探路都不例外).
+    config_existed = False
     try:
+        config_existed = os.path.isfile(config_path)
         with open(config_path, "r", encoding="utf-8") as f:
             config = json.load(f)
         if not isinstance(config, dict):
             config = {}
-    except Exception:
+    except Exception as e:
         config = {}
+        if config_existed:
+            # 文件不存在是正常首次运行, 不吭声; 但"文件在、却读不出来"时下面这次
+            # 写入会把用户自己调过的键(mouseSpeed/yoloConfig之类)全冲掉, 必须把
+            # 原因说出来, 不能静悄悄地删人东西. 最可能的触发不是JSON语法坏了, 而是
+            # 中文Windows上florr-auto-afk按系统locale(GBK)写了带中文的值, 我们按
+            # utf-8读直接UnicodeDecodeError.
+            print(f"⚠️ florr-auto-afk原有的config.json读不出来, 已重置为默认值(自定义设置会丢失): {e}")
 
     for section, values in _REQUIRED_CONFIG.items():
         section_config = config.get(section)
