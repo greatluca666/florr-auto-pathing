@@ -435,7 +435,7 @@ def test_write_afk_config_overwrites_our_keys_and_keeps_the_rest(tmp_path, monke
     assert config["yoloConfig"] == {"segModel": "./models/afk-seg.pt"}
 
 
-def test_write_afk_config_creates_minimal_config_when_file_missing(tmp_path, monkeypatch):
+def test_write_afk_config_rebuilds_from_shipped_defaults_when_file_missing(tmp_path, monkeypatch):
     install_dir = _patch_install_paths(monkeypatch, tmp_path)
     install_dir.mkdir()
 
@@ -444,6 +444,13 @@ def test_write_afk_config_creates_minimal_config_when_file_missing(tmp_path, mon
     config = _read_json(install_dir / "config.json")
     assert config["runs"]["autoStart"] is True
     assert config["advanced"]["skipUpdate"] is True
+    # 重建出来的必须是"发行版默认配置 + 我们那几个键", 不能是只含我们那几个键的
+    # 最小config: 上游get_config()对缺键没有任何默认值兜底, 少一个segment.exe就
+    # KeyError死在启动路上. 断言几个我们压根不覆盖的键 —— 它们只可能来自默认配置.
+    assert config["advanced"]["mouseSpeed"] == 100
+    assert config["gui"]["theme"] == "auto"
+    assert config["yoloConfig"]["segModel"] == "./models/afk-seg.pt"
+    assert config["advanced"]["windowSizeRatio"] == [0.787, 1]
 
 
 def test_write_afk_config_rebuilds_when_json_is_corrupt(tmp_path, monkeypatch):
@@ -455,6 +462,23 @@ def test_write_afk_config_rebuilds_when_json_is_corrupt(tmp_path, monkeypatch):
 
     config = _read_json(install_dir / "config.json")
     assert config["runs"]["autoStart"] is True
+    # 读不出来这条路径跟"文件不存在"一样要以发行版默认配置为底, 不然重建出来的
+    # config照样启动不了segment.exe.
+    assert config["advanced"]["mouseSpeed"] == 100
+    assert config["gui"]["theme"] == "auto"
+    assert config["yoloConfig"]["segModel"] == "./models/afk-seg.pt"
+
+
+def test_write_afk_config_rebuilds_when_top_level_is_not_an_object(tmp_path, monkeypatch):
+    # 整份配置被写坏成数组/标量: 拿不来当底, 走跟"读不出来"同一条重建+备份路径.
+    install_dir = _patch_install_paths(monkeypatch, tmp_path)
+    install_dir.mkdir()
+    (install_dir / "config.json").write_text("[1, 2, 3]")
+
+    assert afk_watch._write_afk_config() is True
+
+    assert _read_json(install_dir / "config.json")["advanced"]["mouseSpeed"] == 100
+    assert (install_dir / "config.json.bak").read_text() == "[1, 2, 3]"
 
 
 def test_write_afk_config_replaces_section_that_is_not_a_dict(tmp_path, monkeypatch):
@@ -464,7 +488,12 @@ def test_write_afk_config_replaces_section_that_is_not_a_dict(tmp_path, monkeypa
     (install_dir / "config.json").write_text(json.dumps({"runs": 5}))
 
     assert afk_watch._write_afk_config() is True
-    assert _read_json(install_dir / "config.json")["runs"]["autoStart"] is True
+    runs = _read_json(install_dir / "config.json")["runs"]
+    assert runs["autoStart"] is True
+    # 补回来的section也得是完整的 —— 只塞我们那三个键的话, 上游读
+    # runs.idleTimeThreshold(test_idle_thread要用)时就KeyError了.
+    assert runs["idleTimeThreshold"] == 10
+    assert runs["runningCountDown"] == -1
 
 
 def test_write_afk_config_returns_false_without_raising_when_dir_missing(tmp_path, monkeypatch, capsys):
@@ -476,9 +505,9 @@ def test_write_afk_config_returns_false_without_raising_when_dir_missing(tmp_pat
 
 
 def test_write_afk_config_warns_when_existing_config_cannot_be_read(tmp_path, monkeypatch, capsys):
-    # 文件在、但读不出来: 下面的重建会把用户自己调过的键(mouseSpeed/yoloConfig之类)
-    # 全冲掉, 不能一声不响就干了. 这里用真实的触发方式复现 —— 中文Windows上
-    # florr-auto-afk按系统locale(GBK)写了带中文的值, 我们按utf-8读直接
+    # 文件在、但读不出来: 下面的重建用不上用户自己调过的键(mouseSpeed/yoloConfig
+    # 之类), 不能一声不响就干了, 得说清楚原文件被挪到哪去了. 这里用真实的触发方式
+    # 复现 —— 中文Windows上有人拿记事本按ANSI(GBK)存过它, 我们按utf-8读直接
     # UnicodeDecodeError; 不是"JSON语法坏了"那种一眼能看出来的情况.
     install_dir = _patch_install_paths(monkeypatch, tmp_path)
     install_dir.mkdir()
@@ -490,9 +519,77 @@ def test_write_afk_config_warns_when_existing_config_cannot_be_read(tmp_path, mo
 
     out = capsys.readouterr().out
     assert "⚠️" in out
-    assert "config.json" in out
-    # 照样重建出能用的最小config —— 读失败不等于撂挑子不写.
+    assert "config.json.bak" in out
+    # 照样重建出能用的config —— 读失败不等于撂挑子不写.
     assert _read_json(install_dir / "config.json")["runs"]["autoStart"] is True
+
+
+def test_write_afk_config_keeps_the_unreadable_original_as_a_bak_file(tmp_path, monkeypatch):
+    # 读不出来就重建, 但绝不能顺手把用户那份冲掉 —— 里面是他手调过的全部设置,
+    # 原封不动挪成.bak, 至少还能自己捞回来.
+    install_dir = _patch_install_paths(monkeypatch, tmp_path)
+    install_dir.mkdir()
+    original = '{"advanced": {"note": "中文", "mouseSpeed": 250}}'.encode("gbk")
+    (install_dir / "config.json").write_bytes(original)
+
+    assert afk_watch._write_afk_config() is True
+
+    assert (install_dir / "config.json.bak").read_bytes() == original
+
+
+def test_write_afk_config_bak_holds_the_latest_unreadable_original(tmp_path, monkeypatch):
+    # 已经有一份.bak就直接盖掉: 留最近那份够用, 不攒一堆带时间戳的垃圾在人家目录里.
+    # (Windows上os.rename()目标已存在会报错, 必须是os.replace()。)
+    install_dir = _patch_install_paths(monkeypatch, tmp_path)
+    install_dir.mkdir()
+    (install_dir / "config.json.bak").write_text("上一次的备份")
+    (install_dir / "config.json").write_text("{this is not json")
+
+    assert afk_watch._write_afk_config() is True
+    assert (install_dir / "config.json.bak").read_text() == "{this is not json"
+
+
+def test_write_afk_config_still_writes_when_backing_up_the_original_fails(
+    tmp_path, monkeypatch, capsys
+):
+    # 改名失败(文件被别的进程占着/权限不够)不能让这个函数抛异常或者不写配置 ——
+    # 照样重建, 只是提示里得说清楚原文件这次真没保住.
+    install_dir = _patch_install_paths(monkeypatch, tmp_path)
+    install_dir.mkdir()
+    (install_dir / "config.json").write_text("{this is not json")
+
+    with patch("afk_watch.os.replace", side_effect=OSError("文件被占用")):
+        assert afk_watch._write_afk_config() is True
+
+    assert _read_json(install_dir / "config.json")["runs"]["autoStart"] is True
+    assert "⚠️" in capsys.readouterr().out
+
+
+def test_write_afk_config_does_not_mutate_the_default_config_constant(tmp_path, monkeypatch):
+    # 合并是就地.update()的 —— 不深拷贝的话第一次重建就把模块级默认值改成了我们的
+    # 强制值, 同一次运行里第二次重建拿到的底就不是"出厂设置"了.
+    install_dir = _patch_install_paths(monkeypatch, tmp_path)
+    install_dir.mkdir()
+
+    afk_watch._write_afk_config()
+
+    assert afk_watch._DEFAULT_CONFIG["runs"]["moveAfterAFK"] is True
+    assert afk_watch._DEFAULT_CONFIG["runs"]["autoTakeOverWhenIdle"] is True
+    assert "autoStart" not in afk_watch._DEFAULT_CONFIG["runs"]
+
+
+def test_write_afk_config_forced_keys_win_over_the_shipped_defaults(tmp_path, monkeypatch):
+    # 发行版默认这两个都是true, 我们要的正好相反 —— 合并顺序写反(默认值盖在强制值
+    # 上面)这条就红.
+    install_dir = _patch_install_paths(monkeypatch, tmp_path)
+    install_dir.mkdir()
+
+    assert afk_watch._write_afk_config() is True
+
+    config = _read_json(install_dir / "config.json")
+    assert config["runs"]["autoStart"] is True
+    assert config["runs"]["autoTakeOverWhenIdle"] is False
+    assert config["runs"]["moveAfterAFK"] is False
 
 
 def test_write_afk_config_stays_quiet_when_config_file_does_not_exist_yet(

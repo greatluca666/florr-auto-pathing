@@ -14,6 +14,7 @@ florr-auto-afk本身是完全独立的另一个程序(不是这个repo的一部�
 实际的安装位置算出来, 不再是写死的个人路径. 详见
 docs/superpowers/specs/2026-08-27-afk-auto-bootstrap-design.md.
 """
+import copy
 import json
 import os
 import ssl
@@ -187,6 +188,60 @@ def _download_and_extract():
             os.remove(tmp_path)
 
 
+# florr-auto-afk v1.1.1发行包自带的config.json原文, 用`cd ~/florr-auto-afk &&
+# git show v1.1.1:config.json`取的, 一个键都没删没改没猜.
+#
+# 重建配置时必须以它为底, 不能从{}开始: 上游的get_config()就是
+# `load(open("./config.json"))`(segment_utils.py:27-29), 对缺键没有任何默认值兜底,
+# 全repo有几十处直接`get_config()[...]`取下标. 最狠的一处是import时就求值的默认
+# 参数 —— segment_utils.py:266
+# `def apply_mouse_movement(points, speed=get_config()["advanced"]["mouseSpeed"])`
+# —— 少一个键segment.exe连GUI都来不及画就KeyError死掉, 用户只会看到我们打印的
+# "🪟 已在后台打开florr-auto-afk", 然后被叫去点一个根本不存在的窗口里的run.
+#
+# 注意这里没有runs.autoStart: 那是我们这份fork加的键, 由_REQUIRED_CONFIG补上.
+_DEFAULT_CONFIG = {
+    "runs": {
+        "autoTakeOverWhenIdle": True,
+        "runningCountDown": -1,
+        "moveAfterAFK": True,
+        "idleTimeThreshold": 10,
+        "idleDetInterval": 3,
+        "idleDetIntervalMax": 10,
+    },
+    "exposure": {
+        "enable": True,
+        "duration": 3,
+    },
+    "gui": {
+        "language": "en-us",
+        "theme": "auto",
+    },
+    "advanced": {
+        "showLogger": False,
+        "moveMouse": True,
+        "useOBS": False,
+        "verbose": True,
+        "epochInterval": 8,
+        "optimizeQuantization": 1,
+        "rdpEpsilon": 5,
+        "extendLength": 30,
+        "mouseSpeed": 100,
+        "skipUpdate": False,
+        "environment": False,
+        "windowSizeTolerance": 0.1,
+        "windowSizeRatio": [0.787, 1],
+    },
+    "executeBinary": {
+        "runBeforeAFK": "",
+        "runAfterAFK": "",
+    },
+    "yoloConfig": {
+        "segModel": "./models/afk-seg.pt",
+        "detModel": "./models/afk-det.pt",
+    },
+}
+
 # 我们依赖的配置键 —— 只覆盖这几个, config.json里其余键(用户自己调的mouseSpeed
 # 之类)原样保留. autoStart是fork里加的开关(见
 # docs/superpowers/specs/2026-08-28-afk-autostart-design.md第一部分), 其余四个的
@@ -204,12 +259,29 @@ _REQUIRED_CONFIG = {
 }
 
 
+def _backup_broken_config(config_path):
+    """把读不出来的config.json改名成config.json.bak, 返回一句能塞进警告里的说明.
+
+    直接盖掉上一份.bak: 保住"最近一次读不出来的原文件"就够了, 攒一堆带时间戳的
+    备份只会在人家目录里越积越多. 必须是os.replace()不能是os.rename() ——
+    Windows上后者在目标已存在时直接报错.
+
+    改名失败也只是返回一句话, 不抛 —— 调用方承诺绝不抛异常, 备份不了顶多是原文件
+    这次真丢了, 不能因此连配置都不写.
+    """
+    try:
+        os.replace(config_path, config_path + ".bak")
+        return "原文件已改名保留成config.json.bak"
+    except Exception as e:
+        return f"原文件没能改名成config.json.bak, 内容会丢: {e}"
+
+
 def _write_afk_config():
     """把我们依赖的几个键写进florr-auto-afk自己的config.json, 其它键原样保留.
-    文件不存在/JSON坏了就从空的开始, 写一份只含这几个键的最小config —— 它的
-    get_config()对其余键有默认值兜底(文件本来就在、只是读不出来时会先警告一句,
-    那种情况下用户自己调过的键会丢). 失败只打印警告返回False, 不抛 —— 配置没写上
-    最多是"还得手点run", 不该拦住寻路/刷怪."""
+    文件不存在/读不出来就以_DEFAULT_CONFIG(发行包自带的那份)为底重建, 不能从空的
+    开始 —— 理由见那个常量上面的注释. 读不出来的原文件先改名成config.json.bak
+    留着, 绝不直接冲掉. 失败只打印警告返回False, 不抛 —— 配置没写上最多是"还得
+    手点run", 不该拦住寻路/刷怪."""
     config_path = os.path.join(_INSTALL_DIR, "config.json")
     # 读之前先记下文件在不在(isfile放在try里面: 这个函数承诺绝不抛, 连探路都不例外).
     config_existed = False
@@ -218,21 +290,29 @@ def _write_afk_config():
         with open(config_path, "r", encoding="utf-8") as f:
             config = json.load(f)
         if not isinstance(config, dict):
-            config = {}
+            # 整份配置被写坏成数组/标量: 当不了底, 跟"读不出来"走同一条重建路径.
+            raise TypeError(f"顶层不是JSON对象, 是{type(config).__name__}")
     except Exception as e:
-        config = {}
+        # deepcopy: 下面的合并是就地.update()的, 直接拿常量当底会把模块级默认值
+        # 改成我们的强制值, 同一次运行里第二次重建拿到的就不是出厂设置了.
+        config = copy.deepcopy(_DEFAULT_CONFIG)
         if config_existed:
-            # 文件不存在是正常首次运行, 不吭声; 但"文件在、却读不出来"时下面这次
-            # 写入会把用户自己调过的键(mouseSpeed/yoloConfig之类)全冲掉, 必须把
-            # 原因说出来, 不能静悄悄地删人东西. 最可能的触发不是JSON语法坏了, 而是
-            # 中文Windows上florr-auto-afk按系统locale(GBK)写了带中文的值, 我们按
-            # utf-8读直接UnicodeDecodeError.
-            print(f"⚠️ florr-auto-afk原有的config.json读不出来, 已重置为默认值(自定义设置会丢失): {e}")
+            # 文件不存在是正常首次运行, 不吭声; 但"文件在、却读不出来"时用户自己
+            # 调过的键(mouseSpeed/yoloConfig之类)这次都用不上了, 必须把原因说出来,
+            # 并且把原文件挪成.bak让他能捞回来 —— 不能静悄悄地删人东西. 最可能的
+            # 触发不是JSON语法坏了, 而是中文Windows上有人拿记事本按ANSI(GBK)存过
+            # 它, 我们按utf-8读直接UnicodeDecodeError.
+            print(
+                f"⚠️ florr-auto-afk原有的config.json读不出来({_backup_broken_config(config_path)}), "
+                f"已按发行版默认值重建(自定义设置不会生效): {e}"
+            )
 
     for section, values in _REQUIRED_CONFIG.items():
         section_config = config.get(section)
         if not isinstance(section_config, dict):
-            section_config = {}
+            # 单个section被写坏成标量/数组: 补回发行版默认的那一份, 同样不能用{} ——
+            # 只塞我们那几个键的话, 上游读同一section里的其它键时照样KeyError.
+            section_config = copy.deepcopy(_DEFAULT_CONFIG.get(section, {}))
         section_config.update(values)
         config[section] = section_config
 
