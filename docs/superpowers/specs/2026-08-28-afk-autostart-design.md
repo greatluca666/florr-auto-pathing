@@ -69,6 +69,12 @@ _DOWNLOAD_SHA256 = "74488ef58966d123ace6d19ebb11c05d7ac8ee992abd949289714a8a866e
 
 `_INSTALL_DIR_NAME`从此纯粹是**我们自己选的目录名**(解压目标),不再需要跟zip内部结构对上——官方zip本来就没有顶层目录。带`-autostart`后缀是为了绕过旧安装:已经装了旧版官方包的用户,`_EXE_PATH`是存在的,不换名字就永远不会重新下载,而旧版那个exe没有`autoStart`,每次启动都白等到超时。asset实际347,277,698字节(≈347MB),下载确认提示里的"约350MB"跟着它。
 
+**这个pin核对过的东西**(2026-08-28,真下了那347MB):
+
+- 本地`shasum -a 256`重算 = `74488ef58966d123ace6d19ebb11c05d7ac8ee992abd949289714a8a866e7d74`,跟GitHub release API给出的asset `digest`一致 —— `_DOWNLOAD_SHA256`不是只抄了API的一个字段
+- zip内部结构:5037个条目、**没有顶层目录**、`segment.exe`在根、根上的`config.json`带`"autoStart": false` —— 也就是`### 1`的`extractall(_INSTALL_DIR)`、`_EXE_PATH`检查和`_DEFAULT_CONFIG`那三件事都对着真包验证过了
+- fork源码侧:`constants.py`的`VERSION_INFO`确实还是`"1.1.1"`,`segment.py`里那段`autoStart`补丁在
+
 
 ## 第二部分:本仓库`afk_watch.py`
 
@@ -130,7 +136,7 @@ marker用的是**子进程**写的`Running indefinitely`,不是父进程那条`S
 
 沿用[test_afk_watch.py](../../../test_afk_watch.py)现有套路:全部mock掉`subprocess`/网络,Windows专属分支用`monkeypatch.setattr(afk_watch.sys, "platform", "win32")`,文件系统用`tmp_path`。
 
-- `_download_and_extract()`:用**无顶层目录**的假zip(跟官方一致),解压后`_EXE_PATH`真的存在;zip结构不对时返回False;摘要不符时返回False且**什么都没解出来**、临时zip被清掉。假zip当然对不上生产常量里那347MB asset的摘要,所以除了摘要不符那条,其余几条都得`monkeypatch`把`_DOWNLOAD_SHA256`换成`hashlib.sha256(payload).hexdigest()`(现算,不抄字面量摘要 —— 免得哪天被人粘回生产常量)
+- `_download_and_extract()`:用**无顶层目录**的假zip(跟官方一致),解压后`_EXE_PATH`真的存在;zip结构不对时返回False;摘要不符时返回False且**什么都没解出来**、临时zip被清掉。假zip当然对不上生产常量里那347MB asset的摘要,所以除了摘要不符那条,其余几条都得`monkeypatch`把`_DOWNLOAD_SHA256`换成`hashlib.sha256(payload).hexdigest()`(现算,不抄字面量摘要 —— 免得哪天被人粘回生产常量)。另有一条:常量写成`certutil -hashfile`那种**大写+每两字节空格**的形式(Windows上刷这个值最可能的粘贴来源)照样要通过 —— 比较前只对常量侧做`"".join(split()).lower()`,校验本身不放宽
 - `_write_afk_config()`:已有config的其它键(`mouseSpeed`等)保留、我们那4个键被覆盖(含`runningCountDown`被强制回`-1`);文件缺失/读不出来时以发行包自带的`config.json`为底重建(断言几个我们不覆盖的键,如`advanced.mouseSpeed`/`gui.theme`/`yoloConfig.segModel`),读不出来的原文件被留成`config.json.bak`;写失败不抛
 - `_wait_for_segment_started()`:新增行里有marker → True;**只有旧行**有marker → 超时False(防跨次运行误判);**只有父进程那两条`Segment process started`** → 超时False(防模型坏了还报成功);超时不抛
 - `ensure_florr_auto_afk_running()`:装了 → 写config → Popen → 等marker,顺序对;验证超时时打印手点提示但不抛
@@ -138,9 +144,8 @@ marker用的是**子进程**写的`Running indefinitely`,不是父进程那条`S
 ## 风险
 
 - **fork那3行只能在Windows上真验证** —— mac开发机跑不了`segment.exe`(见`windows-is-real-deployment`那条memory)。实机要确认两件事:窗口自己最小化了、`latest.log`里出现`Running indefinitely`
-- **90秒超时是估的** —— 它README的FAQ说初始化要10秒以上(PyInstaller解包+torch+两个YOLO模型加载),换成子进程那条marker之后还要多算一个首次运行的`test_environment()`。实机看真实耗时再调这个常量
+- **90秒超时是估的** —— 它README的FAQ说初始化要10秒以上(PyInstaller解包+torch+两个YOLO模型加载),换成子进程那条marker之后还要多算一个首次运行的`test_environment()`。**这是现在最实的一条风险**:marker落在模型加载之后,90秒够不够只能实机看真实耗时再调
 - **marker文本只从源码tag/fork源码确认过** —— 实机跑一次核对
-- **`_DOWNLOAD_SHA256`没在mac上验证过** —— 值取自GitHub release API给出的asset digest(`sha256:74488ef5...`,347,277,698字节),没有真下那347MB核对过一遍。实机第一次下载就是这个校验的第一次真实执行:要是打出"下载校验失败",先怀疑常量而不是怀疑asset被换
 - **v1.1.1的workflow用的是`sayyid5416/pyinstaller@v1`这个第三方action + 2025年的`py311-requirements.txt`** —— 时隔一年多,依赖解析/action本身有可能已经跑不通。Actions红了就得先修构建(通常是给torch之类钉版本),这是第一部分的主要不确定性,不影响第二部分开工
 
 ## 不需要改的地方

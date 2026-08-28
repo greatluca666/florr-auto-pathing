@@ -317,6 +317,23 @@ def test_download_and_extract_returns_false_when_sha256_does_not_match(
     assert hashlib.sha256(payload).hexdigest() in out
 
 
+def test_download_and_extract_accepts_a_digest_pasted_in_certutil_form(tmp_path, monkeypatch):
+    # 重新构建之后刷_DOWNLOAD_SHA256的人是在Windows上, 最可能直接从
+    # `certutil -hashfile ... SHA256`的输出粘过来 —— 那玩意儿是大写、还按每两字节
+    # 插空格. 这种写法不能被当成"校验失败": 那条提示跟"asset真被人换了"长得一模一样,
+    # 会让人往完全错的方向查.
+    _patch_install_paths(monkeypatch, tmp_path)
+    payload = _fake_zip_bytes()
+    real = hashlib.sha256(payload).hexdigest()
+    certutil_style = " ".join(real[i:i + 2] for i in range(0, len(real), 2)).upper()
+    monkeypatch.setattr(afk_watch, "_DOWNLOAD_SHA256", f"  {certutil_style}\n")
+
+    with patch("afk_watch.urllib.request.urlopen", return_value=_fake_response(payload)):
+        result = afk_watch._download_and_extract()
+
+    assert result is True
+
+
 def test_download_and_extract_returns_false_on_corrupt_zip(tmp_path, monkeypatch):
     _patch_install_paths(monkeypatch, tmp_path)
     payload = b"this is not a zip file"

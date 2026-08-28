@@ -207,14 +207,20 @@ def _download_and_extract():
             print()  # 结束下载进度那行, 换行
 
         actual_sha256 = digest.hexdigest()
-        if actual_sha256 != _DOWNLOAD_SHA256:
+        # 常量侧先normalize再比: 重新构建之后来刷_DOWNLOAD_SHA256的人是在Windows上,
+        # 最可能直接粘`certutil -hashfile ... SHA256`的输出 —— 大写、还按每两字节插
+        # 空格. 不normalize的话这种粘贴会报"校验失败", 而那条提示跟"asset真被人换了"
+        # 长得一模一样, 白查半天. 只放宽大小写和空白(split()顺带吃掉换行/制表),
+        # 校验本身一点没松.
+        expected_sha256 = "".join(_DOWNLOAD_SHA256.split()).lower()
+        if actual_sha256 != expected_sha256:
             # 校验不过就当下载失败, 一个文件都不解出来: 这包里是我们下一步要Popen的
             # exe, asset内容跟钉的摘要不一样时唯一安全的做法是停在这儿(finally会把
             # 临时zip删掉). 最常见的原因不是被人换包, 而是release重新构建了而
             # _DOWNLOAD_SHA256没跟着改 —— 所以两个摘要都印出来, 好一眼对比.
             print(
                 "⚠️ florr-auto-afk下载校验失败(SHA-256不符, 已丢弃, 之后AFK弹窗不会自动处理):\n"
-                f"   期望: {_DOWNLOAD_SHA256}\n"
+                f"   期望: {expected_sha256}\n"
                 f"   实际: {actual_sha256}"
             )
             return False
