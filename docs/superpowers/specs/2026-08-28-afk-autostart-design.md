@@ -56,7 +56,7 @@ v1.1.1那版workflow已经确认可用:`on: push: branches: [main]`、`permissio
 
 建议把`constants.py`的`VERSION_INFO`改成`1.1.1-autostart`——zip名字跟着变成`florr-auto-afk-v1.1.1-autostart-auto.zip`,一眼能跟官方原件区分开,不会哪天搞混下错。
 
-本仓库`_DOWNLOAD_URL`改指这个新release的zip。`_INSTALL_DIR_NAME`从此纯粹是**我们自己选的目录名**(解压目标),不再需要跟zip内部结构对上——官方zip本来就没有顶层目录。
+本仓库`_DOWNLOAD_URL`改指这个新release的zip。`_INSTALL_DIR_NAME`从此纯粹是**我们自己选的目录名**(解压目标),不再需要跟zip内部结构对上——官方zip本来就没有顶层目录。顺带把它改成`florr-auto-afk-v1.1.1-autostart`:已经装了旧版官方包的用户,`_EXE_PATH`是存在的,不换名字就永远不会重新下载,而旧版那个exe没有`autoStart`,每次启动都白等到超时。
 
 
 ## 第二部分:本仓库`afk_watch.py`
