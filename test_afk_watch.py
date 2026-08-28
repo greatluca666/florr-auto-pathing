@@ -734,7 +734,7 @@ def test_wait_for_segment_started_ignores_marker_from_a_previous_run(tmp_path, m
         assert afk_watch._wait_for_segment_started(start_offset, timeout=0.05, interval=0.01) is False
 
 
-def test_wait_for_segment_started_ignores_the_parent_processs_own_started_line(tmp_path, monkeypatch):
+def test_wait_for_segment_started_ignores_the_parent_process_start_line(tmp_path, monkeypatch):
     # "Segment process started"是父进程在segment_process.start()之后立刻写的
     # (segment.py:201-202), 那会儿子进程连YOLO模型都还没开始加载 —— 模型坏了
     # 它照样会写这句. 拿它当"已开始检测"是假阳性, 所以我们等的是子进程里的
