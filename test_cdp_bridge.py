@@ -159,6 +159,7 @@ def test_poll_for_florr_tab_retries_until_found():
 
 def test_launch_dedicated_chrome_happy_path_calls_everything_once():
     with patch("builtins.input", return_value="") as mock_input, \
+         patch("cdp_bridge._is_dedicated_chrome_ready", return_value=False), \
          patch("cdp_bridge._quit_all_chrome") as mock_quit, \
          patch("cdp_bridge._launch_chrome_process") as mock_launch, \
          patch("cdp_bridge._poll_for_florr_tab", return_value={"url": "https://florr.io/"}) as mock_poll:
@@ -171,6 +172,7 @@ def test_launch_dedicated_chrome_happy_path_calls_everything_once():
 
 def test_launch_dedicated_chrome_retries_when_tab_not_found_yet():
     with patch("builtins.input", return_value="") as mock_input, \
+         patch("cdp_bridge._is_dedicated_chrome_ready", return_value=False), \
          patch("cdp_bridge._quit_all_chrome"), \
          patch("cdp_bridge._launch_chrome_process"), \
          patch("cdp_bridge._poll_for_florr_tab", side_effect=[None, {"url": "https://florr.io/"}]) as mock_poll:
@@ -192,6 +194,7 @@ def test_is_cdp_port_reachable_returns_true_when_port_listening():
 
 def test_launch_dedicated_chrome_blames_user_when_port_reachable_but_no_florr_tab(capsys):
     with patch("builtins.input", return_value="") as mock_input, \
+         patch("cdp_bridge._is_dedicated_chrome_ready", return_value=False), \
          patch("cdp_bridge._quit_all_chrome"), \
          patch("cdp_bridge._launch_chrome_process"), \
          patch("cdp_bridge._poll_for_florr_tab", side_effect=[None, {"url": "https://florr.io/"}]), \
@@ -205,6 +208,7 @@ def test_launch_dedicated_chrome_blames_user_when_port_reachable_but_no_florr_ta
 
 def test_launch_dedicated_chrome_blames_chrome_when_port_unreachable(capsys):
     with patch("builtins.input", return_value="") as mock_input, \
+         patch("cdp_bridge._is_dedicated_chrome_ready", return_value=False), \
          patch("cdp_bridge._quit_all_chrome"), \
          patch("cdp_bridge._launch_chrome_process"), \
          patch("cdp_bridge._poll_for_florr_tab", side_effect=[None, {"url": "https://florr.io/"}]), \
@@ -214,3 +218,37 @@ def test_launch_dedicated_chrome_blames_chrome_when_port_unreachable(capsys):
     out = capsys.readouterr().out
     assert "CDP端口连不上" in out
     assert "还没检测到florr.io标签页" not in out
+
+
+def test_is_dedicated_chrome_ready_returns_true_when_a_cdp_command_round_trips():
+    with patch("cdp_bridge.eval_js", return_value={"result": {"result": {"value": 1}}}):
+        assert cdp_bridge._is_dedicated_chrome_ready() is True
+
+
+def test_is_dedicated_chrome_ready_returns_false_when_no_florr_tab():
+    with patch("cdp_bridge.eval_js", side_effect=RuntimeError("找不到florr.io标签页(CDP)")):
+        assert cdp_bridge._is_dedicated_chrome_ready() is False
+
+
+def test_is_dedicated_chrome_ready_returns_false_when_websocket_handshake_rejected():
+    # 端口通、标签页也在列表里, 但启动参数漏了--remote-allow-origins=* —— 只有
+    # 真的发一条CDP命令时才会露出403. 这种"看起来好了其实不能用"的Chrome必须
+    # 判False, 不然下面launch_dedicated_chrome()会跳过重启, 用户永远修不好.
+    with patch("cdp_bridge.eval_js", side_effect=Exception("Handshake status 403 Forbidden")):
+        assert cdp_bridge._is_dedicated_chrome_ready() is False
+
+
+def test_launch_dedicated_chrome_leaves_running_chrome_alone_when_already_ready(capsys):
+    # 用户报的bug: 已经有一个满足条件的专用Chrome在跑时(main.py上次跑崩了重开、
+    # 或者同时开了两份), 照样无条件杀掉所有Chrome重开 —— 用户白迁移一次账号.
+    with patch("cdp_bridge._is_dedicated_chrome_ready", return_value=True), \
+         patch("builtins.input") as mock_input, \
+         patch("cdp_bridge._quit_all_chrome") as mock_quit, \
+         patch("cdp_bridge._launch_chrome_process") as mock_launch, \
+         patch("cdp_bridge._poll_for_florr_tab") as mock_poll:
+        cdp_bridge.launch_dedicated_chrome()
+    mock_input.assert_not_called()   # 不该弹"即将关闭所有Chrome窗口"那句确认
+    mock_quit.assert_not_called()
+    mock_launch.assert_not_called()
+    mock_poll.assert_not_called()    # 已经确认标签页能用了, 不用再等
+    assert "跳过" in capsys.readouterr().out

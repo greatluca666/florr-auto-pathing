@@ -126,9 +126,37 @@ def _is_cdp_port_reachable():
         return False
 
 
+def _is_dedicated_chrome_ready():
+    """端到端探一下"专用Chrome已经就绪, 什么都不用做": CDP端口通 + florr.io
+    标签页开着 + WebSocket握手没被403拒(也就是--remote-allow-origins=*确实给
+    了). 三条全过才算就绪.
+
+    为什么不只看find_florr_tab(): 漏了--remote-allow-origins、只给了另外两个
+    参数的Chrome, 端口和标签页列表看起来完全正常, 只有真的发一条CDP命令时才
+    露出403(见模块文档). 那种Chrome必须判"没就绪"、走下面完整的杀掉重启流程,
+    不然用户永远修不好.
+
+    任何异常都吞掉返回False —— 这只是个"能不能省掉重启"的乐观探测, 探不通就
+    按原来的流程重启一次, 不该由它决定main.py能不能启动.
+    """
+    try:
+        eval_js("1", timeout=3)
+        return True
+    except Exception:
+        return False
+
+
 def launch_dedicated_chrome():
     """整条"准备专用Chrome"引导链路, main.py启动时调用一次. 面向不懂命令行的
-    用户, 全程只需要回车 —— 没有任何一步要求手动敲参数."""
+    用户, 全程只需要回车 —— 没有任何一步要求手动敲参数.
+
+    已经有一个就绪的专用Chrome在跑就直接返回, 不碰它 —— main.py上次跑崩了重开、
+    或者同时开两份的时候, 无条件杀掉重启会让用户白迁移一次账号(专用profile是
+    独立目录, 每次新建都是空的登录状态)."""
+    if _is_dedicated_chrome_ready():
+        print("✅ 检测到专用Chrome已经就绪(CDP可用 + florr.io标签页开着), 跳过重启.")
+        return
+
     input(
         "⚠️ 即将关闭所有Chrome窗口以启动专用实例(未保存的标签页/内容会丢失).\n"
         "   按回车继续, Ctrl+C取消: "
