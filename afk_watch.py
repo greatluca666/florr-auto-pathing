@@ -299,11 +299,11 @@ def _is_florr_auto_afk_running():
 
 
 def ensure_florr_auto_afk_running():
-    """确保florr-auto-afk在跑 —— 已经在跑就什么都不做, 没装就问要不要下, 装了
-    (不管刚下的还是本来就有的)就打开它. 只在Windows上做, 其余平台整个跳过
-    (florr-auto-afk是Windows专属GUI程序). 全程不阻塞主流程 —— 这是可选增强,
-    不是寻路/刷怪的前提, 任何一步失败/用户跳过都只打印一句提示, main.py照常
-    往下走."""
+    """确保florr-auto-afk在跑 —— 已经在跑就不动, 没装就问要不要下, 装了没跑就写好
+    config并静默打开它, 然后读它的日志确认真的进入了检测状态. 用户不需要点任何按钮
+    (自动启动靠config里的runs.autoStart, 见docs/superpowers/specs/2026-08-28-afk-autostart-design.md
+    第一部分那个fork补丁). 只在Windows上做, 其余平台整段跳过. 全程不阻塞主流程 ——
+    这是可选增强, 任何一步失败/用户跳过都只打印一句提示, main.py照常往下走."""
     if sys.platform != "win32":
         return
 
@@ -320,15 +320,24 @@ def ensure_florr_auto_afk_running():
         if not _download_and_extract():
             return  # 失败原因已经在_download_and_extract()里打印过了
 
+    _write_afk_config()
+    # 划线必须在Popen之前 —— 它启动瞬间就写marker, 晚划就落在线左边, 永远等不到.
+    start_offset = _current_log_size()
     try:
         # cwd=_INSTALL_DIR是必须的, 不能让它继承我们的CWD: segment.exe内部读的是
         # 相对路径'./config.json'(get_config()), 继承我们的CWD时它一启动就
         # FileNotFoundError: './config.json'挂掉; 而且它写的latest.log也落在CWD,
         # 不指定的话LATEST_LOG_PATH指向的位置永远不会有文件, AFK检测静默失效.
         subprocess.Popen([_EXE_PATH], cwd=_INSTALL_DIR)
-        print(
-            "🪟 已打开florr-auto-afk, 请在它的界面里点\"run\"按钮开启AFK弹窗"
-            "自动处理(不点也不影响寻路/刷怪, 只是不会自动处理AFK弹窗)."
-        )
     except Exception as e:
         print(f"⚠️ 打开florr-auto-afk失败(不影响主程序): {e}")
+        return
+
+    print(f"🪟 已在后台打开florr-auto-afk, 确认它开始检测(最多等{_START_TIMEOUT_SECONDS}秒)...")
+    if _wait_for_segment_started(start_offset):
+        print("✅ AFK弹窗自动处理已开启")
+    else:
+        print(
+            "⚠️ 没能确认florr-auto-afk已开始检测(autoStart没生效, 或者初始化特别慢). "
+            "需要的话去它窗口里手动点\"run\"(不点也不影响寻路/刷怪, 只是AFK弹窗不会自动处理)."
+        )

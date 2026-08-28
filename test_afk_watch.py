@@ -304,6 +304,8 @@ def test_ensure_florr_auto_afk_running_opens_directly_when_already_installed(mon
     monkeypatch.setattr(afk_watch.sys, "platform", "win32")
     with patch("afk_watch.os.path.isfile", return_value=True), \
          patch("afk_watch._is_florr_auto_afk_running", return_value=False), \
+         patch("afk_watch._write_afk_config"), \
+         patch("afk_watch._wait_for_segment_started", return_value=True), \
          patch("builtins.input") as mock_input, \
          patch("afk_watch.subprocess.Popen") as mock_popen:
         afk_watch.ensure_florr_auto_afk_running()
@@ -331,6 +333,8 @@ def test_ensure_florr_auto_afk_running_downloads_then_opens_when_confirmed(monke
          patch("afk_watch._is_florr_auto_afk_running", return_value=False), \
          patch("afk_watch._prompt_download_confirm", return_value=True), \
          patch("afk_watch._download_and_extract", return_value=True) as mock_download, \
+         patch("afk_watch._write_afk_config"), \
+         patch("afk_watch._wait_for_segment_started", return_value=True), \
          patch("afk_watch.subprocess.Popen") as mock_popen:
         afk_watch.ensure_florr_auto_afk_running()
     mock_download.assert_called_once()
@@ -352,8 +356,11 @@ def test_ensure_florr_auto_afk_running_does_not_crash_when_popen_raises(monkeypa
     monkeypatch.setattr(afk_watch.sys, "platform", "win32")
     with patch("afk_watch.os.path.isfile", return_value=True), \
          patch("afk_watch._is_florr_auto_afk_running", return_value=False), \
+         patch("afk_watch._write_afk_config"), \
+         patch("afk_watch._wait_for_segment_started") as mock_wait, \
          patch("afk_watch.subprocess.Popen", side_effect=OSError("no permission")):
         afk_watch.ensure_florr_auto_afk_running()  # 不该抛异常
+    mock_wait.assert_not_called()  # 压根没启动成功, 没什么可等的
 
 
 def _fake_tasklist_result(stdout):
@@ -576,3 +583,44 @@ def test_wait_for_segment_started_does_not_touch_poll_module_state(tmp_path, mon
 
     assert afk_watch._last_offset == 0
     assert afk_watch._initialized is False
+
+
+def test_ensure_florr_auto_afk_running_marks_log_offset_before_launching(monkeypatch):
+    # 划线必须在Popen之前: 它启动瞬间就写marker, 划线晚了那条就落在线左边, 永远等不到.
+    calls = []
+    monkeypatch.setattr(afk_watch.sys, "platform", "win32")
+    with patch("afk_watch.os.path.isfile", return_value=True), \
+         patch("afk_watch._is_florr_auto_afk_running", return_value=False), \
+         patch("afk_watch._write_afk_config", side_effect=lambda: calls.append("config")), \
+         patch("afk_watch._current_log_size", side_effect=lambda: (calls.append("mark"), 123)[1]), \
+         patch("afk_watch.subprocess.Popen", side_effect=lambda *a, **k: calls.append("popen")), \
+         patch("afk_watch._wait_for_segment_started", return_value=True) as mock_wait:
+        afk_watch.ensure_florr_auto_afk_running()
+    assert calls == ["config", "mark", "popen"]
+    mock_wait.assert_called_once_with(123)
+
+
+def test_ensure_florr_auto_afk_running_reports_success_without_asking_for_a_click(monkeypatch, capsys):
+    monkeypatch.setattr(afk_watch.sys, "platform", "win32")
+    with patch("afk_watch.os.path.isfile", return_value=True), \
+         patch("afk_watch._is_florr_auto_afk_running", return_value=False), \
+         patch("afk_watch._write_afk_config"), \
+         patch("afk_watch._current_log_size", return_value=0), \
+         patch("afk_watch.subprocess.Popen"), \
+         patch("afk_watch._wait_for_segment_started", return_value=True):
+        afk_watch.ensure_florr_auto_afk_running()
+    out = capsys.readouterr().out
+    assert "已开启" in out
+    assert "run" not in out  # 确认成功时不再要求用户点run
+
+
+def test_ensure_florr_auto_afk_running_falls_back_to_manual_hint_on_timeout(monkeypatch, capsys):
+    monkeypatch.setattr(afk_watch.sys, "platform", "win32")
+    with patch("afk_watch.os.path.isfile", return_value=True), \
+         patch("afk_watch._is_florr_auto_afk_running", return_value=False), \
+         patch("afk_watch._write_afk_config"), \
+         patch("afk_watch._current_log_size", return_value=0), \
+         patch("afk_watch.subprocess.Popen"), \
+         patch("afk_watch._wait_for_segment_started", return_value=False):
+        afk_watch.ensure_florr_auto_afk_running()  # 不该抛异常
+    assert "run" in capsys.readouterr().out
