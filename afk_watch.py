@@ -26,7 +26,10 @@ import zipfile
 
 import certifi
 
-# florr-auto-afk发行包解压后自带这个顶层目录名, 直接沿用不改名.
+# 这个目录名是我们自己挑的, 不用跟谁对齐: release zip里没有顶层目录(它的workflow
+# 用`Compress-Archive -Path ./dist/segment/*`打的包), 所以_download_and_extract()
+# 是解压到这个目录里, 而不是解压到它旁边 —— 别看着名字像"沿用发行包的目录名"就把
+# extractall()改回_INSTALL_ROOT, 那会把4500个文件直接铺在main.py旁边.
 _INSTALL_DIR_NAME = "florr-auto-afk-v1.1.1-auto"
 # 实测过release zip内部结构确认的真实可执行文件名 —— 不是"florr-auto-afk.exe"
 # 这种直觉猜测的名字.
@@ -242,19 +245,25 @@ _DEFAULT_CONFIG = {
     },
 }
 
-# 我们依赖的配置键 —— 只覆盖这几个, config.json里其余键(用户自己调的mouseSpeed
+# 我们依赖的配置键 —— 只覆盖这三个, config.json里其余键(用户自己调的mouseSpeed
 # 之类)原样保留. autoStart是fork里加的开关(见
-# docs/superpowers/specs/2026-08-28-afk-autostart-design.md第一部分), 其余四个的
+# docs/superpowers/specs/2026-08-28-afk-autostart-design.md第一部分), 另两个的
 # 理由见 docs/superpowers/specs/2026-08-11-afk-check-coexistence-design.md.
+#
+# 曾经还强制过advanced里的两个键, 都撤了, 别再加回来:
+# - verbose: 加它的理由是"保证事件真的落进latest.log", 而这是错的 ——
+#   log_ret("Found AFK window", ...)的save默认True, 无条件落盘; verbose只管那些
+#   硬编码save=False的控制台行(2026-08-11那份design第32行早就写明了). 强制它没有
+#   任何收益, 纯粹白覆盖用户自己的选择.
+# - skipUpdate: 强制成True会把上游唯一的模型自修复永久关掉. run_segment
+#   (segment.py:158-165)在YOLO模型加载失败时会删掉models/afk-seg.pt、afk-det.pt
+#   和models/version, 就等着下次update_models()重新下回来, 而那次重下只由
+#   advanced.skipUpdate一个键把门(segment.py:382-383) —— 关了它, 模型一坏就永久坏.
 _REQUIRED_CONFIG = {
     "runs": {
         "autoStart": True,              # 启动即开始检测, 不用手点"run"
         "autoTakeOverWhenIdle": False,  # 我们一直在动鼠标, 它的idle门永远不触发
         "moveAfterAFK": False,          # 它解完题的WASD乱走会跟我们的移动打架
-    },
-    "advanced": {
-        "verbose": True,                # 保证事件真的落进latest.log
-        "skipUpdate": True,             # 免得启动时联网查模型更新, 拖时间/失败
     },
 }
 
@@ -302,8 +311,9 @@ def _write_afk_config():
             # 并且把原文件挪成.bak让他能捞回来 —— 不能静悄悄地删人东西. 最可能的
             # 触发不是JSON语法坏了, 而是中文Windows上有人拿记事本按ANSI(GBK)存过
             # 它, 我们按utf-8读直接UnicodeDecodeError.
+            backup_note = _backup_broken_config(config_path)
             print(
-                f"⚠️ florr-auto-afk原有的config.json读不出来({_backup_broken_config(config_path)}), "
+                f"⚠️ florr-auto-afk原有的config.json读不出来({backup_note}), "
                 f"已按发行版默认值重建(自定义设置不会生效): {e}"
             )
 

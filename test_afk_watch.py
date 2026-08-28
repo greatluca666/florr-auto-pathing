@@ -153,7 +153,7 @@ def test_latest_log_path_is_computed_from_install_dir():
     assert afk_watch.LATEST_LOG_PATH == os.path.join(afk_watch._INSTALL_DIR, "latest.log")
 
 
-def test_install_dir_is_named_after_the_release_folder():
+def test_install_dir_is_our_own_chosen_folder_name():
     assert afk_watch._INSTALL_DIR == os.path.join(
         afk_watch._INSTALL_ROOT, "florr-auto-afk-v1.1.1-auto"
     )
@@ -427,12 +427,31 @@ def test_write_afk_config_overwrites_our_keys_and_keeps_the_rest(tmp_path, monke
     assert config["runs"]["autoStart"] is True
     assert config["runs"]["autoTakeOverWhenIdle"] is False
     assert config["runs"]["moveAfterAFK"] is False
-    assert config["advanced"]["verbose"] is True
-    assert config["advanced"]["skipUpdate"] is True
-    # 用户自己调过的键不能被冲掉 —— 我们只负责自己依赖的那几个.
+    # 同一个section里用户自己调过的键不能被冲掉 —— 我们只负责自己依赖的那几个.
     assert config["runs"]["idleTimeThreshold"] == 10
-    assert config["advanced"]["mouseSpeed"] == 250
+    # 我们压根不碰的section原样留着(连verbose这种我们曾经强制过的键也一样).
+    assert config["advanced"] == {"verbose": False, "mouseSpeed": 250}
     assert config["yoloConfig"] == {"segModel": "./models/afk-seg.pt"}
+
+
+def test_write_afk_config_leaves_advanced_section_entirely_to_the_user(tmp_path, monkeypatch):
+    # 曾经强制过advanced.verbose和advanced.skipUpdate, 两个都撤了, 别再加回来:
+    # - verbose只管那些硬编码save=False的控制台行, 我们等的
+    #   log_ret("Found AFK window", ...)默认save=True无条件落盘, 强制它没有任何收益,
+    #   纯粹白覆盖用户自己的选择(见2026-08-11那份design)
+    # - skipUpdate强制成True会把上游唯一的模型自修复永久关掉: run_segment
+    #   (segment.py:158-165)在模型加载失败时删掉models/afk-seg.pt、afk-det.pt和
+    #   models/version, 就等着下次update_models()重下, 而那次重下只由这个键把门
+    install_dir = _patch_install_paths(monkeypatch, tmp_path)
+    install_dir.mkdir()
+    (install_dir / "config.json").write_text(json.dumps({
+        "advanced": {"verbose": False, "skipUpdate": False, "mouseSpeed": 250},
+    }))
+
+    assert afk_watch._write_afk_config() is True
+
+    advanced = _read_json(install_dir / "config.json")["advanced"]
+    assert advanced == {"verbose": False, "skipUpdate": False, "mouseSpeed": 250}
 
 
 def test_write_afk_config_rebuilds_from_shipped_defaults_when_file_missing(tmp_path, monkeypatch):
@@ -443,11 +462,11 @@ def test_write_afk_config_rebuilds_from_shipped_defaults_when_file_missing(tmp_p
 
     config = _read_json(install_dir / "config.json")
     assert config["runs"]["autoStart"] is True
-    assert config["advanced"]["skipUpdate"] is True
     # 重建出来的必须是"发行版默认配置 + 我们那几个键", 不能是只含我们那几个键的
     # 最小config: 上游get_config()对缺键没有任何默认值兜底, 少一个segment.exe就
     # KeyError死在启动路上. 断言几个我们压根不覆盖的键 —— 它们只可能来自默认配置.
     assert config["advanced"]["mouseSpeed"] == 100
+    assert config["advanced"]["skipUpdate"] is False  # 发行版默认值, 我们不动它
     assert config["gui"]["theme"] == "auto"
     assert config["yoloConfig"]["segModel"] == "./models/afk-seg.pt"
     assert config["advanced"]["windowSizeRatio"] == [0.787, 1]

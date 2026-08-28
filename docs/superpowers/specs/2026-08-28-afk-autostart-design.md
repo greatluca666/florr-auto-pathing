@@ -74,10 +74,8 @@ v1.1.1那版workflow已经确认可用:`on: push: branches: [main]`、`permissio
 | `runs.autoStart` | `true` | 本次新增的开关,免手点run |
 | `runs.autoTakeOverWhenIdle` | `false` | 我们一直在动鼠标,它的idle门永远不会触发(见2026-08-11那份design) |
 | `runs.moveAfterAFK` | `false` | 它解完题的WASD乱走会跟我们的移动/防卡死打架 |
-| `advanced.verbose` | `true` | 保证事件真的写进`latest.log` |
-| `advanced.skipUpdate` | `true` | 免得启动时联网查模型更新,拖时间/失败 |
 
-文件不存在或JSON坏了:重新写一份只含上面这些键的最小config(它的`get_config()`对其余键有默认值兜底)。写失败只打印警告,继续往下走——跟这块一贯的"AFK是可选增强,不阻塞主程序"一致。
+文件不存在或读不出来:以**发行包自带的那份`config.json`原文**(代码里的`_DEFAULT_CONFIG`,取自`git show v1.1.1:config.json`)为底重建,再把上表覆盖上去——不能只写上表这几个键,它的`get_config()`是裸的`load(open("./config.json"))`,对缺键没有任何默认值兜底,少一个键`segment.exe`启动就`KeyError`。原来那份读不出来的文件先改名成`config.json.bak`留着,不直接冲掉。写失败只打印警告,继续往下走——跟这块一贯的"AFK是可选增强,不阻塞主程序"一致。
 
 ### 3. `_wait_for_segment_started()`(新增):确认它真的进入检测
 
@@ -110,7 +108,7 @@ v1.1.1那版workflow已经确认可用:`on: push: branches: [main]`、`permissio
 沿用[test_afk_watch.py](../../../test_afk_watch.py)现有套路:全部mock掉`subprocess`/网络,Windows专属分支用`monkeypatch.setattr(afk_watch.sys, "platform", "win32")`,文件系统用`tmp_path`。
 
 - `_download_and_extract()`:用**无顶层目录**的假zip(跟官方一致),解压后`_EXE_PATH`真的存在;zip结构不对时返回False
-- `_write_afk_config()`:已有config的其它键(`mouseSpeed`等)保留、我们那5个键被覆盖;文件缺失/JSON损坏时能重建;写失败不抛
+- `_write_afk_config()`:已有config的其它键(`mouseSpeed`等)保留、我们那3个键被覆盖;文件缺失/读不出来时以发行包自带的`config.json`为底重建(断言几个我们不覆盖的键,如`advanced.mouseSpeed`/`gui.theme`/`yoloConfig.segModel`),读不出来的原文件被留成`config.json.bak`;写失败不抛
 - `_wait_for_segment_started()`:新增行里有marker → True;**只有旧行**有marker → 超时False(防跨次运行误判);带句号那个变体也能命中;超时不抛
 - `ensure_florr_auto_afk_running()`:装了 → 写config → Popen → 等marker,顺序对;验证超时时打印手点提示但不抛
 
