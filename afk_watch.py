@@ -155,7 +155,19 @@ def _download_and_extract():
             print()  # 结束下载进度那行, 换行
 
         with zipfile.ZipFile(tmp_path) as zf:
-            zf.extractall(_INSTALL_ROOT)
+            # 解压到_INSTALL_DIR而不是_INSTALL_ROOT: 官方release zip没有顶层
+            # 目录(它的workflow用`Compress-Archive -Path ./dist/segment/*`),
+            # 解压到ROOT会把4500个文件直接铺在main.py旁边, _EXE_PATH永远不存在.
+            zf.extractall(_INSTALL_DIR)
+
+        if not os.path.isfile(_EXE_PATH):
+            # 上游换了打包布局(比如哪天套了层顶层目录)时不能假装装好了 —— 这里
+            # 报出来, 比拖到Popen那步炸掉容易看懂.
+            print(
+                f"⚠️ florr-auto-afk解压完没找到{_EXE_NAME}(zip结构跟预期不符), "
+                f"之后AFK弹窗不会自动处理: {_INSTALL_DIR}"
+            )
+            return False
 
         print(f"✅ florr-auto-afk已下载解压到 {_INSTALL_DIR}")
         return True

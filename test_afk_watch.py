@@ -194,13 +194,38 @@ def test_prompt_download_confirm_prints_url_size_and_destination(monkeypatch):
     assert afk_watch._INSTALL_DIR in captured_prompt["text"]
 
 
+def _patch_install_paths(monkeypatch, tmp_path):
+    """把三个安装路径常量都指到tmp_path下 —— _EXE_PATH也要patch, 不然
+    _download_and_extract()新增的"解压完exe在不在"检查会去看真实机器上的路径."""
+    install_dir = tmp_path / "florr-auto-afk-v1.1.1-auto"
+    monkeypatch.setattr(afk_watch, "_INSTALL_ROOT", str(tmp_path))
+    monkeypatch.setattr(afk_watch, "_INSTALL_DIR", str(install_dir))
+    monkeypatch.setattr(afk_watch, "_EXE_PATH", str(install_dir / "segment.exe"))
+    return install_dir
+
+
 def _fake_zip_bytes():
-    """造一个真实的、内存里的zip文件内容, 里面有一个占位文件 —— 用来让
-    zipfile.ZipFile(真实的模块, 不mock)在测试里真的能解压出东西, 断言解压
-    后的文件确实落在了预期目录, 而不是只断言"函数被调用过"这种空心测试."""
+    """跟官方release zip一致的结构: 条目直接在根, 没有顶层目录(它v1.1.1的
+    workflow用`Compress-Archive -Path ./dist/segment/*`打的包). 这个fixture
+    早先假设有顶层目录, 正好把"解压到_INSTALL_ROOT会把4500个文件铺在main.py
+    旁边"这个bug盖住了.
+
+    真zip里的分隔符是反斜杠(Compress-Archive的产物): zipfile在Windows上会把它
+    当目录分隔符正确展开(os.sep就是反斜杠), 在POSIX上则会变成一个带反斜杠的平
+    文件名. 测试用正斜杠, 断言的是"没有顶层目录"这个真正要紧的性质."""
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as zf:
-        zf.writestr("florr-auto-afk-v1.1.1-auto/segment.exe", b"fake exe content")
+        zf.writestr("segment.exe", b"fake exe content")
+        zf.writestr("models/afk-det.pt", b"fake model")
+    return buf.getvalue()
+
+
+def _fake_zip_without_exe_bytes():
+    """结构对但少了segment.exe —— 上游改了打包布局时该被当成失败, 不能返回True
+    让调用方以为装好了."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("models/afk-det.pt", b"fake model")
     return buf.getvalue()
 
 
@@ -216,10 +241,7 @@ def _fake_response(body):
 
 
 def test_download_and_extract_success(tmp_path, monkeypatch):
-    monkeypatch.setattr(afk_watch, "_INSTALL_ROOT", str(tmp_path))
-    monkeypatch.setattr(
-        afk_watch, "_INSTALL_DIR", str(tmp_path / "florr-auto-afk-v1.1.1-auto")
-    )
+    _patch_install_paths(monkeypatch, tmp_path)
 
     with patch(
         "afk_watch.urllib.request.urlopen", return_value=_fake_response(_fake_zip_bytes())
@@ -234,10 +256,7 @@ def test_download_and_extract_success(tmp_path, monkeypatch):
 
 
 def test_download_and_extract_returns_false_and_cleans_up_on_network_error(tmp_path, monkeypatch):
-    monkeypatch.setattr(afk_watch, "_INSTALL_ROOT", str(tmp_path))
-    monkeypatch.setattr(
-        afk_watch, "_INSTALL_DIR", str(tmp_path / "florr-auto-afk-v1.1.1-auto")
-    )
+    _patch_install_paths(monkeypatch, tmp_path)
 
     with patch("afk_watch.urllib.request.urlopen", side_effect=OSError("network unreachable")):
         result = afk_watch._download_and_extract()
@@ -247,10 +266,7 @@ def test_download_and_extract_returns_false_and_cleans_up_on_network_error(tmp_p
 
 
 def test_download_and_extract_returns_false_on_corrupt_zip(tmp_path, monkeypatch):
-    monkeypatch.setattr(afk_watch, "_INSTALL_ROOT", str(tmp_path))
-    monkeypatch.setattr(
-        afk_watch, "_INSTALL_DIR", str(tmp_path / "florr-auto-afk-v1.1.1-auto")
-    )
+    _patch_install_paths(monkeypatch, tmp_path)
 
     with patch(
         "afk_watch.urllib.request.urlopen",
@@ -260,6 +276,16 @@ def test_download_and_extract_returns_false_on_corrupt_zip(tmp_path, monkeypatch
 
     assert result is False
     assert not (tmp_path / "florr-auto-afk-v1.1.1-auto.zip.download").exists()
+
+
+def test_download_and_extract_returns_false_when_zip_has_no_exe(tmp_path, monkeypatch):
+    _patch_install_paths(monkeypatch, tmp_path)
+    with patch(
+        "afk_watch.urllib.request.urlopen",
+        return_value=_fake_response(_fake_zip_without_exe_bytes()),
+    ):
+        result = afk_watch._download_and_extract()
+    assert result is False
 
 
 def test_ensure_florr_auto_afk_running_skips_entirely_on_non_windows(monkeypatch):
