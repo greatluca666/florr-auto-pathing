@@ -31,15 +31,18 @@ def _default_prompt_retry(parent):
     )
 
 
-def ensure_chrome_ready(parent, *, confirm=_default_confirm, prompt_retry=_default_prompt_retry):
+def ensure_chrome_ready(parent, *, confirm=_default_confirm, prompt_retry=_default_prompt_retry) -> None:
     """确保专用 Chrome 就绪; 用户取消则抛 ChromeSetupCancelled."""
+    # 一次性检查就绪状态，跳过整个流程
     if cdp_bridge.is_dedicated_chrome_ready():
         return
     if not confirm(parent):
         raise ChromeSetupCancelled()
+    # 仅启动一次，不在重试循环中重复启动
     cdp_bridge.quit_and_launch_chrome()
     while True:
         if cdp_bridge.wait_for_florr_tab(15) is not None:
             return
+        # 等待失败时只重试等待，不重新启动，用户手动处理
         if not prompt_retry(parent):
             raise ChromeSetupCancelled()
