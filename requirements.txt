@@ -9,7 +9,7 @@ torch<2.3
 ultralytics            # YOLO inference for enemy_detect.py
 websocket-client       # cdp_bridge.py's Chrome DevTools Protocol client
 certifi                # server_lookup.py's explicit SSLContext (needed on Windows, see memory)
-customtkinter          # gui_app.py 的深色 GUI(纯 Python, 带 darkdetect/packaging)
+customtkinter          # gui_app.py dark-theme GUI (pure Python; pulls darkdetect, packaging)
 
 # --- packaging only, not needed to just run main.py ---
 pyinstaller
