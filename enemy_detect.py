@@ -221,6 +221,25 @@ SCREEN_CENTER = (utils.SCREEN_WIDTH / 2, utils.SCREEN_HEIGHT / 2)  # 屏幕中�
                               # 同一份SCREEN_WIDTH/SCREEN_HEIGHT, 不再自己独立写死一份.
 
 
+def pick_mythic_target(detections, center=SCREEN_CENTER, latched=False,
+                       engage_px=450, release_px=600, chase_min_conf=None):
+    """挑这一 tick 要处理的那只 Mythic. 搜索半径: 已锁定用 release_px (放宽, 迟滞),
+    没锁定用 engage_px. 半径内没有合格 Mythic → None. 有 → 按
+    (MYTHIC_TARGET_RANK, 离屏幕中心近) 取最高."""
+    radius = release_px if latched else engage_px
+    cx, cy = center
+
+    def dist(d):
+        px, py = d["screen_pos"]
+        return math.hypot(px - cx, py - cy)
+
+    in_range = [d for d in mythic_candidates(detections, chase_min_conf=chase_min_conf)
+                if dist(d) <= radius]
+    if not in_range:
+        return None
+    return max(in_range, key=lambda d: (MYTHIC_TARGET_RANK[d["species"]], -dist(d)))
+
+
 def aim_mouse_target(target_pos, hold_px=None, center=SCREEN_CENTER, max_extend=None,
                      repel_positions=None, repel_px=None, repel_gain=1.6):
     """把目标的屏幕坐标换算成鼠标该移到的位置 —— 纯屏幕坐标系计算, 跟

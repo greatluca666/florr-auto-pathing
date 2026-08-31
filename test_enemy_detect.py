@@ -183,7 +183,7 @@ def test_flee_mouse_target_returns_center_when_forces_cancel():
 
 
 from enemy_detect import (
-    mythic_candidates,
+    mythic_candidates, pick_mythic_target,
     MYTHIC_KITE_SPECIES, MYTHIC_TARGET_RANK,
 )
 
@@ -231,6 +231,37 @@ def test_mythic_candidates_filters_rarity_species_and_conf():
 def test_mythic_candidates_empty_when_nothing_qualifies():
     assert mythic_candidates([]) == []
     assert mythic_candidates([_det("sandstorm", "Mythic", (10, 10))]) == []
+
+
+def test_pick_mythic_target_none_when_empty_or_out_of_radius():
+    assert pick_mythic_target([], center=(960, 540)) is None
+    far = [_det("beetle", "Mythic", (960 + 500, 540), conf=0.9)]  # 500px > 450 engage
+    assert pick_mythic_target(far, center=(960, 540), latched=False) is None
+
+
+def test_pick_mythic_target_uses_release_radius_when_latched():
+    d = [_det("beetle", "Mythic", (960 + 500, 540), conf=0.9)]     # 500px
+    assert pick_mythic_target(d, center=(960, 540), latched=False) is None       # >450
+    got = pick_mythic_target(d, center=(960, 540), latched=True)                 # <600
+    assert got is not None and got["species"] == "beetle"
+
+
+def test_pick_mythic_target_prefers_higher_rank():
+    dets = [
+        _det("cactus", "Mythic", (1000, 540), conf=0.9),   # rank 1, closer
+        _det("beetle", "Mythic", (1100, 540), conf=0.9),   # rank 5, farther
+    ]
+    got = pick_mythic_target(dets, center=(960, 540))
+    assert got["species"] == "beetle"
+
+
+def test_pick_mythic_target_nearest_breaks_a_rank_tie():
+    dets = [
+        _det("beetle", "Mythic", (960 + 300, 540), conf=0.9),  # 300px
+        _det("beetle", "Mythic", (960 + 120, 540), conf=0.9),  # 120px — nearer
+    ]
+    got = pick_mythic_target(dets, center=(960, 540))
+    assert got["screen_pos"] == (960 + 120, 540)
 
 
 def test_select_action_flees_when_avoid_mob_in_range():
