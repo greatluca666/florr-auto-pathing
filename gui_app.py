@@ -177,11 +177,74 @@ class App(ctk.CTk):
         self.log_box.configure(state="disabled")
 
     def _on_start_stop(self):
+        if self.proc and self.proc.poll() is None:
+            self._stop_worker()
+        else:
+            self._start_worker()
+
+    def _start_worker(self):
         vals = self._current_values()
         if vals["location"] is None or vals["area"] is None:
             self._log_line("⚠️ 请先在地图上点目标点并框出刷怪区\n")
             return
-        self._log_line(f"(Task 9 尚未接进程) 将用配置: {vals}\n")
+        try:
+            short_limit = int(vals["short_limit"])
+            duration = int(vals["duration"])
+            assert short_limit >= 1 and duration > 0
+        except (ValueError, AssertionError):
+            self._log_line("⚠️ 时长 / 短局阈值必须是正整数\n")
+            return
+
+        cfg = build_worker_config(**vals)
+        app_config.save_config(cfg)
+        self._cfg = cfg
+
+        kwargs = {}
+        if _IS_WINDOWS:
+            # 独立进程组: 这样"停止"发的 CTRL_BREAK 只打到 worker, 不会连带把 GUI 也中断
+            kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+        else:
+            kwargs["env"] = {**os.environ, "PYTHONUNBUFFERED": "1"}
+
+        self.proc = subprocess.Popen(
+            worker_command(), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, bufsize=1, **kwargs)
+        self._log_line("—— worker 已启动 ——\n")
+        self.start_btn.configure(text="■ 停止")
+        self._reader = threading.Thread(target=self._pump_log, args=(self.proc,),
+                                        daemon=True)
+        self._reader.start()
+
+    def _pump_log(self, proc):
+        for line in proc.stdout:
+            self.after(0, self._log_line, line)
+            self.after(0, lambda l=line: self.status_label.configure(
+                text="状态：" + l.strip()[:60]) if l.strip() else None)
+        code = proc.wait()
+        self.after(0, self._on_worker_exit, code)
+
+    def _stop_worker(self):
+        if not self.proc:
+            return
+        try:
+            if _IS_WINDOWS:
+                self.proc.send_signal(signal.CTRL_BREAK_EVENT)
+            else:
+                self.proc.terminate()
+        except Exception as e:
+            self._log_line(f"发送停止信号失败: {e}\n")
+        self.after(3000, self._force_kill_if_alive)
+
+    def _force_kill_if_alive(self):
+        if self.proc and self.proc.poll() is None:
+            self.proc.kill()
+            self._log_line("—— worker 未响应, 已强制结束 ——\n")
+
+    def _on_worker_exit(self, code):
+        self._log_line(f"—— worker 结束 (退出码 {code}) ——\n")
+        self.status_label.configure(text="状态：未运行")
+        self.start_btn.configure(text="▶ 开始")
+        self.proc = None
 
     def _show_page(self, name):
         pass  # Task 8: 控制台是唯一可用页, 其余灰置
