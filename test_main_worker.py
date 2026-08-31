@@ -175,3 +175,11 @@ def test_update_mythic_latch_counts_misses_then_releases():
     assert (latched, misses) == (True, 2)
     latched, misses = main._update_mythic_latch(latched, misses, False, 3)
     assert (latched, misses) == (False, 0)
+
+
+def test_main_exposes_mythic_wiring():
+    assert hasattr(main, "_drive_and_check_stall")
+    assert isinstance(main.MYTHIC_LATCH_ENABLED, bool)
+    for name in ("MYTHIC_ENGAGE_PX", "MYTHIC_RELEASE_PX", "MYTHIC_RELEASE_MISSES",
+                 "MYTHIC_STRAFE_RADIUS", "MYTHIC_CACTUS_HOLD_PX"):
+        assert isinstance(getattr(main, name), (int, float))

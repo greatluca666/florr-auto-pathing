@@ -24,6 +24,12 @@ ENEMY_SCAN_INTERVAL = 0.12  # 秒, YOLO扫描节流间隔. 这是"决策新鲜�
 AVOID_TRIGGER_PX = 400      # 屏幕像素半径, AVOID怪进入此半径触发逃离
 CAUTIOUS_HOLD_PX = 250      # 屏幕像素, CAUTIOUS怪保持的最小距离(不继续贴近)
 CHASE_MIN_CONF = 0.55      # 追击目标的最低YOLO置信度(幻影框过滤; 危险怪不受此限)
+MYTHIC_LATCH_ENABLED  = True   # 贴脸有 Mythic 怪 → 锁定优先清掉再继续刷 (总开关)
+MYTHIC_ENGAGE_PX      = 450    # Mythic 怪进此半径 → 锁定
+MYTHIC_RELEASE_PX     = 600    # 已锁定后, Mythic 出此半径才算脱离 (迟滞)
+MYTHIC_RELEASE_MISSES = 3      # 连续多少次扫描没有合格 Mythic 才解锁
+MYTHIC_STRAFE_RADIUS  = 180    # 甲虫/火蚁: 环绕它转圈的目标半径 (px)
+MYTHIC_CACTUS_HOLD_PX = 220    # 仙人掌: 保持的距离 (px)
 # 以上数值是没实机测过的占位默认值, 实机跑一遍后再按观察到的效果调.
 # ================================================
 
@@ -402,6 +408,28 @@ def _update_mythic_latch(latched, misses, has_target, release_misses):
     return True, misses
 
 
+def _drive_and_check_stall(mouse_target, current_pos, chase_pos_history, state, message):
+    """chase / flee / 清青怪 三条分支共用的"卡住检测 + 出手"收尾.
+
+    mouse_target == enemy_detect.SCREEN_CENTER 是"刻意停在这" (保持距离 / 合力抵消),
+    不算移动 —— 这种 tick 不往 history 塞样本 (留给下一个真在动的 tick). 其余情况:
+    攒近期 minimap 坐标, 时间窗内净位移不足 → execute_anti_stuck() 接管这一 tick、
+    返回 "stuck"; 否则 overlay 更新 + moveTo + sleep, 返回 "moved"."""
+    if mouse_target != enemy_detect.SCREEN_CENTER:
+        chase_pos_history.append(current_pos)
+        if len(chase_pos_history) > enemy_detect.CHASE_STALL_WINDOW:
+            chase_pos_history.pop(0)
+        if enemy_detect.chase_is_stalled(chase_pos_history):
+            overlay.update(state="卡住", message=f"{message}途中卡住, 脱困中")
+            execute_anti_stuck()
+            chase_pos_history.clear()
+            return "stuck"
+    overlay.update(state=state, pos=current_pos, message=message)
+    pyautogui.moveTo(clamp_to_screen(*mouse_target))
+    time.sleep(0.05)
+    return "moved"
+
+
 def auto_farming(farming_area, duration=300, *, enemy_ai_enabled=True):
     """自动刷怪逻辑（依赖一直攻击按钮）—— 在区域内连续走动, 不停下站桩.
 
@@ -428,6 +456,8 @@ def auto_farming(farming_area, duration=300, *, enemy_ai_enabled=True):
     enemy_decision = ("wander", None)
     detections = []
     chase_pos_history = []   # 近期minimap坐标, 供enemy_detect.chase_is_stalled()看净位移
+    mythic_latch = False
+    mythic_misses = 0
 
     while time.time() - start_time < duration:
         if afk_watch.poll_afk_pause():
@@ -472,46 +502,43 @@ def auto_farming(farming_area, duration=300, *, enemy_ai_enabled=True):
             enemy_ai_enabled, now, last_enemy_scan, enemy_decision, detections)
         enemy_action = enemy_decision[0]
 
+        # 1) flee 最优先 —— 且立刻放掉 Mythic 锁定 (躲优先, 不为打 Mythic 送死).
         if enemy_action == "flee":
-            avoid_positions = enemy_decision[1]
-            mouse_target = enemy_detect.flee_mouse_target(avoid_positions)
-        elif enemy_action == "chase":
+            mythic_latch, mythic_misses = False, 0
+            mouse_target = enemy_detect.flee_mouse_target(enemy_decision[1])
+            _drive_and_check_stall(mouse_target, current_pos, chase_pos_history,
+                                   "规避中", "附近有危险稀有怪, 拉开距离")
+            continue
+
+        # 2) Mythic 近身锁定 —— flee 之外, 贴脸有合格 Mythic 就锁定按物种走位磨掉.
+        if MYTHIC_LATCH_ENABLED and enemy_ai_enabled:
+            mtarget = enemy_detect.pick_mythic_target(
+                detections, enemy_detect.SCREEN_CENTER, mythic_latch,
+                MYTHIC_ENGAGE_PX, MYTHIC_RELEASE_PX, CHASE_MIN_CONF)
+            mythic_latch, mythic_misses = _update_mythic_latch(
+                mythic_latch, mythic_misses, mtarget is not None, MYTHIC_RELEASE_MISSES)
+            if mythic_latch and mtarget is not None:
+                repel = enemy_decision[3] if enemy_action == "chase" else []
+                mouse_target = enemy_detect.mythic_move_target(
+                    mtarget, enemy_detect.SCREEN_CENTER,
+                    strafe_radius=MYTHIC_STRAFE_RADIUS,
+                    cactus_hold_px=MYTHIC_CACTUS_HOLD_PX,
+                    repel_positions=repel)
+                policy = enemy_detect.MYTHIC_KITE_SPECIES[mtarget["species"]]
+                _drive_and_check_stall(mouse_target, current_pos, chase_pos_history,
+                                       "清青怪", f"遛 {mtarget['species']}({policy})")
+                continue
+
+        # 3) 普通追击 —— 不 fleeing 也没锁定 Mythic.
+        if enemy_action == "chase":
             target, hold_px, repel = enemy_decision[1], enemy_decision[2], enemy_decision[3]
             mouse_target = enemy_detect.aim_mouse_target(
                 target["screen_pos"], hold_px=hold_px, repel_positions=repel)
-
-        if enemy_action in ("flee", "chase"):
-            # wander分支靠move_to_position自带的卡住检测+execute_anti_stuck()脱困,
-            # chase/flee这两个分支是每tick直接moveTo(), 没有等价机制 —— 补上同款
-            # 卡住判定(攒一段近期minimap坐标, 看时间窗内净位移), 卡住够久就让
-            # execute_anti_stuck()接管这一tick, 不再执行下面的追击/逃离moveTo().
-            # 注意: mouse_target == SCREEN_CENTER时是aim_mouse_target/flee_mouse_target
-            # 自己主动选择"停在这"(CAUTIOUS档保持距离/规避合力抵消没有明确方向), 不是
-            # 卡住 —— 这种tick完全不往history里塞样本(留给下一个真正在动的tick接着算),
-            # 否则会把"刻意停"当成净位移不足、误判成卡住, 进而脱困把玩家怼向它本该
-            # 保持距离的危险目标。
-            if mouse_target != enemy_detect.SCREEN_CENTER:
-                chase_pos_history.append(current_pos)
-                if len(chase_pos_history) > enemy_detect.CHASE_STALL_WINDOW:
-                    chase_pos_history.pop(0)
-                if enemy_detect.chase_is_stalled(chase_pos_history):
-                    print("⚠️ 追击/规避途中卡住, 脱困一下...")
-                    overlay.update(state="卡住", message="追击/规避途中卡住, 脱困中")
-                    execute_anti_stuck()
-                    chase_pos_history.clear()
-                    continue
-
-            if enemy_action == "flee":
-                overlay.update(state="规避中", pos=current_pos, message="附近有危险稀有怪, 拉开距离")
-            else:
-                overlay.update(state="索敌中", pos=current_pos,
-                                message=f"追击 {target['species']}({target['rarity']})")
-            pyautogui.moveTo(clamp_to_screen(*mouse_target))
-            time.sleep(0.05)
+            _drive_and_check_stall(mouse_target, current_pos, chase_pos_history,
+                                   "索敌中", f"追击 {target['species']}({target['rarity']})")
             continue
 
-        # enemy_action == "wander": 没有可打/需规避的目标, 跟原来一样随机漫游.
-        # 清掉chase专属的卡住历史, 别让上一轮追击/规避的残留跨进漫游或下一轮追击.
+        # 4) enemy_action == "wander": 没有可打/需规避的目标, 随机漫游.
         chase_pos_history.clear()
         random_x, random_y = random_walkable_point(farming_area, binary_map)
 
