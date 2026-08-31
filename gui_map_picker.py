@@ -48,6 +48,18 @@ def _fit_scale(canvas_w, canvas_h, img_w, img_h):
     return min(canvas_w / img_w, canvas_h / img_h)
 
 
+def anchored_pan(old_view, cursor_x, cursor_y, new_s, canvas_w, canvas_h):
+    """滚轮缩放时, 让指针 (cursor_x, cursor_y) 下的那个图像点在缩放后仍落在指针处.
+    返回叠加在"居中偏移"之上的平移量 (pan_x, pan_y)。
+    """
+    img_x = (cursor_x - old_view.offset_x) / old_view.s
+    img_y = (cursor_y - old_view.offset_y) / old_view.s
+    centered_x = (canvas_w - old_view.img_w * new_s) / 2
+    centered_y = (canvas_h - old_view.img_h * new_s) / 2
+    return (cursor_x - img_x * new_s - centered_x,
+            cursor_y - img_y * new_s - centered_y)
+
+
 class MapPicker(ctk.CTkFrame):
     def __init__(self, master, *, on_point_change=None, on_area_change=None, **kw):
         super().__init__(master, **kw)
@@ -56,6 +68,7 @@ class MapPicker(ctk.CTkFrame):
         self._pil = None
         self._tk_img = None
         self._zoom = 1
+        self._pan = (0.0, 0.0)      # 叠加在"居中偏移"之上的指针锚定平移(控件像素)
         self._point = None          # (ix, iy) 图像像素
         self._area = None           # [(ix,iy),(ix,iy)] 图像像素
         self._drag_start = None     # (wx, wy) 按下时的控件坐标
@@ -74,6 +87,7 @@ class MapPicker(ctk.CTkFrame):
     def load_map(self, name):
         self._pil = Image.open(f"{_MAP_DIR}/{name}.png").convert("RGB")
         self._zoom = 1
+        self._pan = (0.0, 0.0)
         self._redraw()
 
     def set_point(self, pt):
@@ -92,9 +106,9 @@ class MapPicker(ctk.CTkFrame):
         ch = max(self._canvas.winfo_height(), 1)
         iw, ih = self._pil.size
         s = _fit_scale(cw, ch, iw, ih) * self._zoom
-        # 缩放后若比控件大, 让图居中(zoom=1 时正好完全贴合)
-        offx = (cw - iw * s) / 2
-        offy = (ch - ih * s) / 2
+        # 缩放后若比控件大, 让图居中(zoom=1 时正好完全贴合); _pan 叠加指针锚定的平移
+        offx = (cw - iw * s) / 2 + self._pan[0]
+        offy = (ch - ih * s) / 2 + self._pan[1]
         return View(s=s, offset_x=offx, offset_y=offy, img_w=iw, img_h=ih)
 
     def _redraw(self):
@@ -154,5 +168,24 @@ class MapPicker(ctk.CTkFrame):
     def _on_wheel(self, e, direction=None):
         if direction is None:
             direction = 1 if getattr(e, "delta", 0) > 0 else -1
-        self._zoom = min(4, max(1, self._zoom + direction))
+        old = self._view()
+        new_zoom = min(4, max(1, self._zoom + direction))
+        if new_zoom == self._zoom:
+            return
+        if new_zoom == 1:
+            # zoom=1 时图正好贴合控件, 没有可平移的余量
+            self._zoom = 1
+            self._pan = (0.0, 0.0)
+            self._redraw()
+            return
+        if old is None:
+            self._zoom = new_zoom
+            self._redraw()
+            return
+        cw = max(self._canvas.winfo_width(), 1)
+        ch = max(self._canvas.winfo_height(), 1)
+        iw, ih = self._pil.size
+        self._zoom = new_zoom
+        s_new = _fit_scale(cw, ch, iw, ih) * self._zoom
+        self._pan = anchored_pan(old, e.x, e.y, s_new, cw, ch)
         self._redraw()
