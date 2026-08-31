@@ -1,4 +1,5 @@
 import inspect
+import io
 
 import pytest
 
@@ -76,3 +77,78 @@ def test_worker_graceful_exit_resets_keyboard_then_exits(monkeypatch):
     with pytest.raises(SystemExit):
         main._worker_graceful_exit(15, None)
     assert called == ["reset"]
+
+
+class _StubOverlay:
+    def update(self, **kw):
+        pass
+
+    def show_warning(self, *a, **k):
+        pass
+
+    def hide_warning(self):
+        pass
+
+
+def test_run_worker_does_not_start_florr_auto_afk(monkeypatch):
+    """florr-auto-afk 的生命周期归 GUI. worker 一旦自己调
+    ensure_florr_auto_afk_running(), 在 exe 缺失时它会走到 input() —— 而
+    console=False 打包出来的 worker stdin 是死的, 那一下直接把 worker 撂倒
+    (RuntimeError: lost sys.stdin), 第一轮都跑不到. 而且用户刚在界面上关掉
+    AFK 开关, worker 又会把它拉回来.
+    """
+    monkeypatch.setattr(main.cdp_bridge, "is_dedicated_chrome_ready", lambda: True)
+    monkeypatch.setattr(
+        main.afk_watch, "ensure_florr_auto_afk_running",
+        lambda *a, **k: pytest.fail("worker 不该自己去拉起 florr-auto-afk"))
+    monkeypatch.setattr(main, "create_overlay", lambda *a, **k: _StubOverlay())
+    monkeypatch.setattr(main, "overlay", None, raising=False)
+    monkeypatch.setattr(main, "_apply_worker_config", lambda cfg: {
+        "location": (1, 2),
+        "farming_area": [(0, 0), (9, 9)],
+        "farming_duration": 300,
+        "short_round_limit": 2,
+        "enemy_ai_enabled": False,
+        "auto_switch_server": False,
+    })
+    # 主循环体的第一个调用 —— 在这里掐断, 前面的 setup 已经全跑完了.
+    monkeypatch.setattr(main, "on_death_screen",
+                        lambda: (_ for _ in ()).throw(KeyboardInterrupt))
+
+    with pytest.raises(KeyboardInterrupt):
+        main.run_worker({})
+
+
+def test_worker_stdin_watcher_resets_keyboard_on_eof(monkeypatch):
+    """GUI 关掉 worker 的 stdin 管道 = 停止请求. 打包成 console=False 之后
+    CTRL_BREAK / SIGTERM 都不一定送得到, 这条 EOF 路径是唯一保证"停止"时
+    space+WASD 会被松开的机制 —— 它坏了, 每次停止都把角色卡在按住状态.
+    """
+    order = []
+    monkeypatch.setattr(main, "reset_keyboard", lambda: order.append("reset"))
+    monkeypatch.setattr(main.os, "_exit",
+                        lambda code: (order.append(("exit", code)),
+                                      (_ for _ in ()).throw(SystemExit(code))))
+    monkeypatch.setattr(main.sys, "stdin", io.StringIO(""))   # 立刻 EOF
+
+    with pytest.raises(SystemExit):
+        main._worker_stdin_watch()
+
+    assert order == ["reset", ("exit", 0)]
+
+
+def test_install_worker_stdin_watcher_noop_without_stdin(monkeypatch):
+    """打包后的 GUI 直接双击 exe 跑 worker 调试时 sys.stdin 可能是 None ——
+    那种情况下别起线程(读 None 会直接抛)."""
+    started = []
+
+    class _FakeThreading:
+        @staticmethod
+        def Thread(*a, **k):
+            started.append(1)
+            raise AssertionError("stdin 是 None 时不该起看门线程")
+
+    monkeypatch.setattr(main.sys, "stdin", None)
+    monkeypatch.setattr(main, "threading", _FakeThreading)
+    main._install_worker_stdin_watcher()
+    assert started == []

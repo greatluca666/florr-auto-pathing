@@ -3,6 +3,7 @@ from overlay import create_overlay
 import argparse
 import signal
 import sys
+import threading
 import cdp_bridge
 import time
 import random
@@ -570,7 +571,13 @@ def run_worker(cfg):
         print("❌ 专用 Chrome 未就绪. 请从 GUI 启动(GUI 会引导你准备 Chrome).")
         sys.exit(1)
 
-    afk_watch.ensure_florr_auto_afk_running()
+    # florr-auto-afk 的生命周期整个归 GUI 管(gui_app._ensure_afk / _on_afk_toggle,
+    # 两条路都先看 AFK 开关). worker 这边只 poll_afk_pause() 读它的日志, 绝不自己
+    # 去拉起它 —— 以前无条件 ensure_florr_auto_afk_running() 有两个真实后果:
+    # (1) exe 不在时它会走 input() 问要不要下载, 而 console=False 的打包 exe 里
+    #     worker 的 stdin 是死的, 直接 RuntimeError 把 worker 撂倒;
+    # (2) 用户刚在界面上关掉 AFK 开关(GUI 已 stop_florr_auto_afk), worker 一起来
+    #     又给它拉回去.
     global overlay
     overlay = create_overlay()
 
@@ -636,7 +643,7 @@ def run_worker(cfg):
 
 def _worker_graceful_exit(signum, frame):
     """GUI 点"停止"时给 worker 发的信号处理: 先把按住的方向键/空格松开, 再退出 ——
-    直接 kill 的话角色会带着最后一个鼠标指令继续走."""
+    直接 kill 的话这些键会一直是按下状态."""
     try:
         reset_keyboard()
     finally:
@@ -644,9 +651,35 @@ def _worker_graceful_exit(signum, frame):
 
 
 def _install_worker_signal_handlers():
+    # POSIX 上 GUI 的"停止"会补一发 SIGTERM; Windows 上 SIGBREAK 只有从真控制台
+    # (开发时 `python main.py --worker`)按 Ctrl+Break 才会来 —— 打包成
+    # console=False 的 exe 之后两边都不保险, 真正的停止信号走 stdin EOF, 见
+    # _install_worker_stdin_watcher().
     signal.signal(signal.SIGTERM, _worker_graceful_exit)
-    if hasattr(signal, "SIGBREAK"):  # Windows: GUI 用 CTRL_BREAK_EVENT 打过来
+    if hasattr(signal, "SIGBREAK"):
         signal.signal(signal.SIGBREAK, _worker_graceful_exit)
+
+
+def _worker_stdin_watch():
+    """阻塞读 stdin 直到对端关掉管道(EOF), 然后松开按住的键再退出."""
+    try:
+        sys.stdin.read()      # 阻塞到对端关闭管道 / 手动 Ctrl-D
+    except Exception:
+        pass
+    try:
+        reset_keyboard()
+    finally:
+        os._exit(0)
+
+
+def _install_worker_stdin_watcher():
+    """GUI 关闭 worker 的 stdin 管道 = 请求停止. 起一个守护线程阻塞读 stdin, 读到
+    EOF(管道被关)就先松开按住的键再退出 —— 打包成 console=False 的 exe 后
+    CTRL_BREAK / SIGTERM 都不一定送得到, stdin EOF 是唯一跨平台可靠的信号."""
+    if sys.stdin is None:
+        return
+    t = threading.Thread(target=_worker_stdin_watch, daemon=True)
+    t.start()
 
 
 if __name__ == "__main__":
@@ -657,6 +690,7 @@ if __name__ == "__main__":
 
     if args.worker:
         _install_worker_signal_handlers()
+        _install_worker_stdin_watcher()
         run_worker(app_config.load_config())
     else:
         from gui_app import main as gui_main  # 惰性 import: 不让 `import main` 拖进 GUI 依赖
