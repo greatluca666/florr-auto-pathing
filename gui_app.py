@@ -84,11 +84,104 @@ class App(ctk.CTk):
             ctk.CTkLabel(afk_box, text="(仅 Windows)", font=("", 9),
                          text_color="gray").pack()
 
-        # ---- 内容区: 占位, Task 8 填控制台页 ----
+        # ---- 控制台页 ----
         self.content = ctk.CTkFrame(self)
         self.content.grid(row=0, column=1, sticky="nsew", padx=12, pady=12)
-        self._placeholder = ctk.CTkLabel(self.content, text="控制台(Task 8 填充)")
-        self._placeholder.pack(expand=True)
+        self.content.grid_columnconfigure(0, weight=3)
+        self.content.grid_columnconfigure(1, weight=2)
+        self.content.grid_rowconfigure(1, weight=1)
+
+        self.map_menu = ctk.CTkOptionMenu(
+            self.content, values=list(app_config._VALID_MAPS),
+            command=self._on_map_change)
+        self.map_menu.set(self._cfg["map"])
+        self.map_menu.grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 8))
+
+        from gui_map_picker import MapPicker
+        self.picker = MapPicker(
+            self.content,
+            on_point_change=self._on_picker_point,
+            on_area_change=self._on_picker_area)
+        self.picker.grid(row=1, column=0, sticky="nsew", padx=(0, 10))
+
+        right = ctk.CTkFrame(self.content, fg_color="transparent")
+        right.grid(row=1, column=1, sticky="nsew")
+
+        self.duration_entry = self._labeled_entry(right, "刷怪时长 (秒)",
+                                                  str(self._cfg["farming_duration"]))
+        self.enemy_switch = ctk.CTkSwitch(right, text="索敌 AI (YOLO 追击/规避)")
+        self.enemy_switch.pack(anchor="w", pady=6)
+        if self._cfg["enemy_ai_enabled"]:
+            self.enemy_switch.select()
+        self.short_entry = self._labeled_entry(
+            right, "连续短局阈值", str(self._cfg["consecutive_short_round_limit"]))
+        self.autoswitch_check = ctk.CTkCheckBox(right, text="连续没刷满自动换服务器")
+        self.autoswitch_check.pack(anchor="w", pady=6)
+        if self._cfg["auto_switch_server"]:
+            self.autoswitch_check.select()
+
+        self.log_box = ctk.CTkTextbox(right, font=("Menlo", 11), state="disabled")
+        self.log_box.pack(fill="both", expand=True, pady=(8, 0))
+
+        self.status_label = ctk.CTkLabel(self.content, text="状态：未运行", anchor="w")
+        self.status_label.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(8, 4))
+
+        self.start_btn = ctk.CTkButton(self.content, text="▶ 开始", height=40,
+                                       command=self._on_start_stop)
+        self.start_btn.grid(row=3, column=0, columnspan=2, sticky="ew")
+
+        # 初值灌进选择器
+        self.picker.load_map(self._cfg["map"])
+        self.picker.set_point(tuple(self._cfg["location"]))
+        self.picker.set_area([tuple(p) for p in self._cfg["farming_area"]])
+        self._point = tuple(self._cfg["location"])
+        self._area = [tuple(p) for p in self._cfg["farming_area"]]
+
+    def _labeled_entry(self, parent, label, initial):
+        ctk.CTkLabel(parent, text=label, anchor="w").pack(anchor="w")
+        e = ctk.CTkEntry(parent)
+        e.insert(0, initial)
+        e.pack(anchor="w", fill="x", pady=(0, 6))
+        return e
+
+    def _on_map_change(self, name):
+        self.picker.load_map(name)
+        self.picker.set_point(None)
+        self.picker.set_area(None)
+        self._point = None
+        self._area = None
+        self._log_line(f"已切到 {name}，请重新点目标点 / 框刷怪区\n")
+
+    def _on_picker_point(self, pt):
+        self._point = pt
+
+    def _on_picker_area(self, area):
+        self._area = [tuple(area[0]), tuple(area[1])]
+
+    def _current_values(self):
+        return dict(
+            map_name=self.map_menu.get(),
+            location=self._point,
+            area=self._area,
+            duration=self.duration_entry.get(),
+            short_limit=self.short_entry.get(),
+            enemy_ai=bool(self.enemy_switch.get()),
+            auto_switch=bool(self.autoswitch_check.get()),
+            afk=bool(self.afk_switch.get()),
+        )
+
+    def _log_line(self, text):
+        self.log_box.configure(state="normal")
+        self.log_box.insert("end", text)
+        self.log_box.see("end")
+        self.log_box.configure(state="disabled")
+
+    def _on_start_stop(self):
+        vals = self._current_values()
+        if vals["location"] is None or vals["area"] is None:
+            self._log_line("⚠️ 请先在地图上点目标点并框出刷怪区\n")
+            return
+        self._log_line(f"(Task 9 尚未接进程) 将用配置: {vals}\n")
 
     def _show_page(self, name):
         pass  # Task 8: 控制台是唯一可用页, 其余灰置
