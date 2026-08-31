@@ -18,6 +18,7 @@ ENEMY_SCAN_INTERVAL = 0.12  # 秒, YOLO扫描节流间隔. 这是"决策新鲜�
                               # max_attempts限制(见下方wander分支).
 AVOID_TRIGGER_PX = 400      # 屏幕像素半径, AVOID怪进入此半径触发逃离
 CAUTIOUS_HOLD_PX = 250      # 屏幕像素, CAUTIOUS怪保持的最小距离(不继续贴近)
+CHASE_MIN_CONF = 0.55      # 追击目标的最低YOLO置信度(幻影框过滤; 危险怪不受此限)
 # 以上数值是没实机测过的占位默认值, 实机跑一遍后再按观察到的效果调.
 # ================================================
 
@@ -428,6 +429,7 @@ def auto_farming(farming_area, duration=300):
                     detections,
                     avoid_trigger_px=AVOID_TRIGGER_PX,
                     cautious_hold_px=CAUTIOUS_HOLD_PX,
+                    chase_min_conf=CHASE_MIN_CONF,
                 )
             except Exception as e:
                 print(f"⚠️ 索敌出错, 本轮当漫游处理: {e}")

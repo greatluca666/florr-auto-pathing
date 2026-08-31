@@ -288,7 +288,14 @@ def chase_is_stalled(pos_history, min_progress=4.0, window=CHASE_STALL_WINDOW):
     return math.hypot(x1 - x0, y1 - y0) < min_progress
 
 
-def select_action(detections, avoid_trigger_px=400, cautious_hold_px=250, center=SCREEN_CENTER):
+CHASE_MIN_CONF = 0.55  # 只有YOLO置信度到这个数的检测框才够格当"追击目标". 0.4~0.55
+                        # 那档框经常是幻影(半透明沙尘暴边缘、影子), 拿它当目标就是
+                        # 朝空气全速冲. 危险怪(AVOID/CAUTIOUS)不受此限 —— 宁可对着
+                        # 一个可能不存在的强怪多绕一下, 不能漏躲。
+
+
+def select_action(detections, avoid_trigger_px=400, cautious_hold_px=250,
+                  center=SCREEN_CENTER, chase_min_conf=CHASE_MIN_CONF):
     """每tick的索敌决策入口. detections是scan_enemies()给的检测列表(或测试里
     手搭的同结构字典列表). 返回三选一:
       ("flee", avoid_positions)             —— 触发半径内有AVOID怪, 优先规避
@@ -297,14 +304,21 @@ def select_action(detections, avoid_trigger_px=400, cautious_hold_px=250, center
                                                除目标外的CAUTIOUS), 传给
                                                aim_mouse_target当排斥源
       ("wander", None)                      —— 啥有效目标都没有, 交回随机漫游
-    AVOID怪永远进不了"chase"候选池, 哪怕它稀有度算下来优先级最高。"""
+    AVOID怪永远进不了"chase"候选池, 哪怕它稀有度算下来优先级最高。追击目标还要
+    过chase_min_conf置信度关; 没过关的ENGAGE直接丢, 没过关的AVOID/CAUTIOUS仍算
+    危险源(进flee判定/repel), 只是不当追击目标。"""
     avoid_positions = []
+    cautious_dets = []
     candidates = []
     for d in detections:
         bucket = classify_action(d["species"], d["rarity"])
+        conf = d.get("confidence", 1.0)
         if bucket == "AVOID":
             avoid_positions.append(d["screen_pos"])
-        else:
+            continue
+        if bucket == "CAUTIOUS":
+            cautious_dets.append(d)
+        if conf >= chase_min_conf:
             candidates.append((d, bucket))
 
     if avoid_positions:
@@ -324,7 +338,7 @@ def select_action(detections, avoid_trigger_px=400, cautious_hold_px=250, center
         # 半路危险源: 所有AVOID怪(不管在不在flee触发半径内 —— 402px的Ultra蝎子
         # 不该触发flee, 但追别的怪时也不能直直穿过它) + 除目标外的CAUTIOUS怪。
         repel = list(avoid_positions)
-        repel += [d["screen_pos"] for d, b in candidates if b == "CAUTIOUS" and d is not best]
+        repel += [d["screen_pos"] for d in cautious_dets if d is not best]
         return ("chase", best, hold_px, repel)
 
     return ("wander", None)

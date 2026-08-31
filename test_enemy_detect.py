@@ -185,10 +185,10 @@ def test_flee_mouse_target_returns_center_when_forces_cancel():
 from enemy_detect import select_action, chase_is_stalled
 
 
-def _det(species, rarity, screen_pos):
+def _det(species, rarity, screen_pos, conf=0.9):
     return {
         "species": species, "rarity": rarity, "screen_pos": screen_pos,
-        "bbox": (0, 0, 0, 0), "confidence": 0.9,
+        "bbox": (0, 0, 0, 0), "confidence": conf,
     }
 
 
@@ -252,6 +252,43 @@ def test_select_action_wanders_with_no_relevant_detections():
     action, payload = select_action([])
     assert action == "wander"
     assert payload is None
+
+
+def test_select_action_skips_low_confidence_chase_target():
+    # 唯一的候选是个 0.45 的幻影框 -> 不追, 回漫游
+    action, payload = select_action([_det("sandstorm", "Common", (1100, 540), conf=0.45)],
+                                    chase_min_conf=0.55, center=(960, 540))
+    assert action == "wander" and payload is None
+
+
+def test_select_action_prefers_confident_target_over_higher_priority_ghost():
+    detections = [
+        _det("sand_centipede", "Rare", (1200, 540), conf=0.45),  # 优先级更高但是幻影
+        _det("scorpion", "Common", (1000, 540), conf=0.92),      # 优先级低但确实存在
+    ]
+    action, target, hold_px, repel = select_action(detections, chase_min_conf=0.55, center=(960, 540))
+    assert action == "chase"
+    assert target["species"] == "scorpion"
+
+
+def test_select_action_low_conf_avoid_still_flees():
+    # 危险怪不吃置信度关: 0.42 的 Ultra 蝎子进半径照样触发规避
+    action, payload = select_action([_det("scorpion", "Ultra", (1100, 540), conf=0.42)],
+                                    avoid_trigger_px=400, chase_min_conf=0.55, center=(960, 540))
+    assert action == "flee"
+    assert (1100, 540) in payload
+
+
+def test_select_action_low_conf_cautious_repels_but_is_not_chased():
+    detections = [
+        _det("scorpion", "Common", (1000, 540), conf=0.9),      # 确实存在的 ENGAGE -> 目标
+        _det("cactus", "Ultra", (900, 400), conf=0.4),          # 低置信 CAUTIOUS -> 只当危险源
+    ]
+    action, target, hold_px, repel = select_action(detections, chase_min_conf=0.55, center=(960, 540))
+    assert action == "chase"
+    assert target["species"] == "scorpion"
+    assert (900, 400) in repel          # 仍要绕开
+    assert hold_px is None              # 目标是 ENGAGE, 不是那只低置信 CAUTIOUS
 
 
 def test_select_action_flee_excludes_out_of_range_avoid_mobs():
