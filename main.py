@@ -8,10 +8,14 @@ import enemy_detect
 
 # ===== 索敌配置 (sszone敌怪检测/追击/规避) =====
 ENEMY_MODEL_PATH = "models/desert.pt"
-ENEMY_SCAN_INTERVAL = 0.3   # 秒, YOLO扫描节流间隔(不是每tick都跑, 推理有开销).
-                              # 注意: 漫游时每腿路最长受move_to_position的
-                              # max_attempts限制(见下方wander分支), 实际响应
-                              # 延迟以那个为准, 不是这个数字本身.
+ENEMY_SCAN_INTERVAL = 0.12  # 秒, YOLO扫描节流间隔. 这是"决策新鲜度"的主旋钮:
+                              # 追击/规避途中每tick都拿这份决策里的怪坐标去moveTo,
+                              # 间隔越大, 中间那几tick就越是照着旧坐标全速走 —— 怪
+                              # 早挪窝了, 人一头撞上去. 实测一次推理≈0.1s(Mac MPS;
+                              # Windows CUDA更快), 设0.12基本每帧都能重扫. 推理太慢
+                              # 的机器上循环会被推理本身卡住, 那也没办法, 至少不比
+                              # 大间隔更差. 漫游时每腿路另受move_to_position的
+                              # max_attempts限制(见下方wander分支).
 AVOID_TRIGGER_PX = 400      # 屏幕像素半径, AVOID怪进入此半径触发逃离
 CAUTIOUS_HOLD_PX = 250      # 屏幕像素, CAUTIOUS怪保持的最小距离(不继续贴近)
 # 以上数值是没实机测过的占位默认值, 实机跑一遍后再按观察到的效果调.
@@ -375,8 +379,7 @@ def auto_farming(farming_area, duration=300):
     exit_reason = "timeout"
     last_enemy_scan = 0.0
     enemy_decision = ("wander", None)
-    chase_stall_count = 0
-    chase_last_pos = None
+    chase_pos_history = []   # 近期minimap坐标, 供enemy_detect.chase_is_stalled()看净位移
 
     while time.time() - start_time < duration:
         if afk_watch.poll_afk_pause():
@@ -436,28 +439,29 @@ def auto_farming(farming_area, duration=300):
             avoid_positions = enemy_decision[1]
             mouse_target = enemy_detect.flee_mouse_target(avoid_positions)
         elif enemy_action == "chase":
-            target, hold_px = enemy_decision[1], enemy_decision[2]
-            mouse_target = enemy_detect.aim_mouse_target(target["screen_pos"], hold_px=hold_px)
+            target, hold_px, repel = enemy_decision[1], enemy_decision[2], enemy_decision[3]
+            mouse_target = enemy_detect.aim_mouse_target(
+                target["screen_pos"], hold_px=hold_px, repel_positions=repel)
 
         if enemy_action in ("flee", "chase"):
             # wander分支靠move_to_position自带的卡住检测+execute_anti_stuck()脱困,
             # chase/flee这两个分支是每tick直接moveTo(), 没有等价机制 —— 补上同款
-            # 卡住判定(看玩家自己的位置有没有实质进展), 卡住够久就让execute_anti_stuck()
-            # 接管这一tick, 不再执行下面的追击/逃离moveTo().
+            # 卡住判定(攒一段近期minimap坐标, 看时间窗内净位移), 卡住够久就让
+            # execute_anti_stuck()接管这一tick, 不再执行下面的追击/逃离moveTo().
             # 注意: mouse_target == SCREEN_CENTER时是aim_mouse_target/flee_mouse_target
             # 自己主动选择"停在这"(CAUTIOUS档保持距离/规避合力抵消没有明确方向), 不是
-            # 卡住 —— 这种tick完全跳过卡住计数的推进和判定(不累加也不清零, 留给下一个
-            # 真正在动的tick接着算), 否则会把"刻意停"误判成"卡住"进而执行脱困把玩家
-            # 怼向它本该保持距离的危险目标。
+            # 卡住 —— 这种tick完全不往history里塞样本(留给下一个真正在动的tick接着算),
+            # 否则会把"刻意停"当成净位移不足、误判成卡住, 进而脱困把玩家怼向它本该
+            # 保持距离的危险目标。
             if mouse_target != enemy_detect.SCREEN_CENTER:
-                chase_stall_count, should_yield = enemy_detect.chase_is_stalled(
-                    chase_last_pos, current_pos, chase_stall_count)
-                chase_last_pos = current_pos
-                if should_yield:
+                chase_pos_history.append(current_pos)
+                if len(chase_pos_history) > enemy_detect.CHASE_STALL_WINDOW:
+                    chase_pos_history.pop(0)
+                if enemy_detect.chase_is_stalled(chase_pos_history):
                     print("⚠️ 追击/规避途中卡住, 脱困一下...")
                     overlay.update(state="卡住", message="追击/规避途中卡住, 脱困中")
                     execute_anti_stuck()
-                    chase_stall_count = 0
+                    chase_pos_history.clear()
                     continue
 
             if enemy_action == "flee":
@@ -470,9 +474,8 @@ def auto_farming(farming_area, duration=300):
             continue
 
         # enemy_action == "wander": 没有可打/需规避的目标, 跟原来一样随机漫游.
-        # 重置chase专属的卡住状态, 别让上一轮追击/规避的残留跨进漫游或下一轮追击.
-        chase_stall_count = 0
-        chase_last_pos = None
+        # 清掉chase专属的卡住历史, 别让上一轮追击/规避的残留跨进漫游或下一轮追击.
+        chase_pos_history.clear()
         random_x, random_y = random_walkable_point(farming_area, binary_map)
 
         # 移动到目标点 —— 到了立刻挑下一个点接着走, 不暂停.

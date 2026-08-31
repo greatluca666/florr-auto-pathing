@@ -144,6 +144,33 @@ def test_aim_mouse_target_chases_to_actual_distance_when_within_max_extend():
     assert result == (1060, 540)
 
 
+def test_aim_mouse_target_no_repel_positions_is_unchanged():
+    # repel_positions 为 None/空 -> 跟没这个参数时结果完全一致
+    a = aim_mouse_target((1060, 540), hold_px=None, center=(960, 540), max_extend=500)
+    b = aim_mouse_target((1060, 540), hold_px=None, center=(960, 540), max_extend=500,
+                         repel_positions=[])
+    assert a == b == (1060, 540)
+
+
+def test_aim_mouse_target_bends_away_from_danger_on_the_path():
+    # 目标正右方, 一只危险怪在右上方近处 -> 瞄点应被往下压 (远离危险), 但整体
+    # 仍朝右 (还在追)
+    result = aim_mouse_target((1460, 540), hold_px=None, center=(960, 540), max_extend=500,
+                              repel_positions=[(1160, 440)], repel_px=400)
+    assert result[0] > 960          # 仍在朝目标方向 (右)
+    assert result[1] > 540          # 被危险怪 (在上方, y 小) 往下推
+
+
+def test_aim_mouse_target_repels_even_while_holding_distance():
+    # 已进 CAUTIOUS 保持距离内, 平时返回 center; 但半路有危险怪 -> 仍往远离方向挪
+    held = aim_mouse_target((1100, 540), hold_px=250, center=(960, 540))
+    assert held == (960, 540)
+    with_danger = aim_mouse_target((1100, 540), hold_px=250, center=(960, 540),
+                                   repel_positions=[(960, 440)], repel_px=400)
+    assert with_danger != (960, 540)
+    assert with_danger[1] > 540     # 危险怪在上方 -> 往下挪
+
+
 def test_flee_mouse_target_points_away_from_single_threat():
     result = flee_mouse_target([(1460, 540)], center=(960, 540), extend=400)
     assert result[0] < 960
@@ -180,10 +207,12 @@ def test_select_action_ignores_avoid_mob_outside_trigger_radius():
         _det("scorpion", "Ultra", (2000, 540)),   # 1040px, 远超触发半径
         _det("sandstorm", "Common", (1000, 560)),
     ]
-    action, target, hold_px = select_action(detections, avoid_trigger_px=400, center=(960, 540))
+    action, target, hold_px, repel = select_action(detections, avoid_trigger_px=400, center=(960, 540))
     assert action == "chase"
     assert target["species"] == "sandstorm"
     assert hold_px is None
+    # AVOID怪没触发flee, 但还是进repel列表让追击路径绕开它
+    assert (2000, 540) in repel
 
 
 def test_select_action_chases_best_priority_candidate():
@@ -191,16 +220,32 @@ def test_select_action_chases_best_priority_candidate():
         _det("scorpion", "Common", (1000, 540)),
         _det("sand_centipede", "Rare", (1010, 540)),  # 稀有度更高, 该选它
     ]
-    action, target, hold_px = select_action(detections, center=(960, 540))
+    action, target, hold_px, repel = select_action(detections, center=(960, 540))
     assert action == "chase"
     assert target["species"] == "sand_centipede"
+    assert repel == []   # 没有AVOID/别的CAUTIOUS, 没什么要绕的
 
 
 def test_select_action_holds_distance_for_cautious_target():
     detections = [_det("cactus", "Ultra", (1000, 540))]
-    action, target, hold_px = select_action(detections, cautious_hold_px=250, center=(960, 540))
+    action, target, hold_px, repel = select_action(detections, cautious_hold_px=250, center=(960, 540))
     assert action == "chase"
     assert hold_px == 250
+    assert repel == []   # 目标本身是CAUTIOUS, 不该把自己放进repel
+
+
+def test_select_action_chase_repels_around_other_danger_mobs():
+    detections = [
+        _det("sandstorm", "Ultra", (1100, 540)),   # CAUTIOUS, 物种优先级最高 -> 目标
+        _det("cactus", "Ultra", (900, 400)),        # CAUTIOUS, 不是目标 -> 要绕开
+        _det("scorpion", "Ultra", (300, 540)),      # AVOID, 660px>400 不触发flee -> 也要绕开
+    ]
+    action, target, hold_px, repel = select_action(detections, avoid_trigger_px=400, center=(960, 540))
+    assert action == "chase"
+    assert target["species"] == "sandstorm"
+    assert hold_px == 250                           # 目标是 CAUTIOUS
+    assert (900, 400) in repel and (300, 540) in repel
+    assert (1100, 540) not in repel                 # 目标本身不进 repel
 
 
 def test_select_action_wanders_with_no_relevant_detections():
@@ -219,28 +264,35 @@ def test_select_action_flee_excludes_out_of_range_avoid_mobs():
     assert payload == [(1060, 540)]
 
 
-def test_chase_is_stalled_resets_on_movement():
-    count, yield_now = chase_is_stalled((10, 10), (20, 20), stall_count=5)
-    assert count == 0
-    assert yield_now is False
+def test_chase_is_stalled_false_until_window_full():
+    # 样本还没攒满一个 window -> 不判 (返回 False)
+    hist = [(0.0, 0.0)] * 10
+    assert chase_is_stalled(hist, window=25) is False
 
 
-def test_chase_is_stalled_increments_on_no_progress():
-    count, yield_now = chase_is_stalled((10, 10), (10.5, 10.2), stall_count=3)
-    assert count == 4
-    assert yield_now is False
+def test_chase_is_stalled_true_when_net_displacement_below_threshold():
+    # 攒满 window, 首尾净位移几乎为 0 (贴墙被顶住) -> 卡住
+    hist = [(5.0 + 0.1 * (i % 2), 5.0) for i in range(25)]   # 只在 0.1 之间抖
+    assert chase_is_stalled(hist, min_progress=4.0, window=25) is True
 
 
-def test_chase_is_stalled_yields_at_limit():
-    count, yield_now = chase_is_stalled((10, 10), (10, 10), stall_count=14, stall_limit=15)
-    assert count == 15
-    assert yield_now is True
+def test_chase_is_stalled_false_when_circling_but_making_progress():
+    # 追一个走位的目标: 每 tick 挪一点点 (相邻差 < 1.5, 旧写法会误判卡住),
+    # 但一个 window 下来净位移累积过阈值 -> 不算卡住
+    hist = [(i * 0.5, 0.0) for i in range(25)]   # 24*0.5 = 12 净位移 > 4.0
+    assert chase_is_stalled(hist, min_progress=4.0, window=25) is False
 
 
-def test_chase_is_stalled_handles_none_positions():
-    count, yield_now = chase_is_stalled(None, (10, 10), stall_count=9)
-    assert count == 0
-    assert yield_now is False
+def test_chase_is_stalled_uses_last_window_of_a_longer_history():
+    # history 比 window 长时只看最后 window 个样本
+    hist = [(i * 5.0, 0.0) for i in range(20)]           # 早期大位移
+    hist += [(95.0 + 0.1 * (i % 2), 0.0) for i in range(25)]  # 最近 25 tick 停住
+    assert chase_is_stalled(hist, min_progress=4.0, window=25) is True
+
+
+def test_chase_is_stalled_handles_none_and_empty():
+    assert chase_is_stalled(None) is False
+    assert chase_is_stalled([]) is False
 
 
 import pytest
