@@ -1,10 +1,14 @@
 from utils import *
 from overlay import create_overlay, show_fullscreen_confirm
+import argparse
+import signal
+import sys
 import cdp_bridge
 import time
 import random
 import afk_watch
 import enemy_detect
+import app_config
 
 # ===== 索敌配置 (sszone敌怪检测/追击/规避) =====
 ENEMY_MODEL_PATH = "models/desert.pt"
@@ -351,7 +355,36 @@ def random_walkable_point(area, binary_map, max_tries=20):
     return random.randint(x1, x2), random.randint(y1, y2)
 
 
-def auto_farming(farming_area, duration=300):
+def _maybe_scan_enemies(enemy_ai_enabled, now, last_enemy_scan, prev_decision):
+    """索敌节流 + 总开关. 从 auto_farming 里抽出来单测.
+
+    - enemy_ai_enabled=False: 永远返回漫游决策, 一次都不碰 enemy_detect(用户在
+      GUI 里关掉了索敌 AI).
+    - 距上次扫描不到 ENEMY_SCAN_INTERVAL: 沿用上一轮的决策, 不重复跑 YOLO.
+    - 到点了: 跑一次 scan_enemies + select_action; 索敌是附加功能, 任何异常都
+      退化成漫游, 不能打断刷怪主循环.
+
+    返回 (decision, last_enemy_scan).
+    """
+    if not enemy_ai_enabled:
+        return ("wander", None), last_enemy_scan
+    if now - last_enemy_scan < ENEMY_SCAN_INTERVAL:
+        return prev_decision, last_enemy_scan
+    last_enemy_scan = now
+    try:
+        detections = enemy_detect.scan_enemies(model_path=ENEMY_MODEL_PATH)
+        decision = enemy_detect.select_action(
+            detections,
+            avoid_trigger_px=AVOID_TRIGGER_PX,
+            cautious_hold_px=CAUTIOUS_HOLD_PX,
+        )
+    except Exception as e:
+        print(f"⚠️ 索敌出错, 本轮当漫游处理: {e}")
+        decision = ("wander", None)
+    return decision, last_enemy_scan
+
+
+def auto_farming(farming_area, duration=300, *, enemy_ai_enabled=True):
     """自动刷怪逻辑（依赖一直攻击按钮）—— 在区域内连续走动, 不停下站桩.
 
     原来是走到一个随机点就停下等move_interval秒(靠站桩+一直攻击刷怪), 用户反馈
@@ -417,19 +450,8 @@ def auto_farming(farming_area, duration=300):
         # 索敌: 按ENEMY_SCAN_INTERVAL节流跑YOLO(不是每tick都跑, 推理有开销).
         # 索敌是附加功能, 任何异常都退化成"漫游", 不能让它打断刷怪主循环.
         now = time.time()
-        if now - last_enemy_scan >= ENEMY_SCAN_INTERVAL:
-            last_enemy_scan = now
-            try:
-                detections = enemy_detect.scan_enemies(model_path=ENEMY_MODEL_PATH)
-                enemy_decision = enemy_detect.select_action(
-                    detections,
-                    avoid_trigger_px=AVOID_TRIGGER_PX,
-                    cautious_hold_px=CAUTIOUS_HOLD_PX,
-                )
-            except Exception as e:
-                print(f"⚠️ 索敌出错, 本轮当漫游处理: {e}")
-                enemy_decision = ("wander", None)
-
+        enemy_decision, last_enemy_scan = _maybe_scan_enemies(
+            enemy_ai_enabled, now, last_enemy_scan, enemy_decision)
         enemy_action = enemy_decision[0]
 
         if enemy_action == "flee":
@@ -524,49 +546,48 @@ def auto_farming(farming_area, duration=300):
     return exit_reason == "timeout"
 
 
-if __name__ == "__main__":
-    cdp_bridge.launch_dedicated_chrome()
+def _apply_worker_config(cfg):
+    """把 config.json 的值应用/摊平成 run_worker 主循环要用的局部值.
+    apply_map() 必须在这里就调 —— utils 的 MAP 是模块级全局, load_binary_map()
+    等一堆函数都读它."""
+    apply_map(cfg["map"])
+    return {
+        "location": tuple(cfg["location"]),
+        "farming_area": [tuple(p) for p in cfg["farming_area"]],
+        "farming_duration": cfg["farming_duration"],
+        "short_round_limit": cfg["consecutive_short_round_limit"],
+        "enemy_ai_enabled": cfg["enemy_ai_enabled"],
+        "auto_switch_server": cfg["auto_switch_server"],
+    }
+
+
+def run_worker(cfg):
+    """刷怪 worker: 由 GUI 以 `main.py --worker` 子进程拉起. 掉线/死亡后自动点
+    开始重来, 不主动停(沿用改造前 __main__ 的行为)."""
+    # 直接 python main.py --worker 调试时给个清楚的报错 —— 交互式 Chrome 引导
+    # 已经搬进 GUI, 这条路不再自己拉 Chrome.
+    if not cdp_bridge.is_dedicated_chrome_ready():
+        print("❌ 专用 Chrome 未就绪. 请从 GUI 启动(GUI 会引导你准备 Chrome).")
+        sys.exit(1)
+
     afk_watch.ensure_florr_auto_afk_running()
-    show_fullscreen_confirm()
+    global overlay
     overlay = create_overlay()
 
-    apply_map("desert")
-
-    # ===== 配置部分 =====
-    # 左上角那条对角斜向窄通道的上半段(maps/desert.png是300x300二值图, 逐行量过
-    # 通道宽度: y=10~100持续窄(10~35px宽), y=105突然跳到88px+说明并入了旁边的
-    # 主开阔区 —— 上半段取y:8~56. 框内可走像素占比56.6%, (22,32)是框内确认可走
-    # 的点, 拿来当寻路目标.
-    location = (22, 32)
-    farming_area = [(9, 8), (51, 56)]
-    farming_duration = 300  # 5 分钟
-    # ====================
+    w = _apply_worker_config(cfg)
+    location = w["location"]
+    farming_area = w["farming_area"]
+    farming_duration = w["farming_duration"]
+    CONSECUTIVE_SHORT_ROUND_LIMIT = w["short_round_limit"]
 
     print("🎮 开始自动寻路+刷怪 (掉线/死亡后自动点开始重来, 不主动停)\n")
-
-    # 连续两轮都没刷满farming_duration(死亡/被踢/卡死放弃, 或者压根没到达刷怪
-    # 区域, 都算0分钟刷怪时间), 就换个服务器 —— 不跟当前这个死磕, 阈值直接复用
-    # farming_duration本身, 不再另开一个独立的"5分钟"概念跟它各调各的.
-    CONSECUTIVE_SHORT_ROUND_LIMIT = 2
     consecutive_short_rounds = 0
-
     round_count = 0
     while True:
         round_count += 1
-        # 这轮"一条命"的计时起点 —— 死亡/开局画面处理、寻路、刷怪全算在内, 不再
-        # 只算auto_farming()自己跑的那一小段. 之前那版只算auto_farming()内部计时,
-        # 寻路卡住重试挣扎的时间(实测经常好几十秒到几分钟)不算进去, 跟玩家自己
-        # 感觉"这条命撑了多久"对不上——寻路挣扎本身也是"这个服务器不行"的信号,
-        # 不该被排除在外.
         round_start_time = time.time()
         print(f"\n{'='*50}\n第 {round_count} 轮\n{'='*50}")
 
-        # 每轮开头先检查: 死亡结算画面/开局菜单(掉线、被踢、或脚本刚启动时游戏
-        # 还没点开始)都会落在这两种画面之一 —— 注意这是两个完全不同的界面(死亡
-        # 画面是"你死于XX"+"继续"按钮, 开局菜单是用户名+"开始"按钮), 得分别处理:
-        # 死亡画面先点"继续"回到开局菜单, 开局菜单再点"开始"真正进局。放在循环
-        # 顶部而不是只在轮次结束后检查, 这样脚本刚启动、游戏还没开始的情况也能
-        # 处理到, 不会一上来就对着菜单傻寻路.
         if on_death_screen():
             print("💀 检测到死亡结算画面, 点击继续...")
             overlay.update(state="重新开始", message="死亡, 点击继续...")
@@ -576,42 +597,67 @@ if __name__ == "__main__":
             print("🔁 检测到开局菜单, 点击开始按钮进入游戏...")
             overlay.update(state="重新开始", message="点击开始按钮...")
             click_start_game()
-            time.sleep(3)  # 等游戏加载
+            time.sleep(3)
 
         print(f"📍 目标区域: {farming_area}\n")
-        overlay.update(state="启动", target=location, message=f"第{round_count}轮: 开始自动寻路到刷怪区域")
+        overlay.update(state="启动", target=location,
+                       message=f"第{round_count}轮: 开始自动寻路到刷怪区域")
 
-        # 寻路到目标区域
         if lazy_theta_pathing(location, [farming_area]):
             print("✅ 到达刷怪区域！")
-            auto_farming(farming_area, farming_duration)
+            auto_farming(farming_area, farming_duration,
+                         enemy_ai_enabled=w["enemy_ai_enabled"])
         else:
             print("❌ 本轮未能到达目标区域")
-            # 不传state: lazy_theta_pathing已设好具体状态(已死亡/菜单中/卡住/出错),
-            # _merge_state只合并非None字段, 省略state就不会用泛泛的"出错"覆盖掉它.
             overlay.update(message="本轮未能到达目标区域")
             time.sleep(1)
 
-        # 这条命从round_start_time到现在到底撑了多久 —— 寻路+刷怪的时间都算进去了.
         round_elapsed = time.time() - round_start_time
         completed_full_duration = round_elapsed >= farming_duration
-
         if completed_full_duration:
             consecutive_short_rounds = 0
         else:
             consecutive_short_rounds += 1
-            print(f"⚠️ 这条命只撑了{round_elapsed:.0f}秒, 没到{farming_duration}秒 (连续{consecutive_short_rounds}次)")
-            if consecutive_short_rounds >= CONSECUTIVE_SHORT_ROUND_LIMIT:
+            print(f"⚠️ 这条命只撑了{round_elapsed:.0f}秒, 没到{farming_duration}秒 "
+                  f"(连续{consecutive_short_rounds}次)")
+            if (w["auto_switch_server"]
+                    and consecutive_short_rounds >= CONSECUTIVE_SHORT_ROUND_LIMIT):
                 print(f"🌐 连续{consecutive_short_rounds}轮没刷满, 换个服务器...")
-                overlay.update(state="换服务器", message=f"连续{consecutive_short_rounds}轮没刷满, 切换中")
-                # 换服务器是附加功能(查接口/连CDP都可能失败, 比如Chrome没用对参数
-                # 启动、证书验证失败、网络问题), 失败了不能让整个"不主动停"的机器人
-                # 直接崩掉 —— 打印清楚原因, 不清零计数, 下一轮接着重试(跟这个项目
-                # 一贯的"卡住不放弃, 无限重试"风格一致, 不是遇到问题就躺平).
+                overlay.update(state="换服务器",
+                               message=f"连续{consecutive_short_rounds}轮没刷满, 切换中")
                 try:
                     switch_server()
                     consecutive_short_rounds = 0
-                    time.sleep(2)  # 给切换后的画面留点稳定时间, 下一轮循环顶部的死亡/开局检测再接手
+                    time.sleep(2)
                 except Exception as e:
                     print(f"⚠️ 换服务器失败, 先用当前服务器继续刷 (下轮再重试): {e}")
                     overlay.update(message=f"换服务器失败(下轮重试): {e}")
+
+
+def _worker_graceful_exit(signum, frame):
+    """GUI 点"停止"时给 worker 发的信号处理: 先把按住的方向键/空格松开, 再退出 ——
+    直接 kill 的话角色会带着最后一个鼠标指令继续走."""
+    try:
+        reset_keyboard()
+    finally:
+        sys.exit(0)
+
+
+def _install_worker_signal_handlers():
+    signal.signal(signal.SIGTERM, _worker_graceful_exit)
+    if hasattr(signal, "SIGBREAK"):  # Windows: GUI 用 CTRL_BREAK_EVENT 打过来
+        signal.signal(signal.SIGBREAK, _worker_graceful_exit)
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="florr-auto-pathing")
+    parser.add_argument("--worker", action="store_true",
+                        help="内部用: 跑刷怪循环子进程(由 GUI 拉起, 不要手动加)")
+    args = parser.parse_args()
+
+    if args.worker:
+        _install_worker_signal_handlers()
+        run_worker(app_config.load_config())
+    else:
+        from gui_app import main as gui_main  # 惰性 import: 不让 `import main` 拖进 GUI 依赖
+        gui_main()
