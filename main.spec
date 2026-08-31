@@ -18,12 +18,12 @@ datas = []
 binaries = []
 hiddenimports = [
     "pyautogui", "pyscreeze", "pymsgbox", "pytweening", "pygetwindow", "mouseinfo",
-    "PIL", "websocket", "certifi", "tkinter",
+    "PIL", "PIL._tkinter_finder", "websocket", "certifi", "tkinter", "customtkinter",
 ]
 
 from PyInstaller.utils.hooks import collect_all
 
-for pkg in ("torch", "ultralytics", "cv2"):
+for pkg in ("torch", "ultralytics", "cv2", "customtkinter"):
     d, b, h = collect_all(pkg)
     datas += d
     binaries += b
@@ -54,7 +54,7 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=False,
-    console=True,   # keep the console: the bot prints round/status logs and needs them visible
+    console=False,   # 主入口是 GUI 窗口; worker 子进程的日志由 GUI 用 Popen(stdout=PIPE) 收, 不需要控制台
 )
 
 coll = COLLECT(

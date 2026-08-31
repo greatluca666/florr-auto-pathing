@@ -40,19 +40,34 @@ build keeps the exact same relative-path behavior the unpackaged
 
 ## Running the built exe
 
-Don't pre-open or pre-arrange anything in Chrome first — just double-click
-`florr-auto-pathing.exe` (or run it from a terminal if you want to see the
-round-by-round console output, which the build keeps — it's a console app,
-not windowed). The exe's bootstrap takes care of Chrome itself:
+Double-click `florr-auto-pathing.exe` to open the control-panel GUI window
+(no black console window appears — `console=False` in main.spec). The GUI
+lets you:
+
+- Select the map (ground/sandstorm)
+- Click a target point on the map  
+- Frame a farming area (drag a rectangle)
+- Toggle enemy detection AI (disabled by default, needs `models/desert.pt`)
+- Toggle auto-AFK detection
+- Click 开始 to start one farming run
+
+Clicking 开始 spawns a worker subprocess (`python main.py --worker`) that
+runs the pathfinding loop. Worker logs print to the GUI's log box (not a
+separate console window) and appear in real time.
+
+Configuration persists in `config.json` next to the exe — it stores your
+map/point/area choices, AI/AFK toggles, etc. On first run, this file doesn't
+exist yet; the app uses built-in defaults (equivalent to the pre-refactor
+hardcoded values in `main.py`).
+
+The worker subprocess still manages Chrome itself:
 
 1. It prints a warning and waits for Enter before force-closing all existing
-   Chrome windows (any pre-opened florr.io tab gets killed along with
-   everything else, so there's no point opening it beforehand).
+   Chrome windows.
 2. It launches a dedicated Chrome window of its own.
 3. It prompts you to migrate your florr account and open florr.io in that
    new window, then press Enter.
-4. It shows a confirm dialog — go fullscreen (F11) manually and click the
-   button to start the bot loop.
+4. It runs the bot loop (pathfinding/farming).
 
 A `chrome-profile\` folder will appear next to the exe after the first run
 (the dedicated Chrome's persistent profile, so you don't have to re-migrate

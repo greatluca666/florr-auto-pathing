@@ -1,5 +1,5 @@
 from utils import *
-from overlay import create_overlay, show_fullscreen_confirm
+from overlay import create_overlay
 import argparse
 import signal
 import sys

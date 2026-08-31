@@ -49,22 +49,26 @@ from its original 1920x1080 calibration — see
 section for the one thing that isn't verified (non-16:9 windows, if florr.io turns out to letterbox
 instead of stretching its UI — recalibrate the affected constant with `debug_screen_pos.py` if so).
 
-`main.py`启动时会自动引导你准备好一个专用Chrome(退出现有Chrome、拉起新实例、
-提示迁移账号并打开florr.io) —— 全程只需要按回车/点确认按钮, 不用手动敲命令行.
-florr.io本身仍然需要全屏(任意分辨率), 但进全屏是流程里最后一步手动操作,
-点了确认按钮之后自动开始寻路/刷怪.
+Run `python main.py` to open the control-panel GUI. From there you can:
 
-Go run `main.py`. To package it as a standalone Windows `.exe` instead, see [PACKAGING.md](PACKAGING.md).
+- 选地图 (select ground or sandstorm map)
+- 点目标点 (click a target point on the map)
+- 框刷怪区 (frame a farming area with drag-select)
+- 切敌检 (toggle enemy detection AI — off by default, needs `models/desert.pt`)
+- 切 AFK (toggle auto-AFK detection)
+- 一键启停 (click 开始 to start a farming run, or stop if already running)
 
-```python
-if __name__ == "__main__":
-    apply_map("<map>")
-    location = <location> # the location decided in `map_select.py`
-    dedicated_area = [(0, 0), (200, 200)]  
-    # optional, if the player has moved into the area and got stuck, the code will end. Otherwise it will try to callibrate until reaching the final location
-    while True:
-        if lazy_theta_pathing(location, dedicated_area):
-            break
-    print("Pathing Done")
-```
+Clicking 开始 spawns a worker process that runs the actual pathfinding loop.
+Worker logs appear in the GUI's log box in real time — no separate console window.
+
+**Direct CLI mode:** If you already have a ready Chrome instance, you can skip
+the GUI and run `python main.py --worker` directly. This runs the bot loop
+immediately, equivalent to clicking 开始 in the GUI. (The GUI mode is
+recommended for normal use because it handles Chrome setup automatically.)
+
+Configuration saves to `config.json` next to the script — your map/point/area
+choices and AI/AFK toggles persist across runs. First run has no config file
+yet; the app uses built-in defaults.
+
+To package this as a standalone Windows `.exe` instead, see [PACKAGING.md](PACKAGING.md).
 
