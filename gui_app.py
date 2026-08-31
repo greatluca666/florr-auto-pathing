@@ -45,6 +45,21 @@ def build_worker_config(*, map_name, location, area, duration, short_limit,
     }
 
 
+def parse_positive_ints(*strs):
+    """把界面上的数字框字符串批量转成正整数. 任一非法(非整数 / <=0)返回 None.
+    不用 assert —— python -O 会把 assert 整个剥掉."""
+    out = []
+    for s in strs:
+        try:
+            n = int(s)
+        except (TypeError, ValueError):
+            return None
+        if n <= 0:
+            return None
+        out.append(n)
+    return out
+
+
 class App(ctk.CTk):
     def __init__(self):
         super().__init__()
@@ -187,24 +202,23 @@ class App(ctk.CTk):
         if vals["location"] is None or vals["area"] is None:
             self._log_line("⚠️ 请先在地图上点目标点并框出刷怪区\n")
             return
-        try:
-            short_limit = int(vals["short_limit"])
-            duration = int(vals["duration"])
-            assert short_limit >= 1 and duration > 0
-        except (ValueError, AssertionError):
+        nums = parse_positive_ints(vals["duration"], vals["short_limit"])
+        if nums is None:
             self._log_line("⚠️ 时长 / 短局阈值必须是正整数\n")
             return
+        duration, short_limit = nums
 
         cfg = build_worker_config(**vals)
         app_config.save_config(cfg)
         self._cfg = cfg
 
-        kwargs = {}
+        # 两个平台都给子进程 PYTHONUNBUFFERED=1: frozen(PyInstaller)build 没走
+        # worker_command() 里的 -u, 不设这个 Windows 下子进程 stdout 会块缓冲,
+        # 日志框只能几 KB 一跳.
+        kwargs = {"env": {**os.environ, "PYTHONUNBUFFERED": "1"}}
         if _IS_WINDOWS:
             # 独立进程组: 这样"停止"发的 CTRL_BREAK 只打到 worker, 不会连带把 GUI 也中断
             kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
-        else:
-            kwargs["env"] = {**os.environ, "PYTHONUNBUFFERED": "1"}
 
         self.proc = subprocess.Popen(
             worker_command(), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -253,8 +267,18 @@ class App(ctk.CTk):
         pass  # Task 10
 
     def on_closing(self):
+        # _stop_worker 只 self.after(3000, ...) 排一个兜底 kill —— 关窗时 mainloop
+        # 马上就结束了, 那个回调根本不会跑. 所以这里同步、有上限地收干净子进程,
+        # 否则慢 / 卡死 / 收不到 SIGTERM 的 worker(连同它的 segment.exe 孙进程)会被
+        # 甩给 init 继续跑, 没有 UI 能再停它.
         if self.proc and self.proc.poll() is None:
             self._stop_worker()
+            try:
+                self.proc.wait(timeout=3)
+            except Exception:
+                pass
+            if self.proc and self.proc.poll() is None:
+                self.proc.kill()
         self.destroy()
 
 

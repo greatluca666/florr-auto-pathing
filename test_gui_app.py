@@ -1,6 +1,8 @@
 import os
 import sys
 
+import pytest
+
 import gui_app
 
 
@@ -35,3 +37,15 @@ def test_build_worker_config_shapes_values():
         "auto_switch_server": True,
         "afk_enabled": True,
     }
+
+
+@pytest.mark.parametrize("args, expected", [
+    (("300", "2"), [300, 2]),
+    (("0", "2"), None),
+    (("-5", "2"), None),
+    (("", "2"), None),
+    (("3.5", "2"), None),
+    (("  5  ", "2"), [5, 2]),  # int() 会自己 strip 两边空白
+])
+def test_parse_positive_ints(args, expected):
+    assert gui_app.parse_positive_ints(*args) == expected
