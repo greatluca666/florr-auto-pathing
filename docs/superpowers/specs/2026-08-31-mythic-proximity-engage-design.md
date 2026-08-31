@@ -45,8 +45,11 @@ Not in scope:
 - **Release:** `MYTHIC_RELEASE_MISSES` (3) consecutive enemy scans with no
   qualifying Mythic in the (widened) radius → latch off. ~0.36 s at
   `ENEMY_SCAN_INTERVAL = 0.12`, enough to ride out single-frame detection dropouts.
-- **`flee` clears the latch immediately** (see Precedence). So does entering
-  `wander`.
+- **`flee` clears the latch immediately** (see Precedence). Entering `wander` does
+  **not** — a Mythic dropout usually also yields `wander`, so clearing there would
+  collapse the 3-miss hysteresis to zero. The latch releases only via
+  `MYTHIC_RELEASE_MISSES` consecutive misses, plus the pre-scan early-`continue`
+  resets (AFK pause / lost position / out-of-area).
 
 "Qualifying" = `rarity == "Mythic"` **and** `species in MYTHIC_KITE_SPECIES`
 **and** `confidence >= CHASE_MIN_CONF` (0.55, same phantom-box gate as chase).
@@ -87,7 +90,10 @@ Result is `clamp_to_screen()`'d and `pyautogui.moveTo()`'d, then `time.sleep(0.0
 Per tick, after `_maybe_scan_enemies()`:
 
 1. **`flee`** (from `select_action` — an AVOID mob in `AVOID_TRIGGER_PX`): honour it,
-   `mythic_latch = False`, `mythic_misses = 0`, `chase_pos_history.clear()`. → 躲优先.
+   `mythic_latch = False`, `mythic_misses = 0`. **Does not** clear
+   `chase_pos_history` — `flee` re-enters every tick and clearing would hold the
+   window under `CHASE_STALL_WINDOW` forever, permanently disabling flee
+   anti-stuck. The shared stall-check owns that history. → 躲优先.
 2. **Mythic latch** (only if `MYTHIC_LATCH_ENABLED` and action ≠ flee): call
    `pick_mythic_target(detections, ...)`. Update latch/miss counters. If latched
    with a target → run the per-species policy, reuse the chase stall-check

@@ -32,20 +32,23 @@ def test_apply_worker_config_maps_keys(monkeypatch):
 def test_maybe_scan_enemies_disabled_never_touches_enemy_detect(monkeypatch):
     monkeypatch.setattr(main.enemy_detect, "scan_enemies",
                         lambda **k: (_ for _ in ()).throw(AssertionError("不该扫描")))
-    decision, dets, last = main._maybe_scan_enemies(False, 1000.0, 0.0, ("chase", "x"), ["old"])
+    decision, dets, last, scanned = main._maybe_scan_enemies(
+        False, 1000.0, 0.0, ("chase", "x"), ["old"])
     assert decision == ("wander", None)
     assert dets == []
     assert last == 0.0
+    assert scanned is False
 
 
 def test_maybe_scan_enemies_throttled_returns_prev(monkeypatch):
     monkeypatch.setattr(main.enemy_detect, "scan_enemies",
                         lambda **k: (_ for _ in ()).throw(AssertionError("还没到扫描间隔")))
     prev, prev_dets = ("flee", [(1, 2)]), ["d1", "d2"]
-    decision, dets, last = main._maybe_scan_enemies(True, 0.1, 0.0, prev, prev_dets)
+    decision, dets, last, scanned = main._maybe_scan_enemies(True, 0.1, 0.0, prev, prev_dets)
     assert decision is prev
     assert dets is prev_dets
     assert last == 0.0
+    assert scanned is False
 
 
 def test_maybe_scan_enemies_scans_when_due(monkeypatch):
@@ -53,20 +56,24 @@ def test_maybe_scan_enemies_scans_when_due(monkeypatch):
     monkeypatch.setattr(main.enemy_detect, "select_action",
                         lambda dets, **k: ("chase", "target", 250, []))
     now = main.ENEMY_SCAN_INTERVAL + 1.0
-    decision, dets, last = main._maybe_scan_enemies(True, now, 0.0, ("wander", None), [])
+    decision, dets, last, scanned = main._maybe_scan_enemies(
+        True, now, 0.0, ("wander", None), [])
     assert decision == ("chase", "target", 250, [])
     assert dets == ["det"]
     assert last == now
+    assert scanned is True
 
 
 def test_maybe_scan_enemies_scan_error_degrades_to_wander(monkeypatch):
     monkeypatch.setattr(main.enemy_detect, "scan_enemies",
                         lambda **k: (_ for _ in ()).throw(RuntimeError("model missing")))
     now = main.ENEMY_SCAN_INTERVAL + 1.0
-    decision, dets, last = main._maybe_scan_enemies(True, now, 0.0, ("wander", None), ["old"])
+    decision, dets, last, scanned = main._maybe_scan_enemies(
+        True, now, 0.0, ("wander", None), ["old"])
     assert decision == ("wander", None)
     assert dets == []
     assert last == now
+    assert scanned is True   # 尝试过一次观测 —— 算一次 miss
 
 
 def test_auto_farming_accepts_enemy_ai_enabled_kwarg():
@@ -181,5 +188,29 @@ def test_main_exposes_mythic_wiring():
     assert hasattr(main, "_drive_and_check_stall")
     assert isinstance(main.MYTHIC_LATCH_ENABLED, bool)
     for name in ("MYTHIC_ENGAGE_PX", "MYTHIC_RELEASE_PX", "MYTHIC_RELEASE_MISSES",
-                 "MYTHIC_STRAFE_RADIUS", "MYTHIC_CACTUS_HOLD_PX"):
+                 "MYTHIC_STRAFE_RADIUS", "MYTHIC_CACTUS_HOLD_PX",
+                 "MYTHIC_STRAFE_K_RADIAL"):
         assert isinstance(getattr(main, name), (int, float))
+
+
+def test_mythic_miss_counter_only_advances_on_fresh_scan():
+    """节流 tick (scanned=False) 不能推进 miss 计数 —— 循环里 mythic 分支每 tick
+    都跑, 但只有真扫描过的 tick 才是一次新观测. 少了这道门, 3-miss 释放在快机器上
+    会缩成 ~2 (节流 tick 拿同一份缓存检测重复扣数)."""
+    latched, misses = True, 0
+
+    def tick(scanned, has_target):
+        nonlocal latched, misses
+        if scanned:
+            latched, misses = main._update_mythic_latch(latched, misses, has_target, 3)
+
+    tick(scanned=True, has_target=False)      # 真扫描 miss 1
+    assert (latched, misses) == (True, 1)
+    tick(scanned=False, has_target=False)     # 节流 tick —— 不推进
+    assert (latched, misses) == (True, 1)
+    tick(scanned=True, has_target=False)      # 真扫描 miss 2
+    assert (latched, misses) == (True, 2)
+    tick(scanned=False, has_target=False)     # 节流 tick —— 不推进
+    assert (latched, misses) == (True, 2)
+    tick(scanned=True, has_target=False)      # 真扫描 miss 3 —— 解锁
+    assert (latched, misses) == (False, 0)

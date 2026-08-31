@@ -222,10 +222,15 @@ SCREEN_CENTER = (utils.SCREEN_WIDTH / 2, utils.SCREEN_HEIGHT / 2)  # 屏幕中�
 
 
 def pick_mythic_target(detections, center=SCREEN_CENTER, latched=False,
-                       engage_px=450, release_px=600, chase_min_conf=None):
+                       engage_px=450, release_px=600, chase_min_conf=None,
+                       prev_pos=None):
     """挑这一 tick 要处理的那只 Mythic. 搜索半径: 已锁定用 release_px (放宽, 迟滞),
-    没锁定用 engage_px. 半径内没有合格 Mythic → None. 有 → 按
-    (MYTHIC_TARGET_RANK, 离屏幕中心近) 取最高."""
+    没锁定用 engage_px. 半径内没有合格 Mythic → None.
+
+    没锁定 / 没给 prev_pos: 按 (MYTHIC_TARGET_RANK, 离屏幕中心近) 取最高.
+    已锁定且给了 prev_pos: 目标位置连续性优先 —— 取离 prev_pos 最近的候选, 只有当
+    另一个候选 MYTHIC_TARGET_RANK 严格更高 (真来了更值得打的) 才切过去, 同 rank
+    之间仍按离 prev_pos 近取. 免得两只同 rank Mythic 因亚像素抖动每 tick 翻 180°."""
     radius = release_px if latched else engage_px
     cx, cy = center
 
@@ -237,6 +242,22 @@ def pick_mythic_target(detections, center=SCREEN_CENTER, latched=False,
                 if dist(d) <= radius]
     if not in_range:
         return None
+
+    if latched and prev_pos is not None:
+        ppx, ppy = prev_pos
+
+        def dist_prev(d):
+            px, py = d["screen_pos"]
+            return math.hypot(px - ppx, py - ppy)
+
+        nearest = min(in_range, key=dist_prev)
+        best_rank = max(MYTHIC_TARGET_RANK[d["species"]] for d in in_range)
+        if best_rank > MYTHIC_TARGET_RANK[nearest["species"]]:
+            better = [d for d in in_range
+                      if MYTHIC_TARGET_RANK[d["species"]] == best_rank]
+            return min(better, key=dist_prev)
+        return nearest
+
     return max(in_range, key=lambda d: (MYTHIC_TARGET_RANK[d["species"]], -dist(d)))
 
 

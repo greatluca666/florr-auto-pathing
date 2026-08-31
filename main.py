@@ -30,6 +30,7 @@ MYTHIC_RELEASE_PX     = 600    # 已锁定后, Mythic 出此半径才算脱离 (
 MYTHIC_RELEASE_MISSES = 3      # 连续多少次扫描没有合格 Mythic 才解锁
 MYTHIC_STRAFE_RADIUS  = 180    # 甲虫/火蚁: 环绕它转圈的目标半径 (px)
 MYTHIC_CACTUS_HOLD_PX = 220    # 仙人掌: 保持的距离 (px)
+MYTHIC_STRAFE_K_RADIAL = 0.8   # 甲虫/火蚁环绕: 径向修正强度 (d 偏离半径时往里/外带多少)
 # 以上数值是没实机测过的占位默认值, 实机跑一遍后再按观察到的效果调.
 # ================================================
 
@@ -368,17 +369,20 @@ def random_walkable_point(area, binary_map, max_tries=20):
 
 
 def _maybe_scan_enemies(enemy_ai_enabled, now, last_enemy_scan, prev_decision, prev_detections):
-    """索敌节流 + 总开关. 返回 (decision, detections, last_enemy_scan).
+    """索敌节流 + 总开关. 返回 (decision, detections, last_enemy_scan, scanned).
 
     - enemy_ai_enabled=False: 永远返回漫游决策 + 空检测列表, 一次都不碰 enemy_detect.
     - 距上次扫描不到 ENEMY_SCAN_INTERVAL: 沿用上一轮的 decision 和 detections.
     - 到点了: 跑一次 scan_enemies + select_action; 任何异常 → 漫游 + 空列表.
     detections 单独回传是给 Mythic 近身锁定用的 (select_action 不看这个).
+    scanned 只在真跑了一次 scan_enemies 的分支为 True (含扫描抛错 —— 尝试过一次
+    观测就算数); 关掉索敌 / 节流跳过的 tick 是 False. 调用方靠这个只在新鲜扫描上
+    推进 Mythic miss 计数, 别让节流 tick 拿同一份缓存检测重复扣数.
     """
     if not enemy_ai_enabled:
-        return ("wander", None), [], last_enemy_scan
+        return ("wander", None), [], last_enemy_scan, False
     if now - last_enemy_scan < ENEMY_SCAN_INTERVAL:
-        return prev_decision, prev_detections, last_enemy_scan
+        return prev_decision, prev_detections, last_enemy_scan, False
     last_enemy_scan = now
     try:
         detections = enemy_detect.scan_enemies(model_path=ENEMY_MODEL_PATH)
@@ -391,7 +395,7 @@ def _maybe_scan_enemies(enemy_ai_enabled, now, last_enemy_scan, prev_decision, p
     except Exception as e:
         print(f"⚠️ 索敌出错, 本轮当漫游处理: {e}")
         decision, detections = ("wander", None), []
-    return decision, detections, last_enemy_scan
+    return decision, detections, last_enemy_scan, True
 
 
 def _update_mythic_latch(latched, misses, has_target, release_misses):
@@ -420,7 +424,8 @@ def _drive_and_check_stall(mouse_target, current_pos, chase_pos_history, state, 
         if len(chase_pos_history) > enemy_detect.CHASE_STALL_WINDOW:
             chase_pos_history.pop(0)
         if enemy_detect.chase_is_stalled(chase_pos_history):
-            overlay.update(state="卡住", message=f"{message}途中卡住, 脱困中")
+            print(f"⚠️ {state}途中卡住, 脱困一下...")
+            overlay.update(state="卡住", message=f"{state}卡住, 脱困中")
             execute_anti_stuck()
             chase_pos_history.clear()
             return "stuck"
@@ -458,11 +463,15 @@ def auto_farming(farming_area, duration=300, *, enemy_ai_enabled=True):
     chase_pos_history = []   # 近期minimap坐标, 供enemy_detect.chase_is_stalled()看净位移
     mythic_latch = False
     mythic_misses = 0
+    mythic_target_pos = None   # 上一 tick 锁定 Mythic 的屏幕坐标, 给 pick_mythic_target 做连续性
 
     while time.time() - start_time < duration:
         if afk_watch.poll_afk_pause():
             overlay.update(state="AFK弹窗处理中", message="等待florr-auto-afk解题")
             time.sleep(0.2)
+            # 暂停/丢位置/出区一圈回来后场景可能全变了 —— 别带着旧锁定用 600 释放
+            # 半径, 让下一 tick 重新过 450 接战门槛.
+            mythic_latch, mythic_misses, mythic_target_pos = False, 0, None
             continue
 
         # 死亡/开局画面检查放在循环最前面、不依赖"位置测不到" —— 死亡结算画面上
@@ -480,6 +489,7 @@ def auto_farming(farming_area, duration=300, *, enemy_ai_enabled=True):
             print("⚠️ 无法检测玩家位置")
             overlay.update(state="无法检测位置")
             time.sleep(1)
+            mythic_latch, mythic_misses, mythic_target_pos = False, 0, None
             continue
 
         # 检查是否还在刷怪区域
@@ -493,12 +503,13 @@ def auto_farming(farming_area, duration=300, *, enemy_ai_enabled=True):
                 overlay.update(state="出错", message="无法回到刷怪区域")
                 exit_reason = "break"
                 break
+            mythic_latch, mythic_misses, mythic_target_pos = False, 0, None
             continue
 
         # 索敌: 按ENEMY_SCAN_INTERVAL节流跑YOLO(不是每tick都跑, 推理有开销).
         # 索敌是附加功能, 任何异常都退化成"漫游", 不能让它打断刷怪主循环.
         now = time.time()
-        enemy_decision, detections, last_enemy_scan = _maybe_scan_enemies(
+        enemy_decision, detections, last_enemy_scan, scanned = _maybe_scan_enemies(
             enemy_ai_enabled, now, last_enemy_scan, enemy_decision, detections)
         enemy_action = enemy_decision[0]
 
@@ -513,21 +524,28 @@ def auto_farming(farming_area, duration=300, *, enemy_ai_enabled=True):
         # 2) Mythic 近身锁定 —— flee 之外, 贴脸有合格 Mythic 就锁定按物种走位磨掉.
         if MYTHIC_LATCH_ENABLED and enemy_ai_enabled:
             mtarget = enemy_detect.pick_mythic_target(
-                detections, enemy_detect.SCREEN_CENTER, mythic_latch,
-                MYTHIC_ENGAGE_PX, MYTHIC_RELEASE_PX, CHASE_MIN_CONF)
-            mythic_latch, mythic_misses = _update_mythic_latch(
-                mythic_latch, mythic_misses, mtarget is not None, MYTHIC_RELEASE_MISSES)
+                detections, center=enemy_detect.SCREEN_CENTER, latched=mythic_latch,
+                engage_px=MYTHIC_ENGAGE_PX, release_px=MYTHIC_RELEASE_PX,
+                chase_min_conf=CHASE_MIN_CONF, prev_pos=mythic_target_pos)
+            # miss 计数只在真跑过扫描的 tick 推进 —— 节流 tick 拿的是同一份缓存
+            # 检测, 再扣一次等于把同一帧证据数两遍, 3-miss 释放在快机器上缩成 ~2.
+            if scanned:
+                mythic_latch, mythic_misses = _update_mythic_latch(
+                    mythic_latch, mythic_misses, mtarget is not None, MYTHIC_RELEASE_MISSES)
             if mythic_latch and mtarget is not None:
+                mythic_target_pos = mtarget["screen_pos"]
                 repel = enemy_decision[3] if enemy_action == "chase" else []
                 mouse_target = enemy_detect.mythic_move_target(
                     mtarget, enemy_detect.SCREEN_CENTER,
                     strafe_radius=MYTHIC_STRAFE_RADIUS,
                     cactus_hold_px=MYTHIC_CACTUS_HOLD_PX,
-                    repel_positions=repel)
+                    repel_positions=repel, k_radial=MYTHIC_STRAFE_K_RADIAL)
                 policy = enemy_detect.MYTHIC_KITE_SPECIES[mtarget["species"]]
                 _drive_and_check_stall(mouse_target, current_pos, chase_pos_history,
                                        "清青怪", f"遛 {mtarget['species']}({policy})")
                 continue
+            # 没锁定 / 这 tick 没目标 —— 放掉连续性锚点, 别让下次锁定拿旧坐标.
+            mythic_target_pos = None
 
         # 3) 普通追击 —— 不 fleeing 也没锁定 Mythic.
         if enemy_action == "chase":

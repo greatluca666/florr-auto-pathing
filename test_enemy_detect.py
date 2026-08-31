@@ -264,6 +264,41 @@ def test_pick_mythic_target_nearest_breaks_a_rank_tie():
     assert got["screen_pos"] == (960 + 120, 540)
 
 
+def test_pick_mythic_target_latched_holds_continuity_across_jitter():
+    """两只同 rank 甲虫分居中心两侧, 已锁定 + prev_pos 贴右边那只 —— 每 tick 都该
+    锁右边那只, 就算两只都有 ±2px 抖动也不翻 180° (纯 -dist_to_center tiebreak
+    会因亚像素抖动来回跳)."""
+    prev = (960 + 150, 540)
+    for dl, dr in [(0, 0), (2, -2), (-2, 2), (2, 2), (-2, -2)]:
+        left = _det("beetle", "Mythic", (960 - 150 + dl, 540), conf=0.9)
+        right = _det("beetle", "Mythic", (960 + 150 + dr, 540), conf=0.9)
+        got = pick_mythic_target([left, right], center=(960, 540),
+                                 latched=True, prev_pos=prev)
+        assert got["screen_pos"][0] > 960          # 始终是右边那只
+
+
+def test_pick_mythic_target_latched_switches_only_for_strictly_higher_rank():
+    """已锁定 + prev_pos 贴着一只仙人掌, 但范围内还有一只甲虫 (rank 更高) ——
+    真来了更值得打的目标, 切过去."""
+    cactus = _det("cactus", "Mythic", (960 + 100, 540), conf=0.9)   # 贴 prev_pos
+    beetle = _det("beetle", "Mythic", (960 - 220, 540), conf=0.9)   # rank 更高, 离 prev 远
+    prev = (960 + 100, 540)
+    got = pick_mythic_target([cactus, beetle], center=(960, 540),
+                             latched=True, prev_pos=prev)
+    assert got["species"] == "beetle"
+
+
+def test_pick_mythic_target_not_latched_ignores_prev_pos():
+    """没锁定时 prev_pos 不参与 —— 仍是 rank 优先 + 离中心近 tiebreak."""
+    dets = [
+        _det("cactus", "Mythic", (1000, 540), conf=0.9),   # rank 1, 更近, 贴 prev
+        _det("beetle", "Mythic", (1150, 540), conf=0.9),   # rank 5, 更远
+    ]
+    got = pick_mythic_target(dets, center=(960, 540), latched=False,
+                             prev_pos=(1000, 540))
+    assert got["species"] == "beetle"
+
+
 def test_select_action_flees_when_avoid_mob_in_range():
     detections = [
         _det("scorpion", "Ultra", (1100, 540)),   # 160px from center, 在触发半径内
