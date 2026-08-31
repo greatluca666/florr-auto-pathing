@@ -183,7 +183,7 @@ def test_flee_mouse_target_returns_center_when_forces_cancel():
 
 
 from enemy_detect import (
-    mythic_candidates, pick_mythic_target,
+    mythic_candidates, pick_mythic_target, mythic_move_target,
     MYTHIC_KITE_SPECIES, MYTHIC_TARGET_RANK,
 )
 
@@ -426,3 +426,69 @@ def test_load_enemy_model_exposes_expected_classes():
 def test_scan_enemies_returns_empty_list_for_blank_image():
     blank = np.zeros((640, 640, 3), dtype=np.uint8)
     assert scan_enemies(image=blank) == []
+
+
+import math as _math
+
+
+def _mdet(species, screen_pos):
+    return {"species": species, "rarity": "Mythic", "screen_pos": screen_pos,
+            "bbox": (0, 0, 0, 0), "confidence": 0.9}
+
+
+def test_mythic_move_ram_matches_aim_mouse_target():
+    from enemy_detect import aim_mouse_target
+    tgt = _mdet("scorpion", (1460, 540))
+    got = mythic_move_target(tgt, center=(960, 540), strafe_radius=180,
+                             cactus_hold_px=220, max_extend=500)
+    assert got == aim_mouse_target((1460, 540), hold_px=None, center=(960, 540),
+                                   max_extend=500)
+    assert got == (1460, 540)
+
+
+def test_mythic_move_hold_approaches_when_far():
+    tgt = _mdet("cactus", (1360, 540))          # d = 400 > 220*1.15
+    got = mythic_move_target(tgt, center=(960, 540), strafe_radius=180,
+                             cactus_hold_px=220, max_extend=500)
+    assert got == (1360, 540)                   # straight-in, dist within max_extend
+
+
+def test_mythic_move_hold_backs_off_when_too_close():
+    tgt = _mdet("cactus", (1110, 540))          # d = 150 < 220*0.85 = 187
+    x, y = mythic_move_target(tgt, center=(960, 540), strafe_radius=180,
+                              cactus_hold_px=220, max_extend=500)
+    assert x < 960 and abs(y - 540) < 1e-6      # moved away along -u
+
+
+def test_mythic_move_hold_orbits_in_the_band():
+    tgt = _mdet("cactus", (1180, 540))          # d = 220, inside [187, 253]
+    x, y = mythic_move_target(tgt, center=(960, 540), strafe_radius=180,
+                              cactus_hold_px=220, max_extend=500)
+    assert abs(x - 960) < 1e-6 and abs(abs(y - 540) - 500) < 1e-6   # pure perpendicular
+
+
+def test_mythic_move_strafe_is_perpendicular_when_at_radius():
+    tgt = _mdet("beetle", (1140, 540))          # d = 180 == strafe_radius
+    x, y = mythic_move_target(tgt, center=(960, 540), strafe_radius=180,
+                              cactus_hold_px=220, max_extend=500)
+    assert abs(x - 960) < 1e-6 and abs(abs(y - 540) - 500) < 1e-6
+
+
+def test_mythic_move_strafe_pulls_inward_when_far():
+    tgt = _mdet("beetle", (1440, 540))          # d = 480 > radius -> inward (+u) component
+    x, y = mythic_move_target(tgt, center=(960, 540), strafe_radius=180,
+                              cactus_hold_px=220, max_extend=500)
+    assert x > 960 and y > 540                  # perp (down) + inward (toward mob, right)
+
+
+def test_mythic_move_strafe_pushes_outward_when_too_close():
+    tgt = _mdet("soldier_fire_ant", (1040, 540))  # d = 80 < radius -> outward (-u)
+    x, y = mythic_move_target(tgt, center=(960, 540), strafe_radius=180,
+                              cactus_hold_px=220, max_extend=500)
+    assert x < 960 and y > 540
+
+
+def test_mythic_move_zero_distance_returns_center():
+    tgt = _mdet("beetle", (960, 540))
+    assert mythic_move_target(tgt, center=(960, 540), strafe_radius=180,
+                              cactus_hold_px=220, max_extend=500) == (960, 540)

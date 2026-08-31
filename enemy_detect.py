@@ -240,6 +240,51 @@ def pick_mythic_target(detections, center=SCREEN_CENTER, latched=False,
     return max(in_range, key=lambda d: (MYTHIC_TARGET_RANK[d["species"]], -dist(d)))
 
 
+def mythic_move_target(target, center=SCREEN_CENTER, *, strafe_radius, cactus_hold_px,
+                       max_extend=None, repel_positions=None, k_radial=0.8):
+    """按 target 的物种策略算这一 tick 鼠标该移到哪:
+      ram   (蝎子/蜈蚣)   —— 直接朝目标全速贴, 等同 aim_mouse_target(hold_px=None)
+      hold  (仙人掌)       —— 远于 hold*1.15 逼近; 近于 hold*0.85 沿 -u 后撤;
+                             中间沿垂直方向 perp 绕圈
+      strafe(甲虫/火蚁)    —— 垂直环绕 perp + 朝 strafe_radius 的径向修正
+                             (d>r 往里带, d<r 往外推), 归一化后 ×max_extend
+    perp 取固定一侧 (-u_y, u_x). d==0 无方向 → 返回 center."""
+    if max_extend is None:
+        max_extend = 500 * utils.mouse_scale()
+    policy = MYTHIC_KITE_SPECIES.get(target["species"], "ram")
+    px, py = target["screen_pos"]
+    cx, cy = center
+    vx, vy = px - cx, py - cy
+    d = math.hypot(vx, vy)
+    if d == 0:
+        return center
+    ux, uy = vx / d, vy / d
+    perp = (-uy, ux)
+
+    if policy == "ram":
+        return aim_mouse_target(target["screen_pos"], hold_px=None, center=center,
+                                max_extend=max_extend, repel_positions=repel_positions)
+
+    if policy == "hold":
+        if d > cactus_hold_px * 1.15:
+            return aim_mouse_target(target["screen_pos"], hold_px=None, center=center,
+                                    max_extend=max_extend, repel_positions=repel_positions)
+        if d < cactus_hold_px * 0.85:
+            dx, dy = -ux, -uy            # 后撤
+        else:
+            dx, dy = perp               # 绕圈
+        return (cx + dx * max_extend, cy + dy * max_extend)
+
+    # policy == "strafe"
+    radial = (d - strafe_radius) / strafe_radius * k_radial
+    dx = perp[0] + ux * radial
+    dy = perp[1] + uy * radial
+    m = math.hypot(dx, dy)
+    if m < 1e-6:
+        return center
+    return (cx + dx / m * max_extend, cy + dy / m * max_extend)
+
+
 def aim_mouse_target(target_pos, hold_px=None, center=SCREEN_CENTER, max_extend=None,
                      repel_positions=None, repel_px=None, repel_gain=1.6):
     """把目标的屏幕坐标换算成鼠标该移到的位置 —— 纯屏幕坐标系计算, 跟
