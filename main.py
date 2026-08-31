@@ -361,21 +361,18 @@ def random_walkable_point(area, binary_map, max_tries=20):
     return random.randint(x1, x2), random.randint(y1, y2)
 
 
-def _maybe_scan_enemies(enemy_ai_enabled, now, last_enemy_scan, prev_decision):
-    """索敌节流 + 总开关. 从 auto_farming 里抽出来单测.
+def _maybe_scan_enemies(enemy_ai_enabled, now, last_enemy_scan, prev_decision, prev_detections):
+    """索敌节流 + 总开关. 返回 (decision, detections, last_enemy_scan).
 
-    - enemy_ai_enabled=False: 永远返回漫游决策, 一次都不碰 enemy_detect(用户在
-      GUI 里关掉了索敌 AI).
-    - 距上次扫描不到 ENEMY_SCAN_INTERVAL: 沿用上一轮的决策, 不重复跑 YOLO.
-    - 到点了: 跑一次 scan_enemies + select_action; 索敌是附加功能, 任何异常都
-      退化成漫游, 不能打断刷怪主循环.
-
-    返回 (decision, last_enemy_scan).
+    - enemy_ai_enabled=False: 永远返回漫游决策 + 空检测列表, 一次都不碰 enemy_detect.
+    - 距上次扫描不到 ENEMY_SCAN_INTERVAL: 沿用上一轮的 decision 和 detections.
+    - 到点了: 跑一次 scan_enemies + select_action; 任何异常 → 漫游 + 空列表.
+    detections 单独回传是给 Mythic 近身锁定用的 (select_action 不看这个).
     """
     if not enemy_ai_enabled:
-        return ("wander", None), last_enemy_scan
+        return ("wander", None), [], last_enemy_scan
     if now - last_enemy_scan < ENEMY_SCAN_INTERVAL:
-        return prev_decision, last_enemy_scan
+        return prev_decision, prev_detections, last_enemy_scan
     last_enemy_scan = now
     try:
         detections = enemy_detect.scan_enemies(model_path=ENEMY_MODEL_PATH)
@@ -387,8 +384,22 @@ def _maybe_scan_enemies(enemy_ai_enabled, now, last_enemy_scan, prev_decision):
         )
     except Exception as e:
         print(f"⚠️ 索敌出错, 本轮当漫游处理: {e}")
-        decision = ("wander", None)
-    return decision, last_enemy_scan
+        decision, detections = ("wander", None), []
+    return decision, detections, last_enemy_scan
+
+
+def _update_mythic_latch(latched, misses, has_target, release_misses):
+    """Mythic 近身锁定的状态机 (纯函数). has_target = 这次扫描有没有合格的近身
+    Mythic. 有 → 锁定, misses 清零. 没有且已锁定 → misses+1, 攒够 release_misses
+    就解锁 (迟滞, 扛检测闪烁). 返回 (latched, misses)."""
+    if has_target:
+        return True, 0
+    if not latched:
+        return False, 0
+    misses += 1
+    if misses >= release_misses:
+        return False, 0
+    return True, misses
 
 
 def auto_farming(farming_area, duration=300, *, enemy_ai_enabled=True):
@@ -415,6 +426,7 @@ def auto_farming(farming_area, duration=300, *, enemy_ai_enabled=True):
     exit_reason = "timeout"
     last_enemy_scan = 0.0
     enemy_decision = ("wander", None)
+    detections = []
     chase_pos_history = []   # 近期minimap坐标, 供enemy_detect.chase_is_stalled()看净位移
 
     while time.time() - start_time < duration:
@@ -456,8 +468,8 @@ def auto_farming(farming_area, duration=300, *, enemy_ai_enabled=True):
         # 索敌: 按ENEMY_SCAN_INTERVAL节流跑YOLO(不是每tick都跑, 推理有开销).
         # 索敌是附加功能, 任何异常都退化成"漫游", 不能让它打断刷怪主循环.
         now = time.time()
-        enemy_decision, last_enemy_scan = _maybe_scan_enemies(
-            enemy_ai_enabled, now, last_enemy_scan, enemy_decision)
+        enemy_decision, detections, last_enemy_scan = _maybe_scan_enemies(
+            enemy_ai_enabled, now, last_enemy_scan, enemy_decision, detections)
         enemy_action = enemy_decision[0]
 
         if enemy_action == "flee":

@@ -32,27 +32,30 @@ def test_apply_worker_config_maps_keys(monkeypatch):
 def test_maybe_scan_enemies_disabled_never_touches_enemy_detect(monkeypatch):
     monkeypatch.setattr(main.enemy_detect, "scan_enemies",
                         lambda **k: (_ for _ in ()).throw(AssertionError("不该扫描")))
-    decision, last = main._maybe_scan_enemies(False, 1000.0, 0.0, ("chase", "x"))
+    decision, dets, last = main._maybe_scan_enemies(False, 1000.0, 0.0, ("chase", "x"), ["old"])
     assert decision == ("wander", None)
+    assert dets == []
     assert last == 0.0
 
 
 def test_maybe_scan_enemies_throttled_returns_prev(monkeypatch):
     monkeypatch.setattr(main.enemy_detect, "scan_enemies",
                         lambda **k: (_ for _ in ()).throw(AssertionError("还没到扫描间隔")))
-    prev = ("flee", [(1, 2)])
-    decision, last = main._maybe_scan_enemies(True, 0.1, 0.0, prev)
+    prev, prev_dets = ("flee", [(1, 2)]), ["d1", "d2"]
+    decision, dets, last = main._maybe_scan_enemies(True, 0.1, 0.0, prev, prev_dets)
     assert decision is prev
+    assert dets is prev_dets
     assert last == 0.0
 
 
 def test_maybe_scan_enemies_scans_when_due(monkeypatch):
     monkeypatch.setattr(main.enemy_detect, "scan_enemies", lambda **k: ["det"])
     monkeypatch.setattr(main.enemy_detect, "select_action",
-                        lambda dets, **k: ("chase", "target", 250))
+                        lambda dets, **k: ("chase", "target", 250, []))
     now = main.ENEMY_SCAN_INTERVAL + 1.0
-    decision, last = main._maybe_scan_enemies(True, now, 0.0, ("wander", None))
-    assert decision == ("chase", "target", 250)
+    decision, dets, last = main._maybe_scan_enemies(True, now, 0.0, ("wander", None), [])
+    assert decision == ("chase", "target", 250, [])
+    assert dets == ["det"]
     assert last == now
 
 
@@ -60,8 +63,9 @@ def test_maybe_scan_enemies_scan_error_degrades_to_wander(monkeypatch):
     monkeypatch.setattr(main.enemy_detect, "scan_enemies",
                         lambda **k: (_ for _ in ()).throw(RuntimeError("model missing")))
     now = main.ENEMY_SCAN_INTERVAL + 1.0
-    decision, last = main._maybe_scan_enemies(True, now, 0.0, ("wander", None))
+    decision, dets, last = main._maybe_scan_enemies(True, now, 0.0, ("wander", None), ["old"])
     assert decision == ("wander", None)
+    assert dets == []
     assert last == now
 
 
@@ -152,3 +156,22 @@ def test_install_worker_stdin_watcher_noop_without_stdin(monkeypatch):
     monkeypatch.setattr(main, "threading", _FakeThreading)
     main._install_worker_stdin_watcher()
     assert started == []
+
+
+def test_update_mythic_latch_locks_on_target():
+    assert main._update_mythic_latch(False, 0, True, 3) == (True, 0)
+    assert main._update_mythic_latch(True, 2, True, 3) == (True, 0)   # miss counter resets
+
+
+def test_update_mythic_latch_stays_off_without_target():
+    assert main._update_mythic_latch(False, 0, False, 3) == (False, 0)
+
+
+def test_update_mythic_latch_counts_misses_then_releases():
+    latched, misses = True, 0
+    latched, misses = main._update_mythic_latch(latched, misses, False, 3)
+    assert (latched, misses) == (True, 1)
+    latched, misses = main._update_mythic_latch(latched, misses, False, 3)
+    assert (latched, misses) == (True, 2)
+    latched, misses = main._update_mythic_latch(latched, misses, False, 3)
+    assert (latched, misses) == (False, 0)
