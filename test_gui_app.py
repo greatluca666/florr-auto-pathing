@@ -49,3 +49,30 @@ def test_build_worker_config_shapes_values():
 ])
 def test_parse_positive_ints(args, expected):
     assert gui_app.parse_positive_ints(*args) == expected
+
+
+def test_start_afk_already_running():
+    assert gui_app.start_afk(exe_exists=True, running=True,
+                             confirm_download=lambda: pytest.fail()) == "already"
+
+
+def test_start_afk_missing_exe_declined():
+    assert gui_app.start_afk(exe_exists=False, running=False,
+                             confirm_download=lambda: False) == "declined"
+
+
+def test_start_afk_missing_exe_download_ok(monkeypatch):
+    monkeypatch.setattr(gui_app.afk_watch, "download_florr_auto_afk", lambda: True)
+    assert gui_app.start_afk(exe_exists=False, running=False,
+                             confirm_download=lambda: True) == "downloaded"
+
+
+def test_start_afk_missing_exe_download_fails(monkeypatch):
+    monkeypatch.setattr(gui_app.afk_watch, "download_florr_auto_afk", lambda: False)
+    assert gui_app.start_afk(exe_exists=False, running=False,
+                             confirm_download=lambda: True) == "download_failed"
+
+
+def test_start_afk_exe_present_not_running():
+    assert gui_app.start_afk(exe_exists=True, running=False,
+                             confirm_download=lambda: pytest.fail()) == "started"

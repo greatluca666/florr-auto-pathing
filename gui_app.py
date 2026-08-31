@@ -15,6 +15,7 @@ import customtkinter as ctk
 
 import app_config
 import afk_watch
+import gui_chrome_flow
 
 _IS_WINDOWS = sys.platform == "win32"
 
@@ -58,6 +59,22 @@ def parse_positive_ints(*strs):
             return None
         out.append(n)
     return out
+
+
+def start_afk(*, exe_exists, running, confirm_download):
+    """AFK 开关打开时的决策(纯函数, 副作用由调用方按返回值执行).
+    already: 已在跑, 什么都不用做
+    declined: exe 缺, 用户拒绝下载
+    downloaded / download_failed: exe 缺, 下过了(成/败)
+    started: exe 在, 需要调用方去 ensure_florr_auto_afk_running()
+    """
+    if running:
+        return "already"
+    if not exe_exists:
+        if not confirm_download():
+            return "declined"
+        return "downloaded" if afk_watch.download_florr_auto_afk() else "download_failed"
+    return "started"
 
 
 class App(ctk.CTk):
@@ -198,6 +215,24 @@ class App(ctk.CTk):
             self._start_worker()
 
     def _start_worker(self):
+        # 开始前的引导, 顺序固定: 专用 Chrome 就绪 → (开关开着才)确保 florr-auto-afk
+        # → 让用户把 florr.io 切到全屏. 任一步取消就静默中止, 不 Popen worker.
+        try:
+            gui_chrome_flow.ensure_chrome_ready(self)
+        except gui_chrome_flow.ChromeSetupCancelled:
+            self._log_line("已取消(专用 Chrome 未就绪)\n")
+            return
+        if bool(self.afk_switch.get()):
+            self._ensure_afk()
+
+        from tkinter import messagebox
+        if not messagebox.askokcancel(
+                "把 florr.io 切到全屏",
+                "开始前请把 florr.io 切到全屏(任意分辨率), 然后点确定。",
+                parent=self):
+            self._log_line("已取消(未确认全屏)\n")
+            return
+
         vals = self._current_values()
         if vals["location"] is None or vals["area"] is None:
             self._log_line("⚠️ 请先在地图上点目标点并框出刷怪区\n")
@@ -263,8 +298,36 @@ class App(ctk.CTk):
     def _show_page(self, name):
         pass  # Task 8: 控制台是唯一可用页, 其余灰置
 
+    def _persist_afk(self, enabled):
+        cfg = app_config.load_config()
+        cfg["afk_enabled"] = bool(enabled)
+        app_config.save_config(cfg)
+        self._cfg = cfg
+
+    def _ensure_afk(self):
+        if not _IS_WINDOWS:
+            return
+        from tkinter import messagebox
+        outcome = start_afk(
+            exe_exists=os.path.isfile(afk_watch._EXE_PATH),
+            running=afk_watch.is_florr_auto_afk_running(),
+            confirm_download=lambda: messagebox.askyesno(
+                "下载 florr-auto-afk?",
+                "没检测到 florr-auto-afk(处理 AFK 弹窗用). 现在下载? 约 350MB.",
+                parent=self),
+        )
+        self._log_line(f"AFK: {outcome}\n")
+        if outcome in ("started", "downloaded"):
+            afk_watch.ensure_florr_auto_afk_running()  # 写 config + Popen + 等启动(可能卡几秒)
+
     def _on_afk_toggle(self):
-        pass  # Task 10
+        enabled = bool(self.afk_switch.get())
+        if enabled:
+            self._ensure_afk()
+        else:
+            afk_watch.stop_florr_auto_afk()
+            self._log_line("AFK: 已停止 florr-auto-afk\n")
+        self._persist_afk(enabled)
 
     def on_closing(self):
         # _stop_worker 只 self.after(3000, ...) 排一个兜底 kill —— 关窗时 mainloop
