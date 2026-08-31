@@ -401,21 +401,43 @@ def click_continue_after_death():
     加一点等待, 让画面先稳定下来.
     """
     time.sleep(0.5)
-    pyautogui.moveTo(_CONTINUE_BUTTON_POS)
-    time.sleep(0.2)
-    pyautogui.click()
-    time.sleep(0.1)
-    pyautogui.click()
+    _click_button_until_gone(_CONTINUE_BUTTON_POS, on_death_screen, "继续")
+
+
+# 点"开始"/"继续"这类确认按钮: 单发盲点经常不生效 —— 第一下click()常常只把浏览器
+# 窗口/标签页抢到前台, 点击事件没真进游戏画布; 加上按钮淡入动画、页面还在加载,
+# 颜色刚过检测阈值那一刻按钮还不可交互. 以前start路径点一次就往下走, 没中的话这轮
+# 啥也没刷: lazy_theta_pathing()对着菜单立刻返回, round_elapsed极小, 主循环把它当
+# "没刷满5分钟"给consecutive_short_rounds+1, 连着两次误触发switch_server() —— 可
+# 服务器根本没问题, 是自己没点进去. 改成点完回采一次屏幕确认目标画面真的消失了,
+# 没消失就再点, 试满上限还在就返回False交主循环下轮重试(跟本项目"卡住不放弃"
+# 的无限重试风格一致, 不在这里硬卡死也不抛异常).
+_CONFIRM_CLICK_MAX_ATTEMPTS = 10
+_CONFIRM_CLICK_SETTLE_SECONDS = 1.5
+
+
+def _click_button_until_gone(button_pos, still_showing, label):
+    """鼠标移到button_pos连点两下(第一下常只抢焦点), 等画面稳定, 再用still_showing()
+    复查是不是真离开了该画面. 没离开就重试, 最多_CONFIRM_CLICK_MAX_ATTEMPTS次.
+    返回True=确认已离开, False=试满还在."""
+    for attempt in range(1, _CONFIRM_CLICK_MAX_ATTEMPTS + 1):
+        pyautogui.moveTo(button_pos)
+        time.sleep(0.2)
+        pyautogui.click()
+        time.sleep(0.1)
+        pyautogui.click()
+        time.sleep(_CONFIRM_CLICK_SETTLE_SECONDS)
+        if not still_showing():
+            return True
+        print(f"⚠️ 点[{label}]第{attempt}次没生效, 画面还在, 重试...")
+    print(f"❌ 连点{_CONFIRM_CLICK_MAX_ATTEMPTS}次[{label}]都没进去, 本轮先放过, 下轮再试")
+    return False
 
 
 def click_start_game():
-    """确认开局菜单, 真正进入游戏. 同click_continue_after_death()的理由:
-    纯点击, 连点两次保证命中(参见该函数注释里的完整说明)."""
-    pyautogui.moveTo(_START_BUTTON_POS)
-    time.sleep(0.2)
-    pyautogui.click()
-    time.sleep(0.1)
-    pyautogui.click()
+    """确认开局菜单, 真正进入游戏. 连点两下 + 复查on_start_screen()确认菜单消失,
+    没消失就重试(理由见_click_button_until_gone上面的注释)."""
+    return _click_button_until_gone(_START_BUTTON_POS, on_start_screen, "开始")
 
 
 def check_stage():

@@ -37,35 +37,99 @@ def _hex_to_bgr(hex_color):
     return tuple(int(hex_color[i:i + 2], 16) for i in (4, 2, 0))
 
 
-MIN_RARITY_PIXEL_RATIO = 0.08  # 采样区域里至少8%像素匹配上, 才采信这个稀有度判定;
-                                 # 低于这个占比大概率是背景色主导, 不是真名牌颜色.
+MIN_RARITY_PIXEL_RATIO = 0.06  # 稀有度词是描边方块字, 笔画占比本来就不高; 采样窗
+                                 # 已经靠血条锚点定位到词上之后, 6%命中就采信这一档.
+                                 # 低于此 → 背景主导 → 默认Common.
+
+
+def _find_hp_bar(image, bbox):
+    """在怪的下半身~框底偏下一带找那条绿色血条. florr.io每只怪脚下都挂一条亮饱和
+    绿的横条, 是整个名牌区里最好认的锚点 —— 怪名(白字, 没有稀有度信息)在血条正
+    上方, 稀有度词(带稀有度颜色, 要采的就是它)在血条正下方、右对齐血条右端.
+    返回(bar_x0, bar_y, bar_x1, bar_thick), 找不到 → None."""
+    x1, y1, x2, y2 = [int(v) for v in bbox]
+    h = max(1, y2 - y1)
+    H, W = image.shape[:2]
+    # 上边到框内15%处就开始找 —— 框松时名牌会落在框内靠下, 不能只从框底往下看.
+    ys0 = max(0, y1 + int(0.15 * h))
+    ys1 = min(H, y2 + max(22, int(0.60 * h)) + 8)
+    xs0 = max(0, x1 - 12)
+    xs1 = min(W, x2 + 18)
+    if ys1 - ys0 < 3 or xs1 - xs0 < 15:
+        return None
+
+    band = image[ys0:ys1, xs0:xs1].astype(int)
+    b, g, r = band[..., 0], band[..., 1], band[..., 2]
+    green = ((g > 130) & (g < 245) & (r < 205) & (b < 135)
+             & (g - r > 18) & (g - b > 50)).astype(np.uint8)
+    if int(green.sum()) < 12:
+        return None
+    rowsum = green.sum(axis=1)
+    row = int(np.argmax(rowsum))
+    if int(rowsum[row]) < 15:
+        return None
+    cols = np.where(green[row] > 0)[0]
+    run = int(cols.max() - cols.min())
+    if run < 15:
+        return None
+
+    # 血条厚度: 从峰值行往上下扩, 命中数还有峰值40%的行都算进去.
+    thr = max(1, int(0.4 * rowsum[row]))
+    thick, ri = 1, row - 1
+    while ri >= 0 and rowsum[ri] >= thr:
+        thick, ri = thick + 1, ri - 1
+    ri = row + 1
+    while ri < len(rowsum) and rowsum[ri] >= thr:
+        thick, ri = thick + 1, ri + 1
+
+    # 血条是"长而薄"的; 绿色仙人掌/沙尘暴半透明身体是一大坨绿 —— 用长宽比 + 厚度
+    # 上限把那种一坨的绿挡掉, 别把怪身当血条.
+    if thick > 12 or run < 4 * thick:
+        return None
+    return (xs0 + int(cols.min()), ys0 + row, xs0 + int(cols.max()), thick)
 
 
 def sample_rarity(image, bbox, tolerance=40, min_pixel_ratio=MIN_RARITY_PIXEL_RATIO):
-    """在检测框上方采样一小块区域(florr.io怪物名牌悬浮在头顶), 按每种稀有度颜色
-    数命中像素数、取数量最多的那档(不是取平均色再找最近邻 —— 名牌是带背景的
-    局部色块, 平均色会被背景冲淡到不可用, 跟utils.py里get_player_location_on_map
-    同款'数像素'手法, 不用'取均值'). 采样区域越界(空)、或最多那档命中像素占比
-    低于min_pixel_ratio(大概率是背景主导, 不是真名牌) → 默认Common —— 这是最
-    宽松/正常接战的那一档, 颜色采样失败不会误触发规避行为."""
-    x1, y1, x2, y2 = bbox
-    cx = int((x1 + x2) / 2)
-    tag_cy = max(0, int(y1) - 14)
-    half_w, half_h = 20, 6
-    y0, y1s = max(0, tag_cy - half_h), tag_cy + half_h
-    x0, x1s = max(0, cx - half_w), cx + half_w
-    region = image[y0:y1s, x0:x1s]
+    """读一只怪的稀有度. 先用_find_hp_bar()找到怪脚下那条绿血条当锚点, 再在血条
+    正下方、右对齐血条右端的那一小块(florr.io稀有度词的固定位置)按每种稀有度颜色
+    数命中像素、取最多那档(数像素、不取均值 —— 描边文字取均值会被背景冲淡, 跟
+    utils.get_player_location_on_map同手法). 找不到血条、采样窗越界、或最高档占比
+    < min_pixel_ratio → 默认Common(最宽松那档, 读失败不会误触发规避).
+
+    旧实现往框顶上方14px采样 —— 实测名牌整个在怪下方, 那位置永远是空地, 每只怪
+    都读成Common → 全部ENGAGE、该躲的强怪也直接撞上去(见
+    docs/superpowers/specs/2026-08-16-sszone-enemy-detection-design.md稀有度校准
+    遗留项)."""
+    bar = _find_hp_bar(image, bbox)
+    if bar is None:
+        return "Common"
+    bar_x0, bar_y, bar_x1, bar_thick = bar
+    H, W = image.shape[:2]
+    bar_len = bar_x1 - bar_x0
+
+    # 稀有度词: 血条下方(跳过半根血条厚度, 别采到血条本身), 高度~3倍血条厚, 宽度
+    # 取血条右端往左一段(词右对齐血条右端, 2个方块字), 略越过右端好收住边缘.
+    word_h = max(12, 3 * bar_thick)
+    word_w = max(40, int(0.55 * bar_len))
+    ry0 = min(H, bar_y + bar_thick // 2 + 1)
+    ry1 = min(H, ry0 + word_h)
+    rx0 = max(0, bar_x1 - word_w)
+    rx1 = min(W, bar_x1 + max(4, bar_thick))
+    region = image[ry0:ry1, rx0:rx1]
     if region.size == 0:
         return "Common"
 
+    # 只扫Common..Ultra. Super/Eternal/Unique这仨这个刷怪区实测不刷(见design doc),
+    # 而且它们的色(2BFFA3绿/555555灰)最容易被血条绿、描边黑误命中 —— 扫了只会
+    # 制造假的高稀有度读数, 反而把本该正常打的怪误判成规避.
+    scan = RARITY_ORDER[:RARITY_RANK["Ultra"] + 1]
     total_px = region.shape[0] * region.shape[1]
     best_name, best_count = "Common", 0
-    for name in RARITY_ORDER:
+    for name in scan:
         b, g, r = _hex_to_bgr(RARITY_COLORS[name])
         lower = np.array([max(0, b - tolerance), max(0, g - tolerance), max(0, r - tolerance)])
         upper = np.array([min(255, b + tolerance), min(255, g + tolerance), min(255, r + tolerance)])
-        mask = cv2.inRange(region, lower, upper)
-        count = int(np.count_nonzero(mask))
+        count = int(np.count_nonzero(cv2.inRange(region, lower, upper)))
         if count > best_count:
             best_name, best_count = name, count
 
@@ -121,18 +185,24 @@ SCREEN_CENTER = (utils.SCREEN_WIDTH / 2, utils.SCREEN_HEIGHT / 2)  # 屏幕中�
                               # 同一份SCREEN_WIDTH/SCREEN_HEIGHT, 不再自己独立写死一份.
 
 
-def aim_mouse_target(target_pos, hold_px=None, center=SCREEN_CENTER, max_extend=None):
+def aim_mouse_target(target_pos, hold_px=None, center=SCREEN_CENTER, max_extend=None,
+                     repel_positions=None, repel_px=None, repel_gain=1.6):
     """把目标的屏幕坐标换算成鼠标该移到的位置 —— 纯屏幕坐标系计算, 跟
     move_to_position()那套小地图坐标系是两套独立空间, 不能互相传参数。
     hold_px设了值时, 一旦已经进到这个距离内就不再继续靠近(退回屏幕中心, 停止
     输出"继续接近"的方向), 给CAUTIOUS档的怪用; hold_px=None时无视距离上限一直
     往目标方向贴(只按max_extend限速度), 给ENGAGE档用。
 
+    repel_positions给了值时(一串危险怪的屏幕坐标), 会往"远离它们"的方向叠一个
+    排斥分量到追击方向上 —— 追归追, 但路径绕开半路的危险怪, 不是直直怼过去。
+    只有危险怪进到repel_px以内才起作用, 越近推得越狠(线性衰减×repel_gain);
+    repel_positions为空/None时行为跟以前完全一样。合成方向被排斥力抵消到约0 →
+    这一tick退回屏幕中心(停一下), 等下一帧重新算。
+
     max_extend默认None时按1920x1080参照值500乘utils.mouse_scale()换算 —— 跟
     utils.keydown()的delta是同一种"1920x1080量出来的屏幕转向距离"，同样需要
-    按分辨率缩放(最终回归审查发现的缺口: 这条追击/规避的转向路径之前漏掉了,
-    utils.keydown()那条漫游路径缩放过了)。显式传值(比如测试里传500)会跳过这个
-    默认换算, 直接用调用方给的值 —— 保持既有调用点(测试)的行为不变。"""
+    按分辨率缩放。repel_px默认None时同理按参照值450换算。显式传值(比如测试里传
+    500)会跳过默认换算, 保持既有调用点行为不变。"""
     if max_extend is None:
         max_extend = 500 * utils.mouse_scale()
     tx, ty = target_pos
@@ -141,10 +211,35 @@ def aim_mouse_target(target_pos, hold_px=None, center=SCREEN_CENTER, max_extend=
     dist = math.hypot(dx, dy)
     if dist == 0:
         return center
+
+    rx, ry = 0.0, 0.0
+    if repel_positions:
+        if repel_px is None:
+            repel_px = 450 * utils.mouse_scale()
+        for px, py in repel_positions:
+            adx, ady = cx - px, cy - py
+            ad = math.hypot(adx, ady)
+            if ad == 0 or ad >= repel_px:
+                continue
+            w = (1.0 - ad / repel_px) * repel_gain
+            rx += adx / ad * w
+            ry += ady / ad * w
+
     if hold_px is not None and dist <= hold_px:
+        # 已经进到CAUTIOUS保持距离内: 平时就停(退回中心), 但半路有危险怪在推 →
+        # 这一tick还是往远离危险的方向挪一下, 别傻站着被撞。
+        if rx == 0.0 and ry == 0.0:
+            return center
+        rmag = math.hypot(rx, ry)
+        step = min(max_extend, repel_px)
+        return (cx + rx / rmag * step, cy + ry / rmag * step)
+
+    ux, uy = dx / dist + rx, dy / dist + ry
+    umag = math.hypot(ux, uy)
+    if umag < 1e-6:
         return center
     extend = min(dist, max_extend)
-    return (cx + dx / dist * extend, cy + dy / dist * extend)
+    return (cx + ux / umag * extend, cy + uy / umag * extend)
 
 
 def flee_mouse_target(avoid_positions, center=SCREEN_CENTER, extend=None):
@@ -172,39 +267,58 @@ def flee_mouse_target(avoid_positions, center=SCREEN_CENTER, extend=None):
     return (cx + fx / mag * extend, cy + fy / mag * extend)
 
 
-def chase_is_stalled(last_pos, current_pos, stall_count, progress_epsilon=1.5, stall_limit=15):
-    """追击/规避途中判断是否卡住了(玩家位置连续没有实质进展, 跟move_to_position
-    的卡住判定思路一致, 但这里没有'目标点'可比距离 —— 追的目标本身在动, 只能
-    看玩家自己的位置有没有变化). 返回(更新后的stall_count, 是否该让步给一轮
-    漫游). last_pos/current_pos都是minimap坐标系(get_player_position()的返回值,
-    不是屏幕坐标) —— 这里比较的是'玩家挪没挪窝', 不是跟目标的屏幕坐标做减法,
-    没有违反屏幕坐标系/小地图坐标系不能混用的规则."""
-    if last_pos is None or current_pos is None:
-        return 0, False
-    dx = current_pos[0] - last_pos[0]
-    dy = current_pos[1] - last_pos[1]
-    moved = math.hypot(dx, dy)
-    if moved < progress_epsilon:
-        stall_count += 1
-    else:
-        stall_count = 0
-    return stall_count, stall_count >= stall_limit
+CHASE_STALL_WINDOW = 25  # tick, ≈1.25s @ time.sleep(0.05); 判"追击途中卡住"看的时间窗
 
 
-def select_action(detections, avoid_trigger_px=400, cautious_hold_px=250, center=SCREEN_CENTER):
+def chase_is_stalled(pos_history, min_progress=4.0, window=CHASE_STALL_WINDOW):
+    """追击/规避途中判断是否真的卡住了 —— 看整段时间窗内玩家的**净位移**, 不是
+    看相邻两tick挪了多少。追一个会走位的目标时, 相邻tick位移小是常态(绕圈、
+    微调), 旧写法(相邻tick差<1.5就+1, 连续15次就脱困)会把正常追击误判成卡住、
+    半路触发execute_anti_stuck()把玩家怼向目标。改成: 攒满一个window的位置样本
+    后, 窗口首尾净位移 < min_progress(minimap坐标单位)才算卡住 —— 贴墙被顶住
+    净位移≈0, 正常追击哪怕绕圈净位移也会累积过阈值。
+
+    pos_history: 调用方维护的近期minimap坐标列表(get_player_position()的返回值,
+    不是屏幕坐标), 最新的在末尾。样本不足一个window → 返回False(还没攒够, 不判)。
+    只返回bool(该不该让步脱困), 不再回传计数 —— 状态在调用方那个列表里。"""
+    if pos_history is None or len(pos_history) < window:
+        return False
+    x0, y0 = pos_history[-window]
+    x1, y1 = pos_history[-1]
+    return math.hypot(x1 - x0, y1 - y0) < min_progress
+
+
+CHASE_MIN_CONF = 0.55  # 只有YOLO置信度到这个数的检测框才够格当"追击目标". 0.4~0.55
+                        # 那档框经常是幻影(半透明沙尘暴边缘、影子), 拿它当目标就是
+                        # 朝空气全速冲. 危险怪(AVOID/CAUTIOUS)不受此限 —— 宁可对着
+                        # 一个可能不存在的强怪多绕一下, 不能漏躲。
+
+
+def select_action(detections, avoid_trigger_px=400, cautious_hold_px=250,
+                  center=SCREEN_CENTER, chase_min_conf=CHASE_MIN_CONF):
     """每tick的索敌决策入口. detections是scan_enemies()给的检测列表(或测试里
     手搭的同结构字典列表). 返回三选一:
-      ("flee", avoid_positions)   —— 触发半径内有AVOID怪, 优先规避
-      ("chase", target, hold_px)  —— 没有近身危险, 但有可打目标(ENGAGE/CAUTIOUS)
-      ("wander", None)            —— 啥有效目标都没有, 交回原来的随机漫游
-    AVOID怪永远进不了"chase"候选池, 哪怕它稀有度算下来优先级最高。"""
+      ("flee", avoid_positions)             —— 触发半径内有AVOID怪, 优先规避
+      ("chase", target, hold_px, repel)     —— 没有近身危险, 但有可打目标; repel是
+                                               半路要绕开的危险怪坐标(AVOID全部 +
+                                               除目标外的CAUTIOUS), 传给
+                                               aim_mouse_target当排斥源
+      ("wander", None)                      —— 啥有效目标都没有, 交回随机漫游
+    AVOID怪永远进不了"chase"候选池, 哪怕它稀有度算下来优先级最高。追击目标还要
+    过chase_min_conf置信度关; 没过关的ENGAGE直接丢, 没过关的AVOID/CAUTIOUS仍算
+    危险源(进flee判定/repel), 只是不当追击目标。"""
     avoid_positions = []
+    cautious_dets = []
     candidates = []
     for d in detections:
         bucket = classify_action(d["species"], d["rarity"])
+        conf = d.get("confidence", 1.0)
         if bucket == "AVOID":
             avoid_positions.append(d["screen_pos"])
-        else:
+            continue
+        if bucket == "CAUTIOUS":
+            cautious_dets.append(d)
+        if conf >= chase_min_conf:
             candidates.append((d, bucket))
 
     if avoid_positions:
@@ -221,7 +335,11 @@ def select_action(detections, avoid_trigger_px=400, cautious_hold_px=250, center
             candidates,
             key=lambda pair: priority_score(pair[0]["species"], pair[0]["rarity"]))
         hold_px = cautious_hold_px if best_bucket == "CAUTIOUS" else None
-        return ("chase", best, hold_px)
+        # 半路危险源: 所有AVOID怪(不管在不在flee触发半径内 —— 402px的Ultra蝎子
+        # 不该触发flee, 但追别的怪时也不能直直穿过它) + 除目标外的CAUTIOUS怪。
+        repel = list(avoid_positions)
+        repel += [d["screen_pos"] for d in cautious_dets if d is not best]
+        return ("chase", best, hold_px, repel)
 
     return ("wander", None)
 
