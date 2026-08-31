@@ -159,7 +159,8 @@ def process(image, stem, conf, tolerance):
             if not storm:
                 print(f"  desert#{i} 无 sandstorm.pt 对应框")
                 continue
-            j, best = max(enumerate(storm), key=lambda t: iou(d["bbox"], t[1]["bbox"]))
+            j = max(range(len(storm)), key=lambda k: iou(d["bbox"], storm[k]["bbox"]))
+            best = iou(d["bbox"], storm[j]["bbox"])
             dc = np.hypot(d["screen_pos"][0] - storm[j]["screen_pos"][0],
                           d["screen_pos"][1] - storm[j]["screen_pos"][1])
             print(f"  desert#{i} <-> sandstorm#{j}  IoU={best:.2f}  中心距={dc:.0f}px")
