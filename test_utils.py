@@ -242,3 +242,53 @@ def test_get_player_location_on_map_accepts_a_shrunk_marker_blob():
     x, y = position
     assert abs(x - 150) < 1.5
     assert abs(y - 150) < 1.5
+
+
+class _ClickSpy:
+    def __init__(self):
+        self.clicks = 0
+
+    def moveTo(self, *_a, **_kw):
+        pass
+
+    def click(self, *_a, **_kw):
+        self.clicks += 1
+
+
+def _patch_click(monkeypatch, on_screen_sequence):
+    """on_screen_sequence: 每次复查画面时依次返回的值; 用完后保持最后一个值."""
+    spy = _ClickSpy()
+    monkeypatch.setattr(utils, "pyautogui", spy)
+    monkeypatch.setattr(utils.time, "sleep", lambda *_a, **_kw: None)
+    seq = list(on_screen_sequence)
+    calls = {"n": 0}
+
+    def fake_on_start_screen():
+        i = min(calls["n"], len(seq) - 1)
+        calls["n"] += 1
+        return seq[i]
+
+    monkeypatch.setattr(utils, "on_start_screen", fake_on_start_screen)
+    return spy
+
+
+def test_click_start_game_stops_after_menu_gone_on_first_try(monkeypatch):
+    # 点一下菜单就消失了 —— 只该点这一轮(两下connect click), 返回True.
+    spy = _patch_click(monkeypatch, [False])
+    assert utils.click_start_game() is True
+    assert spy.clicks == 2
+
+
+def test_click_start_game_retries_until_menu_gone(monkeypatch):
+    # 前两轮点了菜单还在, 第三轮才进去 —— 该重试到进去为止.
+    spy = _patch_click(monkeypatch, [True, True, False])
+    assert utils.click_start_game() is True
+    assert spy.clicks == 2 * 3
+
+
+def test_click_start_game_gives_up_after_max_attempts_without_crashing(monkeypatch):
+    # 菜单怎么点都不消失(标签页卡死之类) —— 试满次数后返回False, 交给主循环下轮再试,
+    # 不无限卡在这里, 也不抛异常.
+    spy = _patch_click(monkeypatch, [True])
+    assert utils.click_start_game() is False
+    assert spy.clicks == 2 * utils._CONFIRM_CLICK_MAX_ATTEMPTS
