@@ -126,24 +126,32 @@ def _is_cdp_port_reachable():
         return False
 
 
-def _is_dedicated_chrome_ready():
-    """端到端探一下"专用Chrome已经就绪, 什么都不用做": CDP端口通 + florr.io
-    标签页开着 + WebSocket握手没被403拒(也就是--remote-allow-origins=*确实给
-    了). 三条全过才算就绪.
-
-    为什么不只看find_florr_tab(): 漏了--remote-allow-origins、只给了另外两个
-    参数的Chrome, 端口和标签页列表看起来完全正常, 只有真的发一条CDP命令时才
-    露出403(见模块文档). 那种Chrome必须判"没就绪"、走下面完整的杀掉重启流程,
-    不然用户永远修不好.
+def is_dedicated_chrome_ready():
+    """端到端探一下"专用Chrome已经就绪": CDP端口通 + florr.io标签页开着 +
+    WebSocket握手没被403拒(--remote-allow-origins=* 确实给了). 三条全过才算就绪.
 
     任何异常都吞掉返回False —— 这只是个"能不能省掉重启"的乐观探测, 探不通就
-    按原来的流程重启一次, 不该由它决定main.py能不能启动.
+    走完整的杀掉重启流程, 不该由它决定调用方能不能继续.
     """
     try:
         eval_js("1", timeout=3)
         return True
     except Exception:
         return False
+
+
+def quit_and_launch_chrome():
+    """非交互版: 杀掉所有Chrome + 带三个CDP参数拉起专用实例. 不等florr.io标签页
+    (调用方用wait_for_florr_tab()自己等). 找不到Chrome可执行文件时
+    _launch_chrome_process()会抛RuntimeError, 原样透出去."""
+    _quit_all_chrome()
+    _launch_chrome_process()
+
+
+def wait_for_florr_tab(timeout, interval=1.0):
+    """轮询find_florr_tab()直到找到florr.io标签页或超时. 超时返回None, 不抛 ——
+    调用方(GUI)决定要不要提示重试."""
+    return _poll_for_florr_tab(timeout, interval)
 
 
 def launch_dedicated_chrome():
@@ -153,7 +161,7 @@ def launch_dedicated_chrome():
     已经有一个就绪的专用Chrome在跑就直接返回, 不碰它 —— main.py上次跑崩了重开、
     或者同时开两份的时候, 无条件杀掉重启会让用户白迁移一次账号(专用profile是
     独立目录, 每次新建都是空的登录状态)."""
-    if _is_dedicated_chrome_ready():
+    if is_dedicated_chrome_ready():
         print("✅ 检测到专用Chrome已经就绪(CDP可用 + florr.io标签页开着), 跳过重启.")
         return
 
@@ -161,15 +169,14 @@ def launch_dedicated_chrome():
         "⚠️ 即将关闭所有Chrome窗口以启动专用实例(未保存的标签页/内容会丢失).\n"
         "   按回车继续, Ctrl+C取消: "
     )
-    _quit_all_chrome()
-    _launch_chrome_process()
+    quit_and_launch_chrome()
 
     while True:
         input(
             "\n🌐 专用Chrome已启动. 请在这个新窗口里把你的florr账号迁移过来,"
             "\n   迁移完成后打开florr.io, 回到这里按回车继续: "
         )
-        if _poll_for_florr_tab(timeout=15) is not None:
+        if wait_for_florr_tab(15) is not None:
             return
         if _is_cdp_port_reachable():
             print("   还没检测到florr.io标签页, 确认已经在那个新Chrome窗口里打开florr.io了? 重试一次.")
