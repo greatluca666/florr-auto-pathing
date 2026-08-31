@@ -141,10 +141,12 @@ latch lives in `auto_farming()` next to `chase_pos_history`.
 
 ### `main.py` — changes
 
-- `_maybe_scan_enemies()` returns `(decision, detections, last_enemy_scan)` — stop
-  discarding `detections`; on a throttled tick return the previous `detections`
-  (the latch check then runs on the same cached detections as `enemy_decision`,
-  consistent with how the chase/flee branches already reuse a throttled decision).
+- `_maybe_scan_enemies()` returns `(decision, detections, last_enemy_scan, scanned)`
+  — stop discarding `detections`; on a throttled tick return the previous
+  `detections`. `scanned` is `True` only when YOLO actually ran this call (scan-due
+  and scan-error branches), `False` on the disabled/throttled branches — the
+  Mythic miss counter advances only when `scanned`, so the hysteresis is measured
+  in scans (hardware-independent), not loop ticks.
 - Tuning block adds:
   ```
   MYTHIC_LATCH_ENABLED  = True
@@ -153,6 +155,7 @@ latch lives in `auto_farming()` next to `chase_pos_history`.
   MYTHIC_RELEASE_MISSES = 3
   MYTHIC_STRAFE_RADIUS  = 180
   MYTHIC_CACTUS_HOLD_PX = 220
+  MYTHIC_STRAFE_K_RADIAL = 0.8
   ```
   (all "占位默认, 实机调" like the neighbours)
 - `auto_farming()` loop: `mythic_latch = False`, `mythic_misses = 0` init; the
