@@ -839,3 +839,39 @@ def test_ensure_florr_auto_afk_running_falls_back_to_manual_hint_on_timeout(monk
          patch("afk_watch._wait_for_segment_started", return_value=False):
         afk_watch.ensure_florr_auto_afk_running()  # 不该抛异常
     assert "run" in capsys.readouterr().out
+
+
+def test_is_florr_auto_afk_running_delegates(monkeypatch):
+    monkeypatch.setattr(afk_watch, "_is_florr_auto_afk_running", lambda: True)
+    assert afk_watch.is_florr_auto_afk_running() is True
+
+
+def test_stop_florr_auto_afk_noop_off_windows(monkeypatch):
+    monkeypatch.setattr(afk_watch.sys, "platform", "darwin")
+    calls = []
+    monkeypatch.setattr(afk_watch.subprocess, "run", lambda *a, **k: calls.append((a, k)))
+    afk_watch.stop_florr_auto_afk()
+    assert calls == []
+
+
+def test_stop_florr_auto_afk_taskkills_on_windows(monkeypatch):
+    monkeypatch.setattr(afk_watch.sys, "platform", "win32")
+    seen = {}
+    monkeypatch.setattr(afk_watch.subprocess, "run",
+                        lambda args, **k: seen.setdefault("args", args))
+    afk_watch.stop_florr_auto_afk()
+    assert seen["args"] == ["taskkill", "/IM", "segment.exe", "/F"]
+
+
+def test_stop_florr_auto_afk_swallows_errors(monkeypatch):
+    monkeypatch.setattr(afk_watch.sys, "platform", "win32")
+    monkeypatch.setattr(afk_watch.subprocess, "run",
+                        lambda *a, **k: (_ for _ in ()).throw(OSError("boom")))
+    afk_watch.stop_florr_auto_afk()  # 不抛即通过
+
+
+def test_download_florr_auto_afk_delegates_without_prompting(monkeypatch):
+    monkeypatch.setattr(afk_watch, "_download_and_extract", lambda: True)
+    monkeypatch.setattr(afk_watch, "_prompt_download_confirm",
+                        lambda: (_ for _ in ()).throw(AssertionError("不该问确认")))
+    assert afk_watch.download_florr_auto_afk() is True

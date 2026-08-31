@@ -459,6 +459,29 @@ def _is_florr_auto_afk_running():
         return False
 
 
+def is_florr_auto_afk_running():
+    """查 segment.exe 是不是已经有实例在跑(只在 Windows 上有意义). GUI 的 AFK
+    开关用它决定"要不要再开一个"."""
+    return _is_florr_auto_afk_running()
+
+
+def stop_florr_auto_afk():
+    """taskkill 掉 segment.exe(AFK 开关关掉时用). 非 win32 直接返回. 本来就没在
+    跑不算失败 —— 吞掉非零退出码和异常, 跟 _is_florr_auto_afk_running() 一个态度."""
+    if sys.platform != "win32":
+        return
+    try:
+        subprocess.run(["taskkill", "/IM", _EXE_NAME, "/F"], capture_output=True)
+    except Exception as e:
+        print(f"⚠️ 停止 florr-auto-afk 失败(忽略): {e}")
+
+
+def download_florr_auto_afk():
+    """下载+校验+解压 florr-auto-afk, 不问确认 —— 确认对话框由 GUI 负责弹.
+    命令行那条路(ensure_florr_auto_afk_running)仍然走 _prompt_download_confirm()."""
+    return _download_and_extract()
+
+
 def ensure_florr_auto_afk_running():
     """确保florr-auto-afk在跑 —— 已经在跑就不动, 没装就问要不要下, 装了没跑就写好
     config并静默打开它, 然后读它的日志确认真的进入了检测状态. 用户不需要点任何按钮
