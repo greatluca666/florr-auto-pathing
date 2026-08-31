@@ -5,13 +5,17 @@ config.json 的 location / farming_area.
 
 坐标变换(image_to_widget / widget_to_image)抽成模块级纯函数, 不碰 tk, 好单测.
 """
+import os
+import sys
 from dataclasses import dataclass
 
 import customtkinter as ctk
 import tkinter as tk
 from PIL import Image, ImageTk
 
-_MAP_DIR = "./maps"  # 跟 utils.load_binary_map() 一样, cwd 相对(打包后 cwd = exe 目录)
+# 跟 app_config.CONFIG_PATH 一样按 sys.argv[0] 定位(= 可执行文件同级), 不用 cwd ——
+# 从别的目录双击/命令行拉起 exe 时 cwd 不一定是 exe 目录, 那样会读不到 maps/.
+_MAP_DIR = os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])), "maps")
 _DRAG_THRESHOLD_PX = 4  # 按下到松开在这个像素内算"点一下"(设目标点), 超过算"拖框"
 
 
@@ -72,6 +76,7 @@ class MapPicker(ctk.CTkFrame):
         self._point = None          # (ix, iy) 图像像素
         self._area = None           # [(ix,iy),(ix,iy)] 图像像素
         self._drag_start = None     # (wx, wy) 按下时的控件坐标
+        self._area_before = None    # 按下前的矩形, "只是点了一下"时用来还原
 
         self._canvas = tk.Canvas(self, highlightthickness=0, bg="#1c1c1e")
         self._canvas.pack(fill="both", expand=True)
@@ -85,7 +90,7 @@ class MapPicker(ctk.CTkFrame):
 
     # ---- 公有 API ----
     def load_map(self, name):
-        self._pil = Image.open(f"{_MAP_DIR}/{name}.png").convert("RGB")
+        self._pil = Image.open(os.path.join(_MAP_DIR, f"{name}.png")).convert("RGB")
         self._zoom = 1
         self._pan = (0.0, 0.0)
         self._redraw()
@@ -118,7 +123,9 @@ class MapPicker(ctk.CTkFrame):
             return
         disp_w = max(int(v.img_w * v.s), 1)
         disp_h = max(int(v.img_h * v.s), 1)
-        resized = self._pil.resize((disp_w, disp_h))
+        # NEAREST: 这是张二值(墙/可走)地图, 默认的双三次会把边界糊成灰渐变 ——
+        # 用户放大正是为了对准某个具体像素, 插值只会让他对不准.
+        resized = self._pil.resize((disp_w, disp_h), resample=Image.NEAREST)
         self._tk_img = ImageTk.PhotoImage(resized)
         self._canvas.create_image(v.offset_x, v.offset_y, anchor="nw", image=self._tk_img)
 
@@ -133,6 +140,11 @@ class MapPicker(ctk.CTkFrame):
 
     def _on_press(self, e):
         self._drag_start = (e.x, e.y)
+        # <B1-Motion> 移动 1px 就会触发, 所以"点一下"也会先被 _on_drag 当成拖框
+        # 把 _area 改掉. 先存一份, 松开时若判定为点击就还原回去 —— 否则用户每点
+        # 一次目标点, 画好的刷怪矩形就凭空消失, 而 App._area 里还留着旧值,
+        # 界面跟即将存进 config.json 的东西对不上.
+        self._area_before = list(self._area) if self._area else None
 
     def _on_drag(self, e):
         if self._drag_start is None:
@@ -156,6 +168,7 @@ class MapPicker(ctk.CTkFrame):
         dx, dy = e.x - start[0], e.y - start[1]
         if (dx * dx + dy * dy) ** 0.5 <= _DRAG_THRESHOLD_PX:
             self._point = widget_to_image(e.x, e.y, v)
+            self._area = self._area_before   # 把 _on_drag 抖出来的退化矩形还原掉
             self._redraw()
             if self._on_point_change:
                 self._on_point_change(self._point)
@@ -164,6 +177,7 @@ class MapPicker(ctk.CTkFrame):
             self._redraw()
             if self._on_area_change:
                 self._on_area_change(list(self._area))
+        self._area_before = None
 
     def _on_wheel(self, e, direction=None):
         if direction is None:

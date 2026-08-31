@@ -21,7 +21,10 @@ DEFAULTS = {
     "farming_area": [[9, 8], [51, 56]],
     "farming_duration": 300,
     "consecutive_short_round_limit": 2,
-    "enemy_ai_enabled": True,
+    # 默认关: 索敌要 models/desert.pt, 那个权重文件没进仓库也没进发布包. 默认开
+    # 的话全新安装一跑就是每 ENEMY_SCAN_INTERVAL(0.3s) 一条"索敌出错"刷屏.
+    # README / PACKAGING 里写的也是"默认关闭, 要自己放权重", 这里跟文档对齐.
+    "enemy_ai_enabled": False,
     "auto_switch_server": True,
     "afk_enabled": False,
 }

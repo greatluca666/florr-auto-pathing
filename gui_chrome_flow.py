@@ -22,11 +22,21 @@ def _default_confirm(parent):
     )
 
 
-def _default_prompt_retry(parent):
+def _default_prompt_retry(parent, chrome_reachable):
+    """chrome_reachable: CDP 端口通不通 —— 决定这条提示该让用户去做什么.
+    通 = Chrome 起来了, 缺的是 florr.io 标签页; 不通 = Chrome 压根没起来,
+    再怎么找标签页都是白费. 这个区分命令行版一直有, GUI 版不能丢."""
+    if chrome_reachable:
+        return messagebox.askretrycancel(
+            "还没检测到 florr.io",
+            "没在专用 Chrome 窗口里检测到 florr.io 标签页.\n"
+            "确认已经在那个新窗口里登录并打开了 florr.io, 然后点重试.",
+            parent=parent,
+        )
     return messagebox.askretrycancel(
-        "还没检测到 florr.io",
-        "没在专用 Chrome 窗口里检测到 florr.io 标签页.\n"
-        "确认已经在那个新窗口里登录并打开了 florr.io, 然后点重试.",
+        "专用 Chrome 好像没启动起来",
+        "连不上专用 Chrome 的调试端口(9222), 它多半没启动成功.\n"
+        "确认 Chrome 已装好、也没被安全软件拦住, 然后点重试.",
         parent=parent,
     )
 
@@ -43,6 +53,8 @@ def ensure_chrome_ready(parent, *, confirm=_default_confirm, prompt_retry=_defau
     while True:
         if cdp_bridge.wait_for_florr_tab(15) is not None:
             return
-        # 等待失败时只重试等待，不重新启动，用户手动处理
-        if not prompt_retry(parent):
+        # 等待失败时只重试等待，不重新启动，用户手动处理. 探一下端口, 好让提示
+        # 指向真正的问题("florr.io 没开" vs "Chrome 没起来").
+        reachable = cdp_bridge.is_cdp_port_reachable()
+        if not prompt_retry(parent, reachable):
             raise ChromeSetupCancelled()

@@ -115,10 +115,13 @@ def _poll_for_florr_tab(timeout, interval=1):
     return None
 
 
-def _is_cdp_port_reachable():
+def is_cdp_port_reachable():
     """轻量探一下CDP端口是不是真的在监听(不关心florr.io标签页在不在) ——
     区分"Chrome压根没启动成功"和"Chrome好好的, 就是florr.io还没打开"这两种
-    超时原因, 跟find_florr_tab()同一套try/except模式, 只是不解析标签页列表."""
+    超时原因, 跟find_florr_tab()同一套try/except模式, 只是不解析标签页列表.
+
+    公有: 命令行版(launch_dedicated_chrome)和GUI版(gui_chrome_flow)都要靠它
+    区分这两种超时原因, 给出的重试提示才不会指错方向."""
     try:
         urllib.request.urlopen(f"http://{CDP_HOST}:{CDP_PORT}/json", timeout=3)
         return True
@@ -178,7 +181,7 @@ def launch_dedicated_chrome():
         )
         if wait_for_florr_tab(15) is not None:
             return
-        if _is_cdp_port_reachable():
+        if is_cdp_port_reachable():
             print("   还没检测到florr.io标签页, 确认已经在那个新Chrome窗口里打开florr.io了? 重试一次.")
         else:
             print("   专用Chrome好像没有正常启动(CDP端口连不上), 请检查Chrome是不是还开着.")
