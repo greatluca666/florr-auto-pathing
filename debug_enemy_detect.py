@@ -67,22 +67,31 @@ def run_model(path, image, conf):
 
 
 def rarity_breakdown(image, bbox, tolerance):
-    """复刻 ed.sample_rarity() 内部循环, 额外吐出每一档的命中像素数.
-    常量全部从 ed 取, 不在这里另写一份, 免得漂移."""
-    x1, y1, x2, y2 = bbox
-    cx = int((x1 + x2) / 2)
-    tag_cy = max(0, int(y1) - 14)
-    half_w, half_h = 20, 6
-    y0, y1s = max(0, tag_cy - half_h), tag_cy + half_h
-    x0, x1s = max(0, cx - half_w), cx + half_w
-    win = (x0, y0, x1s, y1s)
-    region = image[y0:y1s, x0:x1s]
+    """复刻 ed.sample_rarity() 的定位 + 计数, 额外吐出每一档的命中像素数和血条
+    锚点位置. 逻辑跟 enemy_detect 里保持一致: 先 _find_hp_bar() 找绿血条, 再在
+    血条右下方那块数颜色, 只扫 Common..Ultra."""
+    H, W = image.shape[:2]
+    bar = ed._find_hp_bar(image, bbox)
+    if bar is None:
+        return None, None, [], 0.0, "Common (没找到绿血条锚点)"
+
+    bar_x0, bar_y, bar_x1, bar_thick = bar
+    bar_len = bar_x1 - bar_x0
+    word_h = max(12, 3 * bar_thick)
+    word_w = max(40, int(0.55 * bar_len))
+    ry0 = min(H, bar_y + bar_thick // 2 + 1)
+    ry1 = min(H, ry0 + word_h)
+    rx0 = max(0, bar_x1 - word_w)
+    rx1 = min(W, bar_x1 + max(4, bar_thick))
+    win = (rx0, ry0, rx1, ry1)
+    region = image[ry0:ry1, rx0:rx1]
     if region.size == 0:
-        return win, [], 0, "Common (采样窗越界, 空)"
+        return bar, win, [], 0.0, "Common (采样窗越界, 空)"
 
     total = region.shape[0] * region.shape[1]
+    scan = ed.RARITY_ORDER[:ed.RARITY_RANK["Ultra"] + 1]
     counts = []
-    for name in ed.RARITY_ORDER:
+    for name in scan:
         b, g, r = ed._hex_to_bgr(ed.RARITY_COLORS[name])
         lower = np.array([max(0, b - tolerance), max(0, g - tolerance), max(0, r - tolerance)])
         upper = np.array([min(255, b + tolerance), min(255, g + tolerance), min(255, r + tolerance)])
@@ -93,7 +102,7 @@ def rarity_breakdown(image, bbox, tolerance):
     ratio = top_c / total if total else 0.0
     verdict = top_name if ratio >= ed.MIN_RARITY_PIXEL_RATIO else "Common (最高档占比 %.3f < %.2f 阈值)" % (
         ratio, ed.MIN_RARITY_PIXEL_RATIO)
-    return win, counts, ratio, verdict
+    return bar, win, counts, ratio, verdict
 
 
 def iou(a, b):
@@ -127,20 +136,26 @@ def process(image, stem, conf, tolerance):
     print(f"\n[desert.pt]  conf>={conf}  检测数: {len(desert)}")
     di = image.copy()
     for i, d in enumerate(desert):
-        win, counts, ratio, verdict = rarity_breakdown(image, d["bbox"], tolerance)
+        bar, win, counts, ratio, verdict = rarity_breakdown(image, d["bbox"], tolerance)
         real = ed.sample_rarity(image, d["bbox"], tolerance=tolerance)
         bucket = ed.classify_action(d["species"], real)
         sx, sy = d["screen_pos"]
         print(f"  #{i} {d['species']:<16} conf={d['confidence']:.3f} "
               f"screen_pos=({sx:.0f},{sy:.0f}) bbox=({','.join(f'{v:.0f}' for v in d['bbox'])})")
-        print(f"      采样窗 x[{win[0]}:{win[2]}] y[{win[1]}:{win[3]}]")
-        print(f"      命中像素/档 (前5): " + ", ".join(f"{n}={c}" for n, c in counts[:5]))
+        if bar is None:
+            print(f"      绿血条锚点: 没找到 -> 默认 Common")
+        else:
+            print(f"      绿血条锚点: y={bar[1]} x=[{bar[0]}..{bar[2]}] 厚={bar[3]}   "
+                  f"采样窗 x[{win[0]}:{win[2]}] y[{win[1]}:{win[3]}]")
+            print(f"      命中像素/档: " + ", ".join(f"{n}={c}" for n, c in counts))
         print(f"      -> rarity_breakdown 判定: {verdict}")
         print(f"      -> ed.sample_rarity(): {real}   classify_action(): {bucket}")
         if real != verdict.split()[0]:
             print(f"      ⚠️ 复刻结果与 ed.sample_rarity() 不一致, 检查脚本是否跟实现漂移")
         draw_box(di, d["bbox"], (0, 200, 0), f"#{i} {d['species']} {d['confidence']:.2f} {real}")
-        cv2.rectangle(di, (win[0], win[1]), (win[2], win[3]), (0, 220, 220), 1)
+        if bar is not None:
+            cv2.line(di, (bar[0], bar[1]), (bar[2], bar[1]), (255, 0, 0), 1)      # 蓝 = 绿血条锚点
+            cv2.rectangle(di, (win[0], win[1]), (win[2], win[3]), (0, 0, 255), 1)  # 红 = 稀有度采样窗
     cv2.imwrite(f"{stem}_desert.png", di)
 
     # --- sandstorm.pt ---

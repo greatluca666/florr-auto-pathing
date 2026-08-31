@@ -37,35 +37,99 @@ def _hex_to_bgr(hex_color):
     return tuple(int(hex_color[i:i + 2], 16) for i in (4, 2, 0))
 
 
-MIN_RARITY_PIXEL_RATIO = 0.08  # 采样区域里至少8%像素匹配上, 才采信这个稀有度判定;
-                                 # 低于这个占比大概率是背景色主导, 不是真名牌颜色.
+MIN_RARITY_PIXEL_RATIO = 0.06  # 稀有度词是描边方块字, 笔画占比本来就不高; 采样窗
+                                 # 已经靠血条锚点定位到词上之后, 6%命中就采信这一档.
+                                 # 低于此 → 背景主导 → 默认Common.
+
+
+def _find_hp_bar(image, bbox):
+    """在怪的下半身~框底偏下一带找那条绿色血条. florr.io每只怪脚下都挂一条亮饱和
+    绿的横条, 是整个名牌区里最好认的锚点 —— 怪名(白字, 没有稀有度信息)在血条正
+    上方, 稀有度词(带稀有度颜色, 要采的就是它)在血条正下方、右对齐血条右端.
+    返回(bar_x0, bar_y, bar_x1, bar_thick), 找不到 → None."""
+    x1, y1, x2, y2 = [int(v) for v in bbox]
+    h = max(1, y2 - y1)
+    H, W = image.shape[:2]
+    # 上边到框内15%处就开始找 —— 框松时名牌会落在框内靠下, 不能只从框底往下看.
+    ys0 = max(0, y1 + int(0.15 * h))
+    ys1 = min(H, y2 + max(22, int(0.60 * h)) + 8)
+    xs0 = max(0, x1 - 12)
+    xs1 = min(W, x2 + 18)
+    if ys1 - ys0 < 3 or xs1 - xs0 < 15:
+        return None
+
+    band = image[ys0:ys1, xs0:xs1].astype(int)
+    b, g, r = band[..., 0], band[..., 1], band[..., 2]
+    green = ((g > 130) & (g < 245) & (r < 205) & (b < 135)
+             & (g - r > 18) & (g - b > 50)).astype(np.uint8)
+    if int(green.sum()) < 12:
+        return None
+    rowsum = green.sum(axis=1)
+    row = int(np.argmax(rowsum))
+    if int(rowsum[row]) < 15:
+        return None
+    cols = np.where(green[row] > 0)[0]
+    run = int(cols.max() - cols.min())
+    if run < 15:
+        return None
+
+    # 血条厚度: 从峰值行往上下扩, 命中数还有峰值40%的行都算进去.
+    thr = max(1, int(0.4 * rowsum[row]))
+    thick, ri = 1, row - 1
+    while ri >= 0 and rowsum[ri] >= thr:
+        thick, ri = thick + 1, ri - 1
+    ri = row + 1
+    while ri < len(rowsum) and rowsum[ri] >= thr:
+        thick, ri = thick + 1, ri + 1
+
+    # 血条是"长而薄"的; 绿色仙人掌/沙尘暴半透明身体是一大坨绿 —— 用长宽比 + 厚度
+    # 上限把那种一坨的绿挡掉, 别把怪身当血条.
+    if thick > 12 or run < 4 * thick:
+        return None
+    return (xs0 + int(cols.min()), ys0 + row, xs0 + int(cols.max()), thick)
 
 
 def sample_rarity(image, bbox, tolerance=40, min_pixel_ratio=MIN_RARITY_PIXEL_RATIO):
-    """在检测框上方采样一小块区域(florr.io怪物名牌悬浮在头顶), 按每种稀有度颜色
-    数命中像素数、取数量最多的那档(不是取平均色再找最近邻 —— 名牌是带背景的
-    局部色块, 平均色会被背景冲淡到不可用, 跟utils.py里get_player_location_on_map
-    同款'数像素'手法, 不用'取均值'). 采样区域越界(空)、或最多那档命中像素占比
-    低于min_pixel_ratio(大概率是背景主导, 不是真名牌) → 默认Common —— 这是最
-    宽松/正常接战的那一档, 颜色采样失败不会误触发规避行为."""
-    x1, y1, x2, y2 = bbox
-    cx = int((x1 + x2) / 2)
-    tag_cy = max(0, int(y1) - 14)
-    half_w, half_h = 20, 6
-    y0, y1s = max(0, tag_cy - half_h), tag_cy + half_h
-    x0, x1s = max(0, cx - half_w), cx + half_w
-    region = image[y0:y1s, x0:x1s]
+    """读一只怪的稀有度. 先用_find_hp_bar()找到怪脚下那条绿血条当锚点, 再在血条
+    正下方、右对齐血条右端的那一小块(florr.io稀有度词的固定位置)按每种稀有度颜色
+    数命中像素、取最多那档(数像素、不取均值 —— 描边文字取均值会被背景冲淡, 跟
+    utils.get_player_location_on_map同手法). 找不到血条、采样窗越界、或最高档占比
+    < min_pixel_ratio → 默认Common(最宽松那档, 读失败不会误触发规避).
+
+    旧实现往框顶上方14px采样 —— 实测名牌整个在怪下方, 那位置永远是空地, 每只怪
+    都读成Common → 全部ENGAGE、该躲的强怪也直接撞上去(见
+    docs/superpowers/specs/2026-08-16-sszone-enemy-detection-design.md稀有度校准
+    遗留项)."""
+    bar = _find_hp_bar(image, bbox)
+    if bar is None:
+        return "Common"
+    bar_x0, bar_y, bar_x1, bar_thick = bar
+    H, W = image.shape[:2]
+    bar_len = bar_x1 - bar_x0
+
+    # 稀有度词: 血条下方(跳过半根血条厚度, 别采到血条本身), 高度~3倍血条厚, 宽度
+    # 取血条右端往左一段(词右对齐血条右端, 2个方块字), 略越过右端好收住边缘.
+    word_h = max(12, 3 * bar_thick)
+    word_w = max(40, int(0.55 * bar_len))
+    ry0 = min(H, bar_y + bar_thick // 2 + 1)
+    ry1 = min(H, ry0 + word_h)
+    rx0 = max(0, bar_x1 - word_w)
+    rx1 = min(W, bar_x1 + max(4, bar_thick))
+    region = image[ry0:ry1, rx0:rx1]
     if region.size == 0:
         return "Common"
 
+    # 只扫Common..Ultra. Super/Eternal/Unique这仨这个刷怪区实测不刷(见design doc),
+    # 而且它们的色(2BFFA3绿/555555灰)最容易被血条绿、描边黑误命中 —— 扫了只会
+    # 制造假的高稀有度读数, 反而把本该正常打的怪误判成规避.
+    scan = RARITY_ORDER[:RARITY_RANK["Ultra"] + 1]
     total_px = region.shape[0] * region.shape[1]
     best_name, best_count = "Common", 0
-    for name in RARITY_ORDER:
+    for name in scan:
         b, g, r = _hex_to_bgr(RARITY_COLORS[name])
         lower = np.array([max(0, b - tolerance), max(0, g - tolerance), max(0, r - tolerance)])
         upper = np.array([min(255, b + tolerance), min(255, g + tolerance), min(255, r + tolerance)])
-        mask = cv2.inRange(region, lower, upper)
-        count = int(np.count_nonzero(mask))
+        count = int(np.count_nonzero(cv2.inRange(region, lower, upper)))
         if count > best_count:
             best_name, best_count = name, count
 

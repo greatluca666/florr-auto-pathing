@@ -2,72 +2,79 @@ import os
 
 import numpy as np
 
-from enemy_detect import sample_rarity, RARITY_COLORS, _hex_to_bgr, classify_action, priority_score, aim_mouse_target, flee_mouse_target
+from enemy_detect import (
+    sample_rarity, _find_hp_bar, RARITY_COLORS, RARITY_ORDER, RARITY_RANK,
+    _hex_to_bgr, classify_action, priority_score, aim_mouse_target, flee_mouse_target,
+)
+
+# Sandy background BGR — not green (so _find_hp_bar's green mask ignores it: its
+# R=210 fails the mask's r<205), and outside every rarity color's ±40 cube.
+_BG_BGR = (120, 170, 210)
+# Health-bar green, measured off a real florr.io screenshot (屏幕截图 220017.png):
+# BGR ≈ (48, 208, 112). Passes _find_hp_bar's green mask.
+_BAR_BGR = (48, 208, 112)
+
+
+def _name_tag_image(rarity_bgr, word_rows=10, word_cols=50):
+    """Synthesise a florr.io mob name tag the way the game lays it out: a long
+    thin green HP bar under the mob, with the rarity word (rarity-coloured)
+    just below the bar, right-aligned to the bar's right end. Returns
+    (image, bbox). `word_rows`/`word_cols` control how much of sample_rarity's
+    word region the coloured glyphs actually fill (rest stays background)."""
+    img = np.full((200, 300, 3), _BG_BGR, dtype=np.uint8)
+    bbox = (60, 20, 160, 90)          # mob box, h = 70
+    bar_y, bar_x0, bar_x1, thick = 110, 70, 190, 5
+    img[bar_y:bar_y + thick, bar_x0:bar_x1] = _BAR_BGR
+    # sample_rarity's word region for this bar: ry0 = bar_y + thick//2 + 1 = 113,
+    # rx1 ≈ bar_x1, extending left. Paint the glyphs inside it.
+    gy = bar_y + thick // 2 + 1 + 1
+    gx1 = bar_x1 - 4
+    if rarity_bgr is not None:
+        img[gy:gy + word_rows, gx1 - word_cols:gx1] = rarity_bgr
+    return img, bbox
 
 
 def test_sample_rarity_matches_known_colors():
-    for name, hexcode in RARITY_COLORS.items():
-        # Skip "Eternal" (placeholder using Super's color; would always match Super)
-        if name == "Eternal":
-            continue
-        bgr = _hex_to_bgr(hexcode)
-        image = np.zeros((100, 100, 3), dtype=np.uint8)
-        bbox = (40, 60, 60, 80)
-        # sample_rarity looks in a patch above the bbox's top-center; paint
-        # that exact patch so the test doesn't depend on sample_rarity's
-        # internal offsets matching some other guess.
-        image[40:52, 30:70] = bgr
-        assert sample_rarity(image, bbox) == name
+    # Only Common..Ultra are scanned (Super/Eternal/Unique don't spawn in this
+    # zone and their colours false-match the bar green / outline black).
+    for name in RARITY_ORDER[:RARITY_RANK["Ultra"] + 1]:
+        img, bbox = _name_tag_image(_hex_to_bgr(RARITY_COLORS[name]))
+        assert sample_rarity(img, bbox) == name, name
 
 
-def test_sample_rarity_eternal_placeholder_reads_as_super():
-    # Eternal aliases Super's color until real calibration data exists (see
-    # RARITY_COLORS' comment) — sampling Eternal's color deterministically
-    # resolves to "Super" (first match in RARITY_ORDER). This is intentional
-    # and harmless: classify_action() treats every rarity above Ultra
-    # (Super/Eternal/Unique) identically (AVOID fallback), so this doesn't
-    # change bot behavior — asserting it here so the collision is a tested,
-    # documented fact rather than a silent gap.
-    bgr = _hex_to_bgr(RARITY_COLORS["Eternal"])
-    image = np.zeros((100, 100, 3), dtype=np.uint8)
-    bbox = (40, 60, 60, 80)
-    image[40:52, 30:70] = bgr
-    assert sample_rarity(image, bbox) == "Super"
+def test_sample_rarity_above_ultra_colors_read_as_common():
+    # Super/Eternal/Unique are deliberately NOT scanned — feeding their colour
+    # resolves to Common (below floor), never a spurious high-rarity read that
+    # would wrongly trip AVOID on a normal mob.
+    for name in ("Super", "Eternal", "Unique"):
+        img, bbox = _name_tag_image(_hex_to_bgr(RARITY_COLORS[name]))
+        assert sample_rarity(img, bbox) == "Common", name
 
 
-def test_sample_rarity_falls_back_to_common_when_no_match():
-    image = np.zeros((100, 100, 3), dtype=np.uint8)  # pure black
-    bbox = (40, 60, 60, 80)
-    assert sample_rarity(image, bbox) == "Common"
-
-
-# Background BGR for the partial-coverage tests below: picked to NOT fall
-# within `tolerance` of any RARITY_COLORS entry itself (a plain gray, for
-# example, would spuriously match "Unique"'s 555555 and dominate the count).
-# Verified: none of the 10 rarity colors' ±40 tolerance boxes contain this.
-_BG_BGR = (0, 200, 0)
-
-
-def test_sample_rarity_detects_partial_coverage_above_floor():
-    # Realistic case: name tag glyph covers a minority of the sampled patch,
-    # rest is background — not a flat 100% fill like the tests above.
-    # bbox (40,60,60,80) -> sampled patch is image[40:52, 30:70] = 12 rows x
-    # 40 cols = 480 px total (see sample_rarity's y0:y1s/x0:x1s derivation).
-    image = np.full((100, 100, 3), _BG_BGR, dtype=np.uint8)
-    bbox = (40, 60, 60, 80)
-    bgr = _hex_to_bgr(RARITY_COLORS["Ultra"])
-    image[40:45, 30:70] = bgr  # 5 of 12 rows = 200/480 ≈ 41.7% of the patch, clears the 8% floor
-    assert sample_rarity(image, bbox) == "Ultra"
+def test_sample_rarity_falls_back_to_common_when_no_hp_bar():
+    image = np.zeros((100, 100, 3), dtype=np.uint8)  # pure black, no green bar
+    assert sample_rarity(image, (40, 60, 60, 80)) == "Common"
 
 
 def test_sample_rarity_falls_back_to_common_below_coverage_floor():
-    # Glyph covers only a tiny sliver of the patch — below the min_pixel_ratio
-    # floor — should NOT be trusted even though it's the closest color present.
-    image = np.full((100, 100, 3), _BG_BGR, dtype=np.uint8)
-    bbox = (40, 60, 60, 80)
-    bgr = _hex_to_bgr(RARITY_COLORS["Ultra"])
-    image[40:41, 30:32] = bgr  # 1 row x 2 px = 2/480 ≈ 0.4%, well under the 8% (38.4px) floor
-    assert sample_rarity(image, bbox) == "Common"
+    # HP bar present (so an anchor is found) but the rarity glyphs cover only a
+    # sliver of the word region — under min_pixel_ratio, so not trusted.
+    img, bbox = _name_tag_image(_hex_to_bgr(RARITY_COLORS["Ultra"]), word_rows=1, word_cols=2)
+    assert sample_rarity(img, bbox) == "Common"
+
+
+def test_find_hp_bar_locates_bar_and_rejects_blob():
+    img, bbox = _name_tag_image(_hex_to_bgr(RARITY_COLORS["Rare"]))
+    bar = _find_hp_bar(img, bbox)
+    assert bar is not None
+    bar_x0, bar_y, bar_x1, thick = bar
+    assert abs(bar_y - 110) <= 1 and thick <= 8 and (bar_x1 - bar_x0) >= 90
+
+    # A big green blob (translucent cactus/sandstorm body) is not bar-shaped:
+    # fails the run >= 4*thick aspect check -> None.
+    blob = np.full((200, 300, 3), _BG_BGR, dtype=np.uint8)
+    blob[40:110, 70:170] = _BAR_BGR
+    assert _find_hp_bar(blob, (60, 20, 160, 90)) is None
 
 
 _ALL_SPECIES = [
