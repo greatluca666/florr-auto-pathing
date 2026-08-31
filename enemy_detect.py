@@ -177,6 +177,42 @@ def priority_score(species, rarity):
     return (RARITY_RANK[rarity], SPECIES_RANK[species])
 
 
+# ── Mythic 近身处理 ("先清青怪") ──────────────────────────────────────────
+# 青怪 = Mythic 档 (青 = Mythic 名牌的青色). desert.pt 的 6 类里, sandstorm 是刷怪
+# 目标本身, 不进这套 —— 其余 5 种每种按下面的策略走位磨死.
+MYTHIC_KITE_SPECIES = {
+    "beetle": "strafe",           # 直冲型, 垂直环绕让它打空
+    "soldier_fire_ant": "strafe",
+    "scorpion": "ram",            # 直接撞
+    "sand_centipede": "ram",
+    "cactus": "hold",             # 站桩带刺, 保持距离在旁边
+}
+
+# 多个 Mythic 同时在场时先处理谁 (用户给的顺序, 只用于 Mythic 锁定, 跟 SPECIES_RANK
+# 那套普通追击优先级无关).
+MYTHIC_TARGET_RANK = {
+    "beetle": 5,
+    "soldier_fire_ant": 4,
+    "scorpion": 3,
+    "sand_centipede": 2,
+    "cactus": 1,
+}
+
+
+def mythic_candidates(detections, chase_min_conf=None):
+    """从 detections 里挑出够格进 Mythic 锁定池的: rarity 是 Mythic、species 在
+    MYTHIC_KITE_SPECIES (sandstorm 排除)、置信度过 chase_min_conf (同追击的幻影框
+    过滤). 返回列表, 可能为空."""
+    if chase_min_conf is None:
+        chase_min_conf = CHASE_MIN_CONF
+    return [
+        d for d in detections
+        if d.get("rarity") == "Mythic"
+        and d.get("species") in MYTHIC_KITE_SPECIES
+        and d.get("confidence", 1.0) >= chase_min_conf
+    ]
+
+
 SCREEN_CENTER = (utils.SCREEN_WIDTH / 2, utils.SCREEN_HEIGHT / 2)  # 屏幕中心, 同时也是
                               # "停止移动"的鼠标位置约定(见utils.keyup()) ——
                               # aim_mouse_target/flee_mouse_target在"保持距离"/

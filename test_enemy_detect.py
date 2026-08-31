@@ -182,6 +182,11 @@ def test_flee_mouse_target_returns_center_when_forces_cancel():
     assert result == (960, 540)
 
 
+from enemy_detect import (
+    mythic_candidates,
+    MYTHIC_KITE_SPECIES, MYTHIC_TARGET_RANK,
+)
+
 from enemy_detect import select_action, chase_is_stalled
 
 
@@ -190,6 +195,42 @@ def _det(species, rarity, screen_pos, conf=0.9):
         "species": species, "rarity": rarity, "screen_pos": screen_pos,
         "bbox": (0, 0, 0, 0), "confidence": conf,
     }
+
+
+def test_mythic_kite_species_table_is_the_five_non_sandstorm_species():
+    assert set(MYTHIC_KITE_SPECIES) == {
+        "beetle", "soldier_fire_ant", "scorpion", "sand_centipede", "cactus",
+    }
+    assert set(MYTHIC_KITE_SPECIES.values()) <= {"strafe", "ram", "hold"}
+    assert MYTHIC_KITE_SPECIES["beetle"] == "strafe"
+    assert MYTHIC_KITE_SPECIES["soldier_fire_ant"] == "strafe"
+    assert MYTHIC_KITE_SPECIES["scorpion"] == "ram"
+    assert MYTHIC_KITE_SPECIES["sand_centipede"] == "ram"
+    assert MYTHIC_KITE_SPECIES["cactus"] == "hold"
+
+
+def test_mythic_target_rank_order():
+    order = ["beetle", "soldier_fire_ant", "scorpion", "sand_centipede", "cactus"]
+    ranks = [MYTHIC_TARGET_RANK[s] for s in order]
+    assert ranks == sorted(ranks, reverse=True)
+    assert len(set(ranks)) == 5
+
+
+def test_mythic_candidates_filters_rarity_species_and_conf():
+    dets = [
+        _det("beetle", "Mythic", (100, 100), conf=0.9),        # keep
+        _det("cactus", "Mythic", (200, 200), conf=0.9),        # keep
+        _det("beetle", "Ultra", (300, 300), conf=0.9),         # wrong rarity
+        _det("sandstorm", "Mythic", (400, 400), conf=0.9),     # sandstorm excluded
+        _det("scorpion", "Mythic", (500, 500), conf=0.4),      # below conf gate
+    ]
+    got = mythic_candidates(dets, chase_min_conf=0.55)
+    assert [d["species"] for d in got] == ["beetle", "cactus"]
+
+
+def test_mythic_candidates_empty_when_nothing_qualifies():
+    assert mythic_candidates([]) == []
+    assert mythic_candidates([_det("sandstorm", "Mythic", (10, 10))]) == []
 
 
 def test_select_action_flees_when_avoid_mob_in_range():
