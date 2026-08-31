@@ -118,6 +118,8 @@ def process(image, stem, conf, tolerance):
     print("=" * 72)
     print(f"帧: {stem}   尺寸: {image.shape[1]}x{image.shape[0]}")
 
+    cv2.imwrite(f"{stem}_raw.png", image)  # 未标注原始帧, 用来采样真实名牌颜色
+
     desert = run_model(DESERT_PATH, image, conf)
     storm = run_model(SANDSTORM_PATH, image, conf)
 
@@ -188,7 +190,7 @@ def process(image, stem, conf, tolerance):
               f"({'贴脸' if hold is None else '保持距离'})")
     elif action[0] == "flee":
         print(f"  规避, 触发半径内 AVOID 怪: {len(action[1])} 个")
-    print(f"  产物: {stem}_desert.png  {stem}_sandstorm.png  {stem}_compare.png")
+    print(f"  产物: {stem}_raw.png  {stem}_desert.png  {stem}_sandstorm.png  {stem}_compare.png")
 
 
 def main():
