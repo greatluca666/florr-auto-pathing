@@ -10,6 +10,7 @@ import signal
 import subprocess
 import sys
 import threading
+from tkinter import messagebox
 
 import customtkinter as ctk
 
@@ -215,24 +216,11 @@ class App(ctk.CTk):
             self._start_worker()
 
     def _start_worker(self):
-        # 开始前的引导, 顺序固定: 专用 Chrome 就绪 → (开关开着才)确保 florr-auto-afk
-        # → 让用户把 florr.io 切到全屏. 任一步取消就静默中止, 不 Popen worker.
-        try:
-            gui_chrome_flow.ensure_chrome_ready(self)
-        except gui_chrome_flow.ChromeSetupCancelled:
-            self._log_line("已取消(专用 Chrome 未就绪)\n")
-            return
-        if bool(self.afk_switch.get()):
-            self._ensure_afk()
-
-        from tkinter import messagebox
-        if not messagebox.askokcancel(
-                "把 florr.io 切到全屏",
-                "开始前请把 florr.io 切到全屏(任意分辨率), 然后点确定。",
-                parent=self):
-            self._log_line("已取消(未确认全屏)\n")
-            return
-
+        # fail-fast: 先跑本地那几个便宜的校验, 再走重活儿 —— Chrome 重启 / AFK 下载
+        # (最多卡 90 秒) / 切全屏都在校验之后. 点了开始却没框刷怪区 / 数字填错的用户
+        # 立刻收到提示, 不会先被一串对话框拖一遍. 顺序:
+        # 校验 location/area → 校验数字 → 专用 Chrome 就绪 → (开关开着才)确保
+        # florr-auto-afk → 切全屏确认(紧贴 Popen 之前). 任一步取消就静默中止.
         vals = self._current_values()
         if vals["location"] is None or vals["area"] is None:
             self._log_line("⚠️ 请先在地图上点目标点并框出刷怪区\n")
@@ -242,6 +230,21 @@ class App(ctk.CTk):
             self._log_line("⚠️ 时长 / 短局阈值必须是正整数\n")
             return
         duration, short_limit = nums
+
+        try:
+            gui_chrome_flow.ensure_chrome_ready(self)
+        except gui_chrome_flow.ChromeSetupCancelled:
+            self._log_line("已取消(专用 Chrome 未就绪)\n")
+            return
+        if bool(self.afk_switch.get()):
+            self._ensure_afk()
+
+        if not messagebox.askokcancel(
+                "把 florr.io 切到全屏",
+                "开始前请把 florr.io 切到全屏(任意分辨率), 然后点确定。",
+                parent=self):
+            self._log_line("已取消(未确认全屏)\n")
+            return
 
         cfg = build_worker_config(**vals)
         app_config.save_config(cfg)
@@ -307,7 +310,6 @@ class App(ctk.CTk):
     def _ensure_afk(self):
         if not _IS_WINDOWS:
             return
-        from tkinter import messagebox
         outcome = start_afk(
             exe_exists=os.path.isfile(afk_watch._EXE_PATH),
             running=afk_watch.is_florr_auto_afk_running(),
