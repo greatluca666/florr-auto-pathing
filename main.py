@@ -549,7 +549,7 @@ def ensure_zoom_for_rarity(enemy_ai_enabled):
         return None
 
 
-def auto_farming(farming_area, duration=300, *, enemy_ai_enabled=True, zoom_thick=None):
+def auto_farming(farming_area, duration=300, *, enemy_ai_enabled=True):
     """自动刷怪逻辑（依赖一直攻击按钮）—— 在区域内连续走动, 不停下站桩.
 
     原来是走到一个随机点就停下等move_interval秒(靠站桩+一直攻击刷怪), 用户反馈
@@ -563,9 +563,6 @@ def auto_farming(farming_area, duration=300, *, enemy_ai_enabled=True, zoom_thic
     min_y, max_y = min(y1, y2), max(y1, y2)
     farming_area = [(min_x, min_y), (max_x, max_y)]
     binary_map = load_binary_map()
-
-    move_gain = _move_gain_for_zoom(zoom_thick)
-    print(f"🎯 wander 转向增益: {move_gain:.1f} (zoom 厚度 {zoom_thick})")
 
     print(f"\n🎮 开始在区域 {farming_area} 进行自动刷怪...")
     print(f"⏱️  刷怪时长: {duration}秒（持续走动模式）\n")
@@ -582,15 +579,11 @@ def auto_farming(farming_area, duration=300, *, enemy_ai_enabled=True, zoom_thic
     mythic_misses = 0
     mythic_target_pos = None   # 上一 tick 锁定 Mythic 的屏幕坐标, 给 pick_mythic_target 做连续性
 
-    def _wander_enemy_watch(pos):
+    def _wander_enemy_watch(_pos):
         """move_to_position 的 on_tick 钩子: wander 腿途中做一次(节流的)索敌, 需要
         规避/接战/锁 Mythic 时返回 "enemy" 中断这条腿, 外层下个 tick 就按刚更新的
         enemy_decision 处理. 只更新扫描状态、不推进 mythic miss 计数(那个归外层
-        mythic 分支的 scanned 门管).
-        还兼硬牵引: 玩家一出刷怪区就返回 "out_of_area" 收手, 别等这条腿走完
-        (拉近相机后一条腿可能甩出 60 格)."""
-        if _leaving_area(pos, farming_area):
-            return "out_of_area"
+        mythic 分支的 scanned 门管)."""
         nonlocal enemy_decision, detections, last_enemy_scan
         enemy_decision, detections, last_enemy_scan, _scanned = _maybe_scan_enemies(
             enemy_ai_enabled, time.time(), last_enemy_scan, enemy_decision, detections)
@@ -706,13 +699,11 @@ def auto_farming(farming_area, duration=300, *, enemy_ai_enabled=True, zoom_thic
         # 200(≈10s) —— 让外层循环更频繁拿回控制权重新索敌扫描, 见下面ENEMY_SCAN_INTERVAL
         # 的注释.
         move_result = move_to_position(current_pos, (random_x, random_y),
-                                       max_attempts=20, on_tick=_wander_enemy_watch,
-                                       extend_gain=move_gain)
+                                       max_attempts=20, on_tick=_wander_enemy_watch)
 
-        if move_result in ("enemy", "out_of_area"):
-            # enemy: 途中扫到该 flee/chase/锁 Mythic 的怪. out_of_area: 途中出了刷怪区.
-            # 两种都立刻回外层 —— 外层自己的索敌 / if_in_area 检查接手 (out_of_area 时
-            # 从出界 ~1 格处重寻路, 不是等甩出 60 格). 都不算走完一趟.
+        if move_result == "enemy":
+            # 路途中扫到怪(该 flee/chase/锁 Mythic) —— 立刻回外层, 下个 tick 用
+            # _wander_enemy_watch 刚更新的 enemy_decision 处理, 不算走完一趟.
             continue
         if move_result == "stuck":
             print("⚠️ 移动受阻, 脱困一下...")
@@ -837,7 +828,7 @@ def run_worker(cfg):
             if w["enemy_ai_enabled"] and zoom_thick is None:
                 print("⚠️ 视角未调到位, 本轮稀有度识别可能不准 (Mythic 锁定可能不触发)")
             auto_farming(farming_area, farming_duration,
-                         enemy_ai_enabled=w["enemy_ai_enabled"], zoom_thick=zoom_thick)
+                         enemy_ai_enabled=w["enemy_ai_enabled"])
         else:
             print("❌ 本轮未能到达目标区域")
             overlay.update(message="本轮未能到达目标区域")

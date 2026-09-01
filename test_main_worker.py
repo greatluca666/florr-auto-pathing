@@ -467,10 +467,3 @@ def test_move_to_position_extend_gain_none_matches_base_constant(monkeypatch):
                           extend_gain=main.MOVE_EXTEND_GAIN)
     off_const = seen[0][0]
     assert off_none == off_const
-
-
-def test_auto_farming_accepts_zoom_thick_kwarg():
-    sig = inspect.signature(main.auto_farming)
-    assert "zoom_thick" in sig.parameters
-    assert sig.parameters["zoom_thick"].kind == inspect.Parameter.KEYWORD_ONLY
-    assert sig.parameters["zoom_thick"].default is None
