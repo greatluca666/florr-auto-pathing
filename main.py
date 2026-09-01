@@ -4,6 +4,7 @@ import argparse
 import signal
 import sys
 import threading
+import statistics
 import cdp_bridge
 import time
 import random
@@ -32,6 +33,11 @@ MYTHIC_RELEASE_MISSES = 3      # 连续多少次扫描没有合格 Mythic 才解
 MYTHIC_STRAFE_RADIUS  = 180    # 甲虫/火蚁: 环绕它转圈的目标半径 (px)
 MYTHIC_CACTUS_HOLD_PX = 220    # 仙人掌: 保持的距离 (px)
 MYTHIC_STRAFE_K_RADIAL = 0.8   # 甲虫/火蚁环绕: 径向修正强度 (d 偏离半径时往里/外带多少)
+ZOOM_MIN_THICK     = 4    # 血条中位厚度到这个像素数, sample_rarity 才稳 (实测)
+ZOOM_MIN_SAMPLES   = 2    # 至少几条可测血条才据此判定 (少于就等 mob 出现)
+ZOOM_SCROLL_AMOUNT = 2    # 每次滚轮往里推的量 (正=拉近; 方向不对循环里会自翻转)
+ZOOM_MAX_SCROLLS   = 15   # 滚这么多次还没到就放弃 (可能已是最大 zoom)
+ZOOM_WAIT_CAP      = 60   # 周围没 mob 时最多等这么多秒, 之后照常开刷
 # 以上数值是没实机测过的占位默认值, 实机跑一遍后再按观察到的效果调.
 # ================================================
 
@@ -446,6 +452,63 @@ def _drive_and_check_stall(mouse_target, current_pos, chase_pos_history, state, 
     return "moved"
 
 
+def ensure_zoom_for_rarity(enemy_ai_enabled):
+    """开刷前把相机滚轮拉近到"血条中位厚度 >= ZOOM_MIN_THICK" —— 低于这个厚度
+    sample_rarity 读不出稀有度词 (实测 厚<4 时 Mythic 名牌就几个青像素, 全读
+    Common, Mythic 锁定永不触发). best-effort:
+      - enemy_ai_enabled=False → 直接返回 False (zoom 只影响稀有度, 索敌关了不用管)
+      - 够不到 ZOOM_MIN_SAMPLES 条可测血条 (周围没 mob) → 不滚, 等, 最多 ZOOM_WAIT_CAP 秒
+      - 滚 ZOOM_MAX_SCROLLS 次仍没到 (可能已最大 zoom) → 放弃
+      - 滚一下中位厚度反而变小 → 方向反了, 翻转 ZOOM_SCROLL_AMOUNT 符号
+      - 任何异常 → 打一行警告返回 False
+    返回是否达到目标厚度; 调用方 (run_worker) 只打日志, 不管返回值都照常开刷."""
+    if not enemy_ai_enabled:
+        return False
+    overlay.update(state="调整视角", message="拉近相机以便读稀有度...")
+    scroll_amount = ZOOM_SCROLL_AMOUNT
+    scroll_count = 0
+    prev_median = None
+    start = time.time()
+    try:
+        while True:
+            if afk_watch.poll_afk_pause():
+                overlay.update(state="AFK弹窗处理中", message="等待florr-auto-afk解题")
+                time.sleep(0.2)
+                continue
+
+            thicks = enemy_detect.scan_bar_thickness(model_path=ENEMY_MODEL_PATH)
+
+            if len(thicks) < ZOOM_MIN_SAMPLES:
+                if time.time() - start >= ZOOM_WAIT_CAP:
+                    print("⚠️ 视角调整: 周围一直没有可测的怪, 照常开刷")
+                    return False
+                time.sleep(2)
+                continue
+
+            median = statistics.median(thicks)
+            if median >= ZOOM_MIN_THICK:
+                print(f"✅ 视角OK (血条中位厚度 {median})")
+                return True
+
+            if prev_median is not None and median < prev_median - 0.5:
+                scroll_amount = -scroll_amount
+                print("↔️ 视角: 滚轮方向反了, 已翻转")
+            prev_median = median
+
+            if scroll_count >= ZOOM_MAX_SCROLLS:
+                print(f"⚠️ 视角调整: 滚了 {scroll_count} 次仍没到目标厚度 "
+                      f"(可能已最大 zoom), 照常开刷")
+                return False
+
+            pyautogui.moveTo(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2)
+            pyautogui.scroll(scroll_amount)
+            scroll_count += 1
+            time.sleep(0.4)
+    except Exception as e:
+        print(f"⚠️ 视角调整出错, 照常开刷: {e}")
+        return False
+
+
 def auto_farming(farming_area, duration=300, *, enemy_ai_enabled=True):
     """自动刷怪逻辑（依赖一直攻击按钮）—— 在区域内连续走动, 不停下站桩.
 
@@ -721,6 +784,7 @@ def run_worker(cfg):
 
         if lazy_theta_pathing(location, [farming_area]):
             print("✅ 到达刷怪区域！")
+            ensure_zoom_for_rarity(w["enemy_ai_enabled"])
             auto_farming(farming_area, farming_duration,
                          enemy_ai_enabled=w["enemy_ai_enabled"])
         else:
