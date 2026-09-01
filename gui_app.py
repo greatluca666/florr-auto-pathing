@@ -277,7 +277,12 @@ class App(ctk.CTk):
         # 两个平台都给子进程 PYTHONUNBUFFERED=1: frozen(PyInstaller)build 没走
         # worker_command() 里的 -u, 不设这个 Windows 下子进程 stdout 会块缓冲,
         # 日志框只能几 KB 一跳.
-        kwargs = {"env": {**os.environ, "PYTHONUNBUFFERED": "1"}}
+        # PYTHONIOENCODING=utf-8: 中文 Windows 上子进程 stdout 默认按 locale(GBK)
+        # 编码, worker 打的 emoji/中文里带的字节 GBK 解不了, _pump_log 那边整个
+        # 线程会 UnicodeDecodeError 崩掉. 两端都钉 utf-8, 再在读取侧 errors=replace
+        # 兜底任何漏网的坏字节.
+        kwargs = {"env": {**os.environ, "PYTHONUNBUFFERED": "1",
+                          "PYTHONIOENCODING": "utf-8"}}
 
         # stdin=PIPE 不是为了往里写东西, 而是为了能"关"它: 关掉管道 = 给 worker
         # 发停止信号(见 _stop_worker). 不给 PIPE 的话子进程会继承 GUI 的 stdin,
@@ -285,7 +290,8 @@ class App(ctk.CTk):
         self.proc = subprocess.Popen(
             worker_command(), stdin=subprocess.PIPE,
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            text=True, bufsize=1, **kwargs)
+            text=True, encoding="utf-8", errors="replace",
+            bufsize=1, **kwargs)
         self._log_line("—— worker 已启动 ——\n")
         self.start_btn.configure(text="■ 停止")
         self._reader = threading.Thread(target=self._pump_log, args=(self.proc,),
