@@ -16,7 +16,7 @@ echo [*] Cleaning previous build...
 rmdir /s /q build 2>nul
 rmdir /s /q dist 2>nul
 
-echo [*] Running PyInstaller (this takes a while the first time - torch is big)...
+echo [*] Running PyInstaller (first run takes a few minutes)...
 pyinstaller main.spec
 if errorlevel 1 (
     echo [!] PyInstaller build failed.
@@ -28,11 +28,6 @@ xcopy /E /I /Y maps "dist\florr-auto-pathing\maps" >nul
 
 echo.
 echo [OK] Build done: dist\florr-auto-pathing\florr-auto-pathing.exe
-echo.
-echo [!] models\desert.pt (and sandstorm.pt if used) are gitignored and NOT
-echo     bundled - copy them into dist\florr-auto-pathing\models\ yourself,
-echo     same as running main.py unpackaged. See README.md for where to get
-echo     desert.pt and the warning about verifying .pt sources before use.
 echo.
 echo Run it with florr.io already open fullscreen in Chrome, then:
 echo     dist\florr-auto-pathing\florr-auto-pathing.exe

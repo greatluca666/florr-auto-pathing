@@ -3,18 +3,20 @@
 # Build ON THE TARGET OS — PyInstaller does not cross-compile. For a Windows
 # .exe this must run on the Windows machine (see build_windows.bat).
 #
-# maps/ and models/ are deliberately NOT bundled as --add-data: the code
-# reads them via relative paths ("./maps/...", "models/desert.pt") resolved
-# against the process's cwd, which for a double-clicked exe is the exe's own
-# folder. Bundling them into PyInstaller's internal _internal/ dir (default
-# since PyInstaller 6.0) would break that lookup. Instead the build script
-# copies maps/ next to the built exe, and models/*.pt (gitignored,
-# third-party YOLO weights not in this repo) must be placed there by hand —
-# same as running main.py unpackaged today.
+# maps/ is deliberately NOT bundled as --add-data: the code reads it via a
+# relative path ("./maps/...") resolved against the process's cwd, which for
+# a double-clicked exe is the exe's own folder. Bundling it into PyInstaller's
+# internal _internal/ dir (default since PyInstaller 6.0) would break that
+# lookup. The build script copies maps/ next to the built exe instead.
+#
+# canvas_hook.js IS bundled: cdp_bridge.py loads it relative to its OWN module
+# file (Path(__file__), or sys._MEIPASS when frozen), not the cwd — so it must
+# ride inside _internal/ next to the frozen modules, which is where a datas
+# entry with dest "." lands and where cdp_bridge's frozen branch looks.
 
 block_cipher = None
 
-datas = []
+datas = [("canvas_hook.js", ".")]
 binaries = []
 hiddenimports = [
     "pyautogui", "pyscreeze", "pymsgbox", "pytweening", "pygetwindow", "mouseinfo",
@@ -23,7 +25,10 @@ hiddenimports = [
 
 from PyInstaller.utils.hooks import collect_all
 
-for pkg in ("torch", "ultralytics", "cv2", "customtkinter"):
+# torch / ultralytics were dropped when enemy_detect.py moved off YOLO to
+# canvas draw-call decoding (merge a563f71) — nothing imports them any more.
+# cv2 + numpy are still pulled in transitively (utils.py's maze recognition).
+for pkg in ("cv2", "customtkinter"):
     d, b, h = collect_all(pkg)
     datas += d
     binaries += b
