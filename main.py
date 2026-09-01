@@ -649,6 +649,19 @@ def run_worker(cfg):
     farming_duration = w["farming_duration"]
     CONSECUTIVE_SHORT_ROUND_LIMIT = w["short_round_limit"]
 
+    # 索敌 AI 只有 desert 一张图有 YOLO 模型, 而且那个 .pt 不随仓库发布(第三方
+    # pickle 权重, 见 README), 得用户自己放进 models/. 开着但用不了的话
+    # _maybe_scan_enemies 每 0.12 秒抛一次异常刷屏 —— 这里一次性查清楚, 用不了
+    # 就本次按关闭处理, 只提示一行.
+    if w["enemy_ai_enabled"]:
+        if cfg["map"] != "desert":
+            print(f"⚠️ 索敌 AI 目前只有 desert 图有模型, 当前是 {cfg['map']} 图 —— 本次按关闭处理")
+            w["enemy_ai_enabled"] = False
+        elif not os.path.isfile(ENEMY_MODEL_PATH):
+            print(f"⚠️ 索敌 AI 已开, 但模型文件不在: {ENEMY_MODEL_PATH} —— 本次按关闭处理"
+                  " (需自己把 desert.pt 放进 models/, 见 README)")
+            w["enemy_ai_enabled"] = False
+
     print("🎮 开始自动寻路+刷怪 (掉线/死亡后自动点开始重来, 不主动停)\n")
     consecutive_short_rounds = 0
     round_count = 0

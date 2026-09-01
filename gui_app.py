@@ -63,6 +63,33 @@ def parse_positive_ints(*strs):
     return out
 
 
+_MAP_PX = 300           # maps/*.png 都是 300x300; 派生坐标 clamp 到 [0, _MAP_PX-1]
+_DERIVED_AREA_HALF = 12  # 只点了目标点没框区域时, 以点为中心生成的方块半边长(图像像素)
+
+
+def _clamp_px(v):
+    return max(0, min(_MAP_PX - 1, int(v)))
+
+
+def resolve_point_and_area(point, area):
+    """目标点和刷怪区域二选一即可(都给也行). 返回补全后的 (point, area);
+    两个都没有则返回 (None, None), 让调用方报错.
+      - 只有区域: 目标点 = 区域中心
+      - 只有点: 刷怪区域 = 以点为中心的小方块(clamp 进地图范围)
+    """
+    if point is None and area is None:
+        return None, None
+    if area is None:
+        x, y = int(point[0]), int(point[1])
+        h = _DERIVED_AREA_HALF
+        area = [(_clamp_px(x - h), _clamp_px(y - h)),
+                (_clamp_px(x + h), _clamp_px(y + h))]
+    if point is None:
+        (x1, y1), (x2, y2) = area
+        point = ((int(x1) + int(x2)) // 2, (int(y1) + int(y2)) // 2)
+    return point, area
+
+
 def start_afk(*, exe_exists, running, confirm_download):
     """AFK 开关打开时的决策(纯函数, 副作用由调用方按返回值执行).
     already: 已在跑, 什么都不用做
@@ -238,9 +265,12 @@ class App(ctk.CTk):
         # 校验 location/area → 校验数字 → 专用 Chrome 就绪 → (开关开着才)确保
         # florr-auto-afk → 切全屏确认(紧贴 Popen 之前). 任一步取消就静默中止.
         vals = self._current_values()
-        if vals["location"] is None or vals["area"] is None:
-            self._log_line("⚠️ 请先在地图上点目标点并框出刷怪区\n")
+        point, area = resolve_point_and_area(vals["location"], vals["area"])
+        if point is None:
+            self._log_line("⚠️ 请在地图上点一个目标点, 或框一个刷怪区域(二选一即可)\n")
             return
+        vals["location"] = point
+        vals["area"] = area
         # 只要校验结果, 转好的数字用不上 —— build_worker_config() 自己会
         # int() 一遍 vals 里的原始字符串.
         if parse_positive_ints(vals["duration"], vals["short_limit"]) is None:
@@ -360,16 +390,17 @@ class App(ctk.CTk):
         self._cfg = cfg
 
     def _busy_modal(self, text):
-        """一个没有关闭按钮的小模态框, 用来盖住"后台正在干重活儿"的那段时间.
+        """一个没有关闭按钮的小提示框, 显示"后台正在干重活儿". 不 grab_set() ——
+        AFK 准备(最长几分钟的下载)期间主窗口要保持能点, 不能把整个界面锁死.
         返回 toplevel, 调用方负责 destroy()."""
         top = ctk.CTkToplevel(self)
         top.title("")
         top.geometry("320x90")
         top.resizable(False, False)
         top.transient(self)
+        top.attributes("-topmost", True)
         top.protocol("WM_DELETE_WINDOW", lambda: None)   # 不给关
         ctk.CTkLabel(top, text=text).pack(expand=True, padx=20, pady=20)
-        top.grab_set()
         return top
 
     def _ensure_afk(self):
@@ -380,6 +411,8 @@ class App(ctk.CTk):
         poll_afk_pause() 只是在 tail 它的日志)."""
         if not _IS_WINDOWS:
             return
+        if getattr(self, "_afk_busy", False):
+            return   # 已经有一个准备线程在跑, 别再起一个
 
         # download_florr_auto_afk() 本身也是重活儿, 但它藏在 start_afk() 里 ——
         # 把"确认下载"这一步之后的全部动作(下载 + 启动)一起放进后台线程, 只留
@@ -397,7 +430,9 @@ class App(ctk.CTk):
                 self._log_line("AFK: declined\n")
                 return
 
-        modal = self._busy_modal("AFK 助手准备中，请稍候…")
+        self._afk_busy = True
+        self.afk_switch.configure(state="disabled")   # 准备期间不许再拨
+        modal = self._busy_modal("AFK 助手准备中，请稍候…\n(界面仍可操作)")
 
         def _work():
             try:
@@ -412,8 +447,12 @@ class App(ctk.CTk):
         threading.Thread(target=_work, daemon=True).start()
 
     def _finish_ensure_afk(self, modal, outcome):
+        self._afk_busy = False
         try:
-            modal.grab_release()
+            self.afk_switch.configure(state="normal")
+        except Exception:
+            pass
+        try:
             modal.destroy()
         except Exception:
             pass

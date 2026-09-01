@@ -76,3 +76,31 @@ def test_start_afk_missing_exe_download_fails(monkeypatch):
 def test_start_afk_exe_present_not_running():
     assert gui_app.start_afk(exe_exists=True, running=False,
                              confirm_download=lambda: pytest.fail()) == "started"
+
+
+def test_resolve_point_and_area_both_given_unchanged():
+    p, a = gui_app.resolve_point_and_area((20, 30), [(5, 5), (40, 40)])
+    assert p == (20, 30)
+    assert a == [(5, 5), (40, 40)]
+
+
+def test_resolve_point_and_area_neither():
+    assert gui_app.resolve_point_and_area(None, None) == (None, None)
+
+
+def test_resolve_point_and_area_only_area_derives_center():
+    p, a = gui_app.resolve_point_and_area(None, [(10, 20), (30, 60)])
+    assert p == (20, 40)          # ((10+30)//2, (20+60)//2)
+    assert a == [(10, 20), (30, 60)]
+
+
+def test_resolve_point_and_area_only_point_derives_box():
+    p, a = gui_app.resolve_point_and_area((100, 120), None)
+    assert p == (100, 120)
+    h = gui_app._DERIVED_AREA_HALF
+    assert a == [(100 - h, 120 - h), (100 + h, 120 + h)]
+
+
+def test_resolve_point_and_area_only_point_clamps_to_map_edges():
+    p, a = gui_app.resolve_point_and_area((2, 297), None)
+    assert a == [(0, 297 - gui_app._DERIVED_AREA_HALF), (2 + gui_app._DERIVED_AREA_HALF, 299)]
