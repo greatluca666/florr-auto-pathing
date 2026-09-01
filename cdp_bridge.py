@@ -267,3 +267,25 @@ def capture_screenshot(timeout=5):
     result = _send_cdp_command(
         "Page.captureScreenshot", {"format": "png"}, timeout=timeout)
     return base64.b64decode(result["result"]["data"])
+
+
+def scroll_wheel(delta_y, timeout=5):
+    """往florr.io标签页画面中心发一个鼠标滚轮事件(CDP Input.dispatchMouseEvent,
+    type=mouseWheel). delta_y<0 = 往上滚(florr里通常=拉近相机), >0 = 往下滚.
+
+    走CDP不走pyautogui.scroll —— pyautogui的滚轮是OS级事件, 要Chrome那个窗口
+    有焦点、光标真的悬在game canvas上, Chrome才会把它分发成页面的wheel事件;
+    main.py跑着的时候用户多半在看别的窗口, 那个滚轮就丢了(实测zoom调整每轮
+    都失败). CDP直接把事件注进渲染进程, 不看焦点 —— 跟capture_screenshot改用
+    CDP同一个原因. 找不到标签页/websocket包装错时抛RuntimeError, 调用方
+    (ensure_zoom_for_rarity)那边有try/except兜, 不阻塞刷怪."""
+    wh = _send_cdp_command(
+        "Runtime.evaluate",
+        {"expression": "[Math.floor(innerWidth/2), Math.floor(innerHeight/2)]",
+         "returnByValue": True},
+        timeout=timeout)
+    x, y = wh["result"]["value"]
+    _send_cdp_command(
+        "Input.dispatchMouseEvent",
+        {"type": "mouseWheel", "x": x, "y": y, "deltaX": 0, "deltaY": delta_y},
+        timeout=timeout)

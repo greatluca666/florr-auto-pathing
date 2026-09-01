@@ -283,7 +283,9 @@ def _stub_zoom_env(monkeypatch, thick_seq):
                         types.SimpleNamespace(update=lambda **k: None), raising=False)
     monkeypatch.setattr(main.afk_watch, "poll_afk_pause", lambda: False)
     monkeypatch.setattr(main.pyautogui, "moveTo", lambda *a, **k: calls["moveto"].append(a))
-    monkeypatch.setattr(main.pyautogui, "scroll", lambda amt, *a, **k: calls["scroll"].append(amt))
+    # zoom 滚轮走 CDP (main.cdp_bridge.scroll_wheel), 不是 pyautogui.scroll
+    monkeypatch.setattr(main.cdp_bridge, "scroll_wheel",
+                        lambda amt, *a, **k: calls["scroll"].append(amt))
     clock = {"t": 0.0}
     monkeypatch.setattr(main.time, "time", lambda: clock["t"])
 

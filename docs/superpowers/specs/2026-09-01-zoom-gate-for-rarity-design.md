@@ -49,7 +49,7 @@ keeps walking during the wait / AFK / scroll-settle branches.
 Per iteration:
 
 1. **Wait-cap check at the top of the loop:** if total elapsed ≥ `ZOOM_WAIT_CAP`
-   (60 s) → restore the zoom (`pyautogui.scroll(-applied)` if anything was rolled)
+   (60 s) → restore the zoom (`cdp_bridge.scroll_wheel(-applied)` if anything was rolled)
    and return. Placed first so the AFK branch's `continue` can't bypass it.
 2. If `afk_watch.poll_afk_pause()` → `sleep(0.2)`, `continue` (don't count the
    iteration). Same pattern as `move_to_position` / `lazy_theta_pathing`.
@@ -65,24 +65,28 @@ Per iteration:
 5. `median = statistics.median(thicks)`.
    - `median >= ZOOM_MIN_THICK` (4) → log "视角OK (血条中位厚度 {median})" and
      return `True` (success) — the zoom is left where we want it, not restored.
-   - Else zoom in: `pyautogui.moveTo(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2)`,
-     `pyautogui.scroll(scroll_amount)`, `applied += scroll_amount`, `sleep(0.4)`.
-     Increment `scroll_count`.
+   - Else zoom in: `cdp_bridge.scroll_wheel(scroll_amount)` (a CDP
+     `Input.dispatchMouseEvent` type `mouseWheel` at the page centre — **not**
+     `pyautogui.scroll`, whose OS wheel event needs the Chrome window focused and
+     the cursor over the canvas, which it usually isn't while the bot runs; same
+     reason `capture_screenshot` uses CDP). `applied += scroll_amount`, `sleep(0.4)`,
+     increment `scroll_count`. `ZOOM_SCROLL_AMOUNT` is a DOM wheel `deltaY`
+     (default `-120` ≈ one notch up = zoom in; sign self-corrects).
 6. **Direction self-correction (flip at most once):** keep `prev_median`. If
    `median < prev_median - 0.5` (thinner than before → wrong way): the first time,
    `scroll_amount = -scroll_amount`, log "视角: 滚轮方向反了, 已翻转"; if it
    regresses *again* after the flip, both directions are losing → log
    "视角调整: 两个方向都没改善, 撤销并放弃", restore the zoom
-   (`pyautogui.scroll(-applied)`) and return `False`. This bounds the damage a
+   (`cdp_bridge.scroll_wheel(-applied)`) and return `False`. This bounds the damage a
    noisy reading can do — the old unconditional flip could commit the loop to
    scrolling out to the cap.
 7. `scroll_count >= ZOOM_MAX_SCROLLS` (15) → log "视角调整: 滚了 15 次仍没到目标厚度
-   (可能已到最大 zoom), 照常开刷", restore the zoom (`pyautogui.scroll(-applied)`)
+   (可能已到最大 zoom), 照常开刷", restore the zoom (`cdp_bridge.scroll_wheel(-applied)`)
    and return `False`.
 
-`applied` is the signed sum of every amount passed to `pyautogui.scroll`. Every
+`applied` is the signed sum of every deltaY passed to `cdp_bridge.scroll_wheel`. Every
 give-up path (wait-cap, scroll-cap, both-directions-regress) restores the camera
-with `pyautogui.scroll(-applied)` (skipped when `applied == 0`) so a failed run
+with `cdp_bridge.scroll_wheel(-applied)` (skipped when `applied == 0`) so a failed run
 never leaves the zoom worse than it found it. The success path does **not**
 restore.
 
@@ -124,10 +128,14 @@ Pure, no I/O. `_find_hp_bar` already exists and returns
   ```
   ZOOM_MIN_THICK    = 4    # 血条中位厚度到这个像素数, sample_rarity 才稳
   ZOOM_MIN_SAMPLES  = 2    # 至少要几条血条样本才据此判定 (少于就等 mob)
-  ZOOM_SCROLL_AMOUNT = 2   # 每次滚轮往里推的量 (正=拉近; 方向不对循环里会自翻转)
+  ZOOM_SCROLL_AMOUNT = -120 # CDP 滚轮 deltaY (负=往上=拉近; 方向不对循环里会自翻转)
   ZOOM_MAX_SCROLLS  = 15   # 滚这么多次还没到就放弃 (可能已是最大 zoom)
   ZOOM_WAIT_CAP     = 60   # 周围没 mob 时最多等这么多秒, 之后照常开刷
   ```
+- `cdp_bridge.scroll_wheel(delta_y)` — new: a CDP `Input.dispatchMouseEvent` type
+  `mouseWheel` at the page centre. Used instead of `pyautogui.scroll` because the
+  OS wheel event needs the Chrome window focused / cursor over canvas, which the
+  bot usually doesn't have.
 - Add `ensure_zoom_for_rarity(enemy_ai_enabled) -> bool` near `_maybe_scan_enemies`.
 - `run_worker()`: after `if lazy_theta_pathing(...)` succeeds and before
   `auto_farming(...)`, call `ensure_zoom_for_rarity(w["enemy_ai_enabled"])` into a
@@ -160,7 +168,7 @@ Pure, no I/O. `_find_hp_bar` already exists and returns
 `test_main_worker.py` (monkeypatch style already used for `move_to_position` /
 `_maybe_scan_enemies`), via the `_stub_zoom_env` helper:
 - Stub `enemy_detect.scan_bar_thickness` (returns successive thickness lists),
-  `main.pyautogui.scroll` / `moveTo` (both recorded), `main.time.time` /
+  `main.cdp_bridge.scroll_wheel` / `main.pyautogui.moveTo` (both recorded), `main.time.time` /
   `main.time.sleep` (fake clock), `main.overlay`, `main.afk_watch.poll_afk_pause`.
 - **reaches target:** `scan_bar_thickness` returns `[2,2]` then `[3,3]` then
   `[4,4]` on successive calls → returns `True`, `scroll` called exactly twice.
