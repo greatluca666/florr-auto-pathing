@@ -135,8 +135,8 @@ Pure, no I/O. `_find_hp_bar` already exists and returns
   warning line ("视角未调到位, 本轮稀有度识别可能不准"). The function still has its
   own internal `enemy_ai_enabled` guard (returns `False` at once when off).
 
-`scan_enemies` needs an `image=` pass-through — it already has one
-(`scan_enemies(image=None, ...)`), so no change there.
+`scan_enemies` is untouched — the zoom loop calls the dedicated
+`scan_bar_thickness` wrapper instead.
 
 ## Error handling
 
