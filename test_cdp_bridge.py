@@ -288,3 +288,40 @@ def test_wait_for_florr_tab_returns_tab_when_found():
 def test_wait_for_florr_tab_returns_none_on_timeout():
     with patch("cdp_bridge.find_florr_tab", return_value=None):
         assert cdp_bridge.wait_for_florr_tab(0) is None
+
+
+def test_scroll_wheel_unwraps_runtime_evaluate_and_dispatches_wheel():
+    # Runtime.evaluate 的响应是双层 result (returnByValue=True): 之前 scroll_wheel
+    # 少剥一层 -> KeyError: 'value' -> zoom 每轮都"出错". 这里钉死正确形状 + 事件参数.
+    sent = []
+
+    def fake_send(method, params=None, timeout=5):
+        sent.append((method, params))
+        if method == "Runtime.evaluate":
+            return {"id": 1, "result": {"result": {"type": "object", "value": [812, 456]}}}
+        return {"id": 1, "result": {}}
+
+    with patch("cdp_bridge._send_cdp_command", side_effect=fake_send):
+        cdp_bridge.scroll_wheel(-120)
+
+    methods = [m for m, _ in sent]
+    assert methods == ["Runtime.evaluate", "Input.dispatchMouseEvent"]
+    _, wheel = sent[1]
+    assert wheel["type"] == "mouseWheel"
+    assert (wheel["x"], wheel["y"]) == (812, 456)
+    assert wheel["deltaY"] == -120 and wheel["deltaX"] == 0
+
+
+def test_scroll_wheel_falls_back_to_default_centre_on_bad_eval_shape():
+    sent = []
+
+    def fake_send(method, params=None, timeout=5):
+        sent.append(method)
+        if method == "Runtime.evaluate":
+            return {"id": 1, "result": {}}          # no nested result/value
+        return {"id": 1, "result": {}}
+
+    with patch("cdp_bridge._send_cdp_command", side_effect=fake_send):
+        cdp_bridge.scroll_wheel(120)
+
+    assert sent == ["Runtime.evaluate", "Input.dispatchMouseEvent"]

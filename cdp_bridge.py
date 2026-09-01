@@ -279,12 +279,20 @@ def scroll_wheel(delta_y, timeout=5):
     都失败). CDP直接把事件注进渲染进程, 不看焦点 —— 跟capture_screenshot改用
     CDP同一个原因. 找不到标签页/websocket包装错时抛RuntimeError, 调用方
     (ensure_zoom_for_rarity)那边有try/except兜, 不阻塞刷怪."""
-    wh = _send_cdp_command(
-        "Runtime.evaluate",
-        {"expression": "[Math.floor(innerWidth/2), Math.floor(innerHeight/2)]",
-         "returnByValue": True},
-        timeout=timeout)
-    x, y = wh["result"]["value"]
+    # Runtime.evaluate 的响应是双层 result: {"result": {"result": {"value": [..]}}}
+    # (returnByValue=True 时 value 才是真值). 拿不到就兜底一个常见画面中心.
+    x, y = 640, 360
+    try:
+        wh = _send_cdp_command(
+            "Runtime.evaluate",
+            {"expression": "[Math.floor(innerWidth/2), Math.floor(innerHeight/2)]",
+             "returnByValue": True},
+            timeout=timeout)
+        v = wh.get("result", {}).get("result", {}).get("value")
+        if isinstance(v, (list, tuple)) and len(v) == 2:
+            x, y = int(v[0]), int(v[1])
+    except Exception:
+        pass   # 尺寸拿不到不致命, 用兜底中心照样能发滚轮
     _send_cdp_command(
         "Input.dispatchMouseEvent",
         {"type": "mouseWheel", "x": x, "y": y, "deltaX": 0, "deltaY": delta_y},
