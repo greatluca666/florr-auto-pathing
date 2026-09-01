@@ -456,6 +456,53 @@ def test_scan_enemies_empty_when_camera_undecodable(monkeypatch):
     assert scan_enemies() == []
 
 
+def test_scan_enemies_swallows_non_tuple_exception_types(monkeypatch):
+    # the decode path now leans on cdp_bridge (websocket.WebSocketException),
+    # file reads (OSError/FileNotFoundError) and division (ZeroDivisionError) —
+    # none of which are ValueError/RuntimeError/KeyError/TypeError. scan_enemies'
+    # contract is "undecodable -> []", so it must catch all of them.
+    monkeypatch.setattr(_ed.cdp_bridge, "inject_canvas_hook", lambda *a, **k: None)
+
+    def boom(*a, **k):
+        raise OSError("boom")
+
+    monkeypatch.setattr(_ed.cdp_bridge, "drain_canvas_log", boom)
+    _ed._frame_buffer[:] = []
+    assert scan_enemies() == []
+
+
+def test_scan_enemies_frame_buffer_stays_bounded_when_frame_number_stuck(monkeypatch):
+    # __canvasFrame stuck at 0 -> every drained record is frame 0 -> group_by_frame
+    # yields one key -> scan_enemies hits the "< 2 frames" early return every tick and
+    # never runs the by-frame prune below it. The _FRAME_BUFFER_CAP hard-cap is the
+    # only thing keeping _frame_buffer from growing unbounded over a multi-hour run.
+    stuck = [{"frame": 0, "op": "fill", "m": [0.7, 0, 0, 0.7, 1.0, 2.0]}
+             for _ in range(8000)]
+    monkeypatch.setattr(_ed.cdp_bridge, "inject_canvas_hook", lambda *a, **k: None)
+    monkeypatch.setattr(_ed.cdp_bridge, "drain_canvas_log", lambda *a, **k: list(stuck))
+    _ed._frame_buffer[:] = []
+    for _ in range(12):                       # 12 * 8000 = 96k records drained total
+        assert scan_enemies() == []
+    assert len(_ed._frame_buffer) <= _ed._FRAME_BUFFER_CAP
+
+
+def test_species_from_name_logs_unknown_name_once(capsys):
+    # recovers the diagnostic the deleted debug_enemy_detect.py used to provide: an
+    # unrecognised mob name gets named in the log exactly once, so a slug mismatch
+    # between YOLO's old class labels and florr's live English names is visible.
+    _ed._seen_unknown_names.discard("desert_weirdo")
+
+    assert _species_from_name("Desert Weirdo") is None
+    first = capsys.readouterr().out
+    assert "Desert Weirdo" in first and "desert_weirdo" in first
+
+    assert _species_from_name("Desert Weirdo") is None      # same name -> silent
+    assert capsys.readouterr().out == ""
+
+    assert _species_from_name("Beetle") == "beetle"         # known slug -> never logs
+    assert capsys.readouterr().out == ""
+
+
 def _mdet(species, screen_pos):
     return {"species": species, "rarity": "Mythic", "screen_pos": screen_pos,
             "bbox": (0, 0, 0, 0), "confidence": 0.9}

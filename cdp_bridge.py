@@ -293,31 +293,58 @@ def drain_canvas_log(timeout=5):
     return v if isinstance(v, list) else []
 
 
+_RELOAD_MIN_INTERVAL = 30.0   # Page.reload 两次之间的最短间隔(秒)
+_last_reload_ts = 0.0         # 上一次真的发出 Page.reload 的时刻(time.time())
+
+
+def _maybe_reload(timeout=5):
+    """限流版 Page.reload. inject_canvas_hook 的两条失败分支都要 reload 页面, 而
+    enemy_detect.scan_enemies 每 ~0.12s 就调一次 inject_canvas_hook —— 坏状态不
+    限流的话, 用户的游戏会被每秒 reload 八次, 永远回不到能玩的状态. 距上次真的
+    reload 不到 _RELOAD_MIN_INTERVAL 秒就跳过. 真发了返回 True, 被限流跳过返回
+    False(调用方无论哪种都照样抛 RuntimeError, 这一 tick 退化成 [])."""
+    global _last_reload_ts
+    if time.time() - _last_reload_ts < _RELOAD_MIN_INTERVAL:
+        return False
+    _send_cdp_command("Page.reload", {}, timeout=timeout)
+    _last_reload_ts = time.time()
+    return True
+
+
 def inject_canvas_hook(timeout=5):
     """把 canvas_hook.js 注进 florr.io 标签页(patch CanvasRenderingContext2D 记录绘制调用).
-    幂等: 同版本已装 → 直接返回. 移植自 florragent 的 _inject_canvas_hook, 换成裸 CDP:
-      1. Runtime.evaluate 注 hook(免 reload 路径).
-      2. Page.addScriptToEvaluateOnNewDocument 同一份(跨 reload 持久).
-      3. 版本指纹(sha256[:16]): 页面上装的是别的版本 → Page.reload + 抛 RuntimeError
-         (patchProto 的 per-prototype guard 不能热替).
-      4. 免 reload 注完 drain 一次 + sleep(0.5) + 再 drain: 第二次还是空 → florr 在 patch
-         落地前就绑了 ctx 方法引用 → Page.reload + 抛 RuntimeError.
-    抛 RuntimeError 时调用方(enemy_detect.scan_enemies)会当"本次没检测到"退化成 wander,
-    下次扫描再重试(幂等)."""
-    src = _CANVAS_HOOK_PATH.read_text()
+    幂等: 同版本已装 → 直接返回. 移植自 florragent 的 _inject_canvas_hook, 换成裸 CDP.
+
+    只走一条注入路径: Runtime.evaluate 里跑 hook 源码, 顺带盖上版本戳
+    window.__canvasHookInstalledVersion. 不用 Page.addScriptToEvaluateOnNewDocument
+    —— _send_cdp_command 每次开一条全新 WebSocket、发完就关, 用它注册的脚本绑在那条
+    转瞬即逝的 DevTools 会话上, 活不到下次页面加载. reload 恢复靠的是 scan_enemies
+    每 tick 都调本函数: florr 自己 reload 后 window.__canvasHookInstalled 没了 → 下一
+    tick 走全新注入路径经 Runtime.evaluate 重注.
+
+    版本指纹(sha256[:16]): 页面上装的是别的版本 → reload + 抛 RuntimeError
+    (patchProto 的 per-prototype guard 不能热替).
+    注完 drain 一次 + sleep(0.5) + 再 drain: 排出的记录里 frame 号不足 2 个不同值
+    → patch 没落地, 或 florr 在 patch 落地前就绑死了 ctx 方法/自己那份
+    requestAnimationFrame 引用(__canvasFrame 推不动, 每条记录都是 frame 0, 光看
+    "非空"检测不出来)→ reload + 抛 RuntimeError.
+    两处 reload 都过 _maybe_reload 限流(本函数每秒被调 ~8 次). 抛 RuntimeError 时
+    调用方(enemy_detect.scan_enemies)当"本次没检测到"退化成 wander, 下次再重试(幂等)."""
+    src = _CANVAS_HOOK_PATH.read_text(encoding="utf-8")
     version = hashlib.sha256(src.encode()).hexdigest()[:16]
     installed = _eval_value("!!window.__canvasHookInstalled", timeout)
     installed_ver = _eval_value("window.__canvasHookInstalledVersion || null", timeout)
-    if installed and installed_ver != version:
-        _send_cdp_command("Page.addScriptToEvaluateOnNewDocument", {"source": src}, timeout=timeout)
-        _send_cdp_command("Page.reload", {}, timeout=timeout)
+    if installed and installed_ver == version:
+        return                                     # 同版本已装 → 无操作
+    if installed and installed_ver is not None:     # 真·版本不一致(页面上是别的版本)
+        _maybe_reload(timeout)
         raise RuntimeError("canvas hook 版本不一致(页面上是旧版) —— 已 reload, 请重进游戏后重试")
-    if installed:
-        return
-    _send_cdp_command("Page.addScriptToEvaluateOnNewDocument", {"source": src}, timeout=timeout)
+    # 没装, 或装了但没盖版本戳(理论上到不了 —— 只有本函数会设 __canvasHookInstalled)
+    # → 都走全新注入路径.
     _eval_value(f"window.__canvasHookInstalledVersion = {version!r};\n" + src, timeout)
     drain_canvas_log(timeout)                       # discard the injection's own output
     time.sleep(0.5)
-    if not drain_canvas_log(timeout):
-        _send_cdp_command("Page.reload", {}, timeout=timeout)
-        raise RuntimeError("canvas hook 注入没生效 —— 已 reload, 请重进游戏后重试")
+    recs = drain_canvas_log(timeout)
+    if len({r.get("frame") for r in recs}) < 2:
+        _maybe_reload(timeout)
+        raise RuntimeError("canvas hook 注入没生效 (帧号没推进) —— 已 reload, 请重进游戏后重试")

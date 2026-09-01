@@ -355,6 +355,13 @@ _DESERT_SPECIES = {"scorpion", "beetle", "cactus", "sandstorm", "sand_centipede"
 _SPECIES_ALIASES = {}   # florr English name (slugified) -> desert slug, for any spelling mismatch;
                         # fill after a live check. e.g. {"centipede": "sand_centipede"}
 
+_seen_unknown_names = set()   # slugs already reported by _species_from_name — recovers the
+                              # diagnostic the deleted debug_enemy_detect.py used to give:
+                              # the 6 desert slugs came from YOLO class labels, never checked
+                              # against what florr's English client actually renders. If a real
+                              # desert mob shows under an unexpected name it silently vanishes
+                              # from every detection — this at least names it once in the log.
+
 # 名牌稀有度词的颜色 -> RARITY_ORDER 下标. 跟旧稀有度色表同一批值, 只是换成从
 # canvas 绘制调用读到的、带 "#" 的 fill 色. Super(rank 7)/Eternal(rank 8) 实测不刷,
 # rank 8 空着.
@@ -372,7 +379,12 @@ def _species_from_name(name):
     slug = name.strip().lower().replace(" ", "_")
     if slug in _DESERT_SPECIES:
         return slug
-    return _SPECIES_ALIASES.get(slug)
+    if slug in _SPECIES_ALIASES:
+        return _SPECIES_ALIASES[slug]
+    if slug and slug not in _seen_unknown_names:
+        _seen_unknown_names.add(slug)
+        print(f"ℹ️ canvas 解出未识别怪物名: {name!r} (slug={slug!r}) —— 若是沙漠怪, 加进 _SPECIES_ALIASES")
+    return None
 
 
 def _tier_from_color(rarity_color):
@@ -383,6 +395,12 @@ def _tier_from_color(rarity_color):
 
 
 _frame_buffer = []   # drain_canvas_log 每次读空页面 log, 跨调用在这里攒; 每次裁到最新一帧
+_FRAME_BUFFER_CAP = 20000   # 硬上限, 防 _frame_buffer 无界增长: 若 __canvasFrame 卡住不动
+                            # (florr 绑死了自己那份 requestAnimationFrame 引用), 每条记录都是
+                            # frame 0 → group_by_frame 永远只有 1 个 key → scan_enemies 每 tick
+                            # 命中 "< 2" 提前返回, 下面那句按帧裁剪永远跑不到, buffer 每 tick
+                            # 涨一截. canvas_hook.js 自己把页面 log 裁到 FRAME_RETENTION=5 帧,
+                            # 20000 条已经很宽裕.
 
 
 def scan_enemies(image=None, conf=0.4, model_path=None):
@@ -393,10 +411,14 @@ def scan_enemies(image=None, conf=0.4, model_path=None):
 
     每 tick 都调 inject_canvas_hook()(幂等) -- florr 重载后下一次扫描自动重注 hook.
     inject/drain/decode 整段套 try: inject_canvas_hook 版本不符会抛 RuntimeError,
-    _send_cdp_command 找不到标签页也抛, 都当"这次没检测到"退化成 wander."""
+    _send_cdp_command 找不到标签页也抛, canvas_decode 的除法可能抛
+    ZeroDivisionError/IndexError, cdp_bridge 底下 websocket 可能抛 WebSocketException
+    /OSError —— 全都当"这次没检测到"退化成 wander."""
     try:
         cdp_bridge.inject_canvas_hook()
         _frame_buffer.extend(cdp_bridge.drain_canvas_log())
+        if len(_frame_buffer) > _FRAME_BUFFER_CAP:
+            del _frame_buffer[:-_FRAME_BUFFER_CAP]   # 硬上限, 见 _FRAME_BUFFER_CAP 注释
         frames = canvas_decode.group_by_frame(_frame_buffer)
         if len(frames) < 2:
             return []
@@ -405,8 +427,8 @@ def scan_enemies(image=None, conf=0.4, model_path=None):
         _frame_buffer[:] = [r for r in _frame_buffer if r.get("frame", -1) >= keys[-1]]
         cam = canvas_decode.camera_from_frame(recs)
         mobs = canvas_decode.mobs_from_frame(recs, cam)
-    except (ValueError, RuntimeError, KeyError, TypeError):
-        return []
+    except Exception:
+        return []                              # 任何异常 → 当作这次没解出来, 返回 []
 
     out = []
     for m in mobs:
