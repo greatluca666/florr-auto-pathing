@@ -129,8 +129,16 @@ def reset_keyboard():
     keyup("d")
 
 
-def move_to_position(current_pos, target_pos, max_attempts=200, stall_limit=13, progress_epsilon=1.5):
+def move_to_position(current_pos, target_pos, max_attempts=200, stall_limit=13,
+                     progress_epsilon=1.5, on_tick=None):
     """移动到目标位置.
+
+    on_tick: 可选回调, 每个内循环 tick(moveTo 之后、sleep 之前)调一次, 传入当前
+    minimap 坐标. 返回真值 → 立刻收手, move_to_position 把那个真值原样返回给调用方
+    (约定用短字符串, 比如 "enemy"). 给 auto_farming 的 wander 腿用: 这函数是阻塞的,
+    整段(max_attempts×0.05s)期间外层拿不回控制权、跑不了索敌, 快怪冲过来就撞死 ——
+    钩子让 wander 途中也能触发一次索敌、需要接战/规避时中断这条腿. on_tick=None
+    (execute_path / lazy_theta_pathing 那些纯赶路调用)时行为跟以前完全一样.
 
     跟原版(github.com/Shiny-Ladybug/florr-auto-pathing)的go_direction比对后, 补回了
     两条它有而我们这版"简化版本"漏掉的关键判定 —— 之前只看"到没到5px内", 不看有
@@ -224,6 +232,12 @@ def move_to_position(current_pos, target_pos, max_attempts=200, stall_limit=13, 
             reset_keyboard()
             overlay.update(state="菜单中")
             return "in_menu"
+
+        if on_tick is not None:
+            signal = on_tick(current_pos)
+            if signal:
+                reset_keyboard()
+                return signal
 
         attempts += 1
         time.sleep(0.05)
@@ -465,6 +479,24 @@ def auto_farming(farming_area, duration=300, *, enemy_ai_enabled=True):
     mythic_misses = 0
     mythic_target_pos = None   # 上一 tick 锁定 Mythic 的屏幕坐标, 给 pick_mythic_target 做连续性
 
+    def _wander_enemy_watch(_pos):
+        """move_to_position 的 on_tick 钩子: wander 腿途中做一次(节流的)索敌, 需要
+        规避/接战/锁 Mythic 时返回 "enemy" 中断这条腿, 外层下个 tick 就按刚更新的
+        enemy_decision 处理. 只更新扫描状态、不推进 mythic miss 计数(那个归外层
+        mythic 分支的 scanned 门管)."""
+        nonlocal enemy_decision, detections, last_enemy_scan
+        enemy_decision, detections, last_enemy_scan, _scanned = _maybe_scan_enemies(
+            enemy_ai_enabled, time.time(), last_enemy_scan, enemy_decision, detections)
+        if enemy_decision[0] in ("flee", "chase"):
+            return "enemy"
+        if (MYTHIC_LATCH_ENABLED and enemy_ai_enabled
+                and enemy_detect.pick_mythic_target(
+                    detections, center=enemy_detect.SCREEN_CENTER, latched=mythic_latch,
+                    engage_px=MYTHIC_ENGAGE_PX, release_px=MYTHIC_RELEASE_PX,
+                    chase_min_conf=CHASE_MIN_CONF, prev_pos=mythic_target_pos) is not None):
+            return "enemy"
+        return None
+
     while time.time() - start_time < duration:
         if afk_watch.poll_afk_pause():
             overlay.update(state="AFK弹窗处理中", message="等待florr-auto-afk解题")
@@ -566,8 +598,13 @@ def auto_farming(farming_area, duration=300, *, enemy_ai_enabled=True):
         # max_attempts=20 (≈1s worst case at time.sleep(0.05)每tick) 而不是默认的
         # 200(≈10s) —— 让外层循环更频繁拿回控制权重新索敌扫描, 见下面ENEMY_SCAN_INTERVAL
         # 的注释.
-        move_result = move_to_position(current_pos, (random_x, random_y), max_attempts=20)
+        move_result = move_to_position(current_pos, (random_x, random_y),
+                                       max_attempts=20, on_tick=_wander_enemy_watch)
 
+        if move_result == "enemy":
+            # 路途中扫到怪(该 flee/chase/锁 Mythic) —— 立刻回外层, 下个 tick 用
+            # _wander_enemy_watch 刚更新的 enemy_decision 处理, 不算走完一趟.
+            continue
         if move_result == "stuck":
             print("⚠️ 移动受阻, 脱困一下...")
             overlay.update(state="卡住", message="脱困中")

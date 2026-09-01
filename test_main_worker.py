@@ -214,3 +214,51 @@ def test_mythic_miss_counter_only_advances_on_fresh_scan():
     assert (latched, misses) == (True, 2)
     tick(scanned=True, has_target=False)      # 真扫描 miss 3 —— 解锁
     assert (latched, misses) == (False, 0)
+
+
+# ── move_to_position 的 on_tick 钩子 (wander 腿途中让外层索敌) ──────────────
+
+def _stub_move_env(monkeypatch, pos=(10, 10), dead=False, menu=False):
+    """把 move_to_position 的所有实机依赖打桩掉, 只留纯逻辑."""
+    import types
+    monkeypatch.setattr(main, "get_player_position", lambda *a, **k: pos, raising=False)
+    monkeypatch.setattr(main, "on_death_screen", lambda: dead, raising=False)
+    monkeypatch.setattr(main, "on_start_screen", lambda: menu, raising=False)
+    monkeypatch.setattr(main, "reset_keyboard", lambda: None, raising=False)
+    monkeypatch.setattr(main.afk_watch, "poll_afk_pause", lambda: False)
+    monkeypatch.setattr(main.pyautogui, "moveTo", lambda *a, **k: None)
+    monkeypatch.setattr(main.time, "sleep", lambda *a, **k: None)
+    monkeypatch.setattr(main, "overlay",
+                        types.SimpleNamespace(update=lambda **k: None), raising=False)
+
+
+def test_move_to_position_on_tick_aborts_leg_with_its_signal(monkeypatch):
+    # 玩家位置恒定 (永远到不了目标), on_tick 第 3 次返回 "enemy" —— 应在那一 tick
+    # 立刻收手, 返回该信号, 早于 max_attempts 和 stall 判定.
+    _stub_move_env(monkeypatch, pos=(10, 10))
+    calls = []
+
+    def on_tick(pos):
+        calls.append(pos)
+        return "enemy" if len(calls) >= 3 else None
+
+    result = main.move_to_position((10, 10), (999, 999), max_attempts=50, on_tick=on_tick)
+    assert result == "enemy"
+    assert len(calls) == 3
+
+
+def test_move_to_position_on_tick_falsy_does_not_abort(monkeypatch):
+    # on_tick 从不返回信号 —— 腿正常按老逻辑走完 (位置恒定 → stall → "stuck"),
+    # 钩子每 tick 都被调到.
+    _stub_move_env(monkeypatch, pos=(10, 10))
+    ticks = []
+    result = main.move_to_position((10, 10), (999, 999), max_attempts=50,
+                                   on_tick=lambda p: ticks.append(p))
+    assert result == "stuck"
+    assert len(ticks) >= 5
+
+
+def test_move_to_position_without_on_tick_unchanged(monkeypatch):
+    # 不传 on_tick (默认 None) —— 行为跟以前完全一样: 已在 5px 内 → 立刻到达.
+    _stub_move_env(monkeypatch, pos=(500, 500))
+    assert main.move_to_position((500, 500), (502, 501), max_attempts=5) is True

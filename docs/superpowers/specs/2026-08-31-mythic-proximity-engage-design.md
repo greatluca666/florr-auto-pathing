@@ -102,6 +102,14 @@ Per tick, after `_maybe_scan_enemies()`:
 3. **`chase` / `wander`** (existing): unchanged. Reached only when not fleeing and
    no Mythic is latched.
 
+The `wander` leg calls the blocking `move_to_position()`, which suspends the outer
+loop (and therefore all enemy scanning) for up to ~1 s. `move_to_position()` takes
+an `on_tick` hook; `auto_farming` passes `_wander_enemy_watch`, which runs a
+throttled `_maybe_scan_enemies` each inner tick and returns `"enemy"` (aborting the
+leg) when the fresh decision is `flee`/`chase` or `pick_mythic_target` finds a
+target. So a Mythic can latch — and a fast AVOID mob can trigger flee — mid-wander,
+not only at leg boundaries.
+
 ### Stuck handling
 
 The Mythic branch reuses `chase_pos_history` + `enemy_detect.chase_is_stalled()`
