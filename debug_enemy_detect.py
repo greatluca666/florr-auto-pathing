@@ -219,7 +219,11 @@ def watch_loop(interval, conf, tolerance):
     像素(尤其 Mythic 的青色 1FDBDE)、以及 pick_mythic_target 返回啥. Ctrl+C 退出."""
     import pyautogui
     model = YOLO(DESERT_PATH)
-    print(f"分辨率 {SCREEN_WIDTH}x{SCREEN_HEIGHT}  间隔 {interval}s  conf>={conf}  Ctrl+C 退出\n")
+    cx, cy = ed.SCREEN_CENTER
+    interesting = {"beetle", "scorpion", "cactus"}   # 会走位磨的那几种 (排除 sandstorm/蜈蚣)
+    saved = 0
+    print(f"分辨率 {SCREEN_WIDTH}x{SCREEN_HEIGHT}  间隔 {interval}s  conf>={conf}  Ctrl+C 退出")
+    print(f"(看到 beetle/scorpion/cactus 就存一张 debug_watch_NN.png, 最多 12 张)\n")
     t0 = time.time()
     while True:
         shot = pyautogui.screenshot(region=[0, 0, SCREEN_WIDTH, SCREEN_HEIGHT])
@@ -228,16 +232,19 @@ def watch_loop(interval, conf, tolerance):
         boxes = res[0].boxes if res else []
         names = res[0].names if res else {}
         dets = []
+        vis = img.copy()
+        hit_interesting = False
         print(f"─ scan @ {time.time() - t0:5.1f}s  dets={len(boxes)}")
         for box in boxes:
             sp = names[int(box.cls[0])]
             cf = float(box.conf[0])
             x1, y1, x2, y2 = [float(v) for v in box.xyxy[0]]
             bbox = (x1, y1, x2, y2)
+            spos = ((x1 + x2) / 2, (y1 + y2) / 2)
+            dcen = ((spos[0] - cx) ** 2 + (spos[1] - cy) ** 2) ** 0.5
             bar, win, counts, ratio, verdict = rarity_breakdown(img, bbox, tolerance)
             rar = ed.sample_rarity(img, bbox, tolerance=tolerance)
-            dets.append({"species": sp, "rarity": rar,
-                         "screen_pos": ((x1 + x2) / 2, (y1 + y2) / 2),
+            dets.append({"species": sp, "rarity": rar, "screen_pos": spos,
                          "bbox": bbox, "confidence": cf})
             if bar is None:
                 barinfo = "血条=无"
@@ -245,7 +252,21 @@ def watch_loop(interval, conf, tolerance):
             else:
                 barinfo = f"血条y={bar[1]} 厚={bar[3]}"
                 cnts = "  " + " ".join(f"{n}={c}" for n, c in counts[:4])
-            print(f"    {sp:16} conf={cf:.2f}  {barinfo}  -> {rar}{cnts}")
+            print(f"    {sp:16} conf={cf:.2f}  中心距={dcen:4.0f}px  {barinfo}  -> {rar}{cnts}")
+            col = (0, 200, 0) if sp in interesting else (160, 160, 160)
+            cv2.rectangle(vis, (int(x1), int(y1)), (int(x2), int(y2)), col, 2)
+            cv2.putText(vis, f"{sp} {cf:.2f} {rar}", (int(x1), max(12, int(y1) - 4)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, col, 1, cv2.LINE_AA)
+            if bar is not None:
+                cv2.line(vis, (bar[0], bar[1]), (bar[2], bar[1]), (255, 0, 0), 1)
+                cv2.rectangle(vis, (win[0], win[1]), (win[2], win[3]), (0, 0, 255), 1)
+            if sp in interesting:
+                hit_interesting = True
+        if hit_interesting and saved < 12:
+            fn = f"debug_watch_{saved:02d}.png"
+            cv2.imwrite(fn, vis)
+            print(f"    [存图 {fn}]")
+            saved += 1
         mc = ed.mythic_candidates(dets)
         pick = ed.pick_mythic_target(dets, ed.SCREEN_CENTER)
         pick_s = None if pick is None else f"{pick['species']}@{tuple(round(v) for v in pick['screen_pos'])}"
