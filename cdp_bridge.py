@@ -271,7 +271,14 @@ def capture_screenshot(timeout=5):
     return base64.b64decode(result["result"]["data"])
 
 
-_CANVAS_HOOK_PATH = Path(__file__).with_name("canvas_hook.js")
+# 未打包: 跟本模块同目录. PyInstaller 打包后: main.spec 把它作为 datas 塞进
+# _internal/ (onedir 下就是 sys._MEIPASS), 冻结模块的 __file__ 不一定指到真实
+# 路径, 所以 frozen 时改从 _MEIPASS 取.
+_CANVAS_HOOK_PATH = (
+    Path(sys._MEIPASS) / "canvas_hook.js"
+    if getattr(sys, "frozen", False)
+    else Path(__file__).with_name("canvas_hook.js")
+)
 
 
 def _eval_value(expression, timeout=5):
