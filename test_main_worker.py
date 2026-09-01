@@ -380,3 +380,90 @@ def test_ensure_zoom_success_does_not_restore(monkeypatch):
     calls = _stub_zoom_env(monkeypatch, [[2, 2], [4, 4]])
     assert main.ensure_zoom_for_rarity(True) is True
     assert sum(calls["scroll"]) == main.ZOOM_SCROLL_AMOUNT   # one forward, kept
+
+
+def test_move_gain_for_zoom_none_and_nonpositive_give_base():
+    assert main._move_gain_for_zoom(None) == main.MOVE_EXTEND_GAIN
+    assert main._move_gain_for_zoom(0) == main.MOVE_EXTEND_GAIN
+    assert main._move_gain_for_zoom(-3) == main.MOVE_EXTEND_GAIN
+
+
+def test_move_gain_for_zoom_scales_inversely_with_thickness():
+    # thickness == baseline -> scale 1
+    assert main._move_gain_for_zoom(main.ZOOM_BASELINE_THICK) == main.MOVE_EXTEND_GAIN
+    # thickness 2x baseline -> half gain
+    assert main._move_gain_for_zoom(2 * main.ZOOM_BASELINE_THICK) == main.MOVE_EXTEND_GAIN * 0.5
+
+
+def test_move_gain_for_zoom_has_a_floor():
+    # a huge thickness reading must not shrink the gain to ~nothing
+    g = main._move_gain_for_zoom(1000)
+    assert g == main.MOVE_EXTEND_GAIN * 0.3
+
+
+def test_leaving_area():
+    area = [(7, 3), (52, 63)]
+    assert main._leaving_area((25, 20), area) is False
+    assert main._leaving_area((25, 120), area) is True
+    assert main._leaving_area((60, 20), area) is True
+
+
+def test_move_to_position_extend_gain_scales_mouse_offset(monkeypatch):
+    # same start/target, different extend_gain -> mouse offset from centre scales
+    # linearly (pick dist small enough that dist*gain stays under the 500 clamp).
+    import types
+    monkeypatch.setattr(main, "get_player_position", lambda *a, **k: (0, 0), raising=False)
+    monkeypatch.setattr(main, "on_death_screen", lambda: False, raising=False)
+    monkeypatch.setattr(main, "on_start_screen", lambda: False, raising=False)
+    monkeypatch.setattr(main, "reset_keyboard", lambda: None, raising=False)
+    monkeypatch.setattr(main.afk_watch, "poll_afk_pause", lambda: False)
+    monkeypatch.setattr(main.time, "sleep", lambda *a, **k: None)
+    monkeypatch.setattr(main, "overlay",
+                        types.SimpleNamespace(update=lambda **k: None), raising=False)
+    seen = []
+    monkeypatch.setattr(main.pyautogui, "moveTo", lambda *a, **k: seen.append(a))
+
+    cx = main.SCREEN_WIDTH // 2
+    # target 10 units to the +x of the player at (0,0); dist = 10.
+    # run one tick each: on the first tick last_dist is None so no arrival/stall
+    # short-circuit; on_tick returns a sentinel to stop after that tick.
+    def one_tick(_pos):
+        return "stop"
+
+    seen.clear()
+    main.move_to_position((0, 0), (10, 0), max_attempts=5, on_tick=one_tick, extend_gain=10)
+    off_a = seen[0][0] - cx        # x offset from centre, gain 10 -> dist*gain = 100
+
+    seen.clear()
+    main.move_to_position((0, 0), (10, 0), max_attempts=5, on_tick=one_tick, extend_gain=40)
+    off_b = seen[0][0] - cx        # gain 40 -> dist*gain = 400
+
+    assert off_b == pytest.approx(off_a * 4)
+
+
+def test_move_to_position_extend_gain_none_matches_base_constant(monkeypatch):
+    import types
+    for stub in ("get_player_position", "on_death_screen", "on_start_screen", "reset_keyboard"):
+        pass
+    monkeypatch.setattr(main, "get_player_position", lambda *a, **k: (0, 0), raising=False)
+    monkeypatch.setattr(main, "on_death_screen", lambda: False, raising=False)
+    monkeypatch.setattr(main, "on_start_screen", lambda: False, raising=False)
+    monkeypatch.setattr(main, "reset_keyboard", lambda: None, raising=False)
+    monkeypatch.setattr(main.afk_watch, "poll_afk_pause", lambda: False)
+    monkeypatch.setattr(main.time, "sleep", lambda *a, **k: None)
+    monkeypatch.setattr(main, "overlay",
+                        types.SimpleNamespace(update=lambda **k: None), raising=False)
+    seen = []
+    monkeypatch.setattr(main.pyautogui, "moveTo", lambda *a, **k: seen.append(a))
+
+    def one_tick(_pos):
+        return "stop"
+
+    seen.clear()
+    main.move_to_position((0, 0), (10, 0), max_attempts=5, on_tick=one_tick, extend_gain=None)
+    off_none = seen[0][0]
+    seen.clear()
+    main.move_to_position((0, 0), (10, 0), max_attempts=5, on_tick=one_tick,
+                          extend_gain=main.MOVE_EXTEND_GAIN)
+    off_const = seen[0][0]
+    assert off_none == off_const
