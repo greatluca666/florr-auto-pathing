@@ -1,4 +1,11 @@
 import math
+import os
+
+# ultralytics 每次加载模型都会去 api.github.com 查资产版本/更新, 未认证请求很容易
+# 403 "rate limit exceeded" 刷屏 —— 本地模型完好也照查. 在 import ultralytics 之前
+# 关掉它的联网检查. 这个知道就行: 我们只用本地的 models/desert.pt, 不需要它联网.
+os.environ.setdefault("YOLO_OFFLINE", "1")
+os.environ.setdefault("ULTRALYTICS_OFFLINE", "1")
 
 import cv2
 import numpy as np
