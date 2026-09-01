@@ -278,7 +278,9 @@ def _stub_zoom_env(monkeypatch, thick_seq):
         calls["scan"] += 1
         return list(seq[i])
 
-    monkeypatch.setattr(main.enemy_detect, "scan_bar_thickness", fake_scan)
+    # raising=False: Task 3 删掉了 enemy_detect.scan_bar_thickness, Task 4 才会删掉
+    # zoom gate + 这些测试; 中间这段时间 setattr 一个已不存在的名字不能炸在 setup 阶段.
+    monkeypatch.setattr(main.enemy_detect, "scan_bar_thickness", fake_scan, raising=False)
     monkeypatch.setattr(main, "overlay",
                         types.SimpleNamespace(update=lambda **k: None), raising=False)
     monkeypatch.setattr(main.afk_watch, "poll_afk_pause", lambda: False)

@@ -1,160 +1,15 @@
 import math
-import os
-
-# ultralytics 每次加载模型都会去 api.github.com 查资产版本/更新, 未认证请求很容易
-# 403 "rate limit exceeded" 刷屏 —— 本地模型完好也照查. 在 import ultralytics 之前
-# 关掉它的联网检查. 这个知道就行: 我们只用本地的 models/desert.pt, 不需要它联网.
-os.environ.setdefault("YOLO_OFFLINE", "1")
-os.environ.setdefault("ULTRALYTICS_OFFLINE", "1")
-
-import cv2
-import numpy as np
-import pyautogui
-from ultralytics import YOLO
 
 import utils
+import cdp_bridge
+import canvas_decode
 
-# florr.io稀有度色表(低到高). 来源: 一个公开的florr.io稀有度检测油猴脚本, 缺
-# Eternal档(脚本没更新到那个档, 借用Super当占位) —— 跟这个项目其它靠实测校准出来
-# 的颜色(比如玩家标记的f8de60)一样, 这张表投入实机使用前需要拿真实截图校准一遍,
-# 别直接信.
-RARITY_COLORS = {
-    "Common": "7EEF6D",
-    "Unusual": "FFE65D",
-    "Rare": "4D52E3",
-    "Epic": "861FDE",
-    "Legendary": "DE1F1F",
-    "Mythic": "1FDBDE",
-    "Ultra": "FF2B75",
-    "Super": "2BFFA3",
-    "Eternal": "2BFFA3",  # 占位, 未校准 —— 借用Super的颜色, 见上面注释
-    "Unique": "555555",
-}
 
 RARITY_ORDER = [
     "Common", "Unusual", "Rare", "Epic", "Legendary",
     "Mythic", "Ultra", "Super", "Eternal", "Unique",
 ]
 RARITY_RANK = {name: i for i, name in enumerate(RARITY_ORDER)}
-
-
-def _hex_to_bgr(hex_color):
-    """'RRGGBB' → (B, G, R), 跟cv2的通道顺序一致. 复用utils.py里同样的
-    (4, 2, 0)切片写法(那边给玩家标记色用的同一个手法)."""
-    return tuple(int(hex_color[i:i + 2], 16) for i in (4, 2, 0))
-
-
-MIN_RARITY_PIXEL_RATIO = 0.06  # 稀有度词是描边方块字, 笔画占比本来就不高; 采样窗
-                                 # 已经靠血条锚点定位到词上之后, 6%命中就采信这一档.
-                                 # 低于此 → 背景主导 → 默认Common.
-
-
-def _find_hp_bar(image, bbox):
-    """在怪的下半身~框底偏下一带找那条绿色血条. florr.io每只怪脚下都挂一条亮饱和
-    绿的横条, 是整个名牌区里最好认的锚点 —— 怪名(白字, 没有稀有度信息)在血条正
-    上方, 稀有度词(带稀有度颜色, 要采的就是它)在血条正下方、右对齐血条右端.
-    返回(bar_x0, bar_y, bar_x1, bar_thick), 找不到 → None."""
-    x1, y1, x2, y2 = [int(v) for v in bbox]
-    h = max(1, y2 - y1)
-    H, W = image.shape[:2]
-    # 上边到框内15%处就开始找 —— 框松时名牌会落在框内靠下, 不能只从框底往下看.
-    ys0 = max(0, y1 + int(0.15 * h))
-    ys1 = min(H, y2 + max(22, int(0.60 * h)) + 8)
-    xs0 = max(0, x1 - 12)
-    xs1 = min(W, x2 + 18)
-    if ys1 - ys0 < 3 or xs1 - xs0 < 15:
-        return None
-
-    band = image[ys0:ys1, xs0:xs1].astype(int)
-    b, g, r = band[..., 0], band[..., 1], band[..., 2]
-    green = ((g > 130) & (g < 245) & (r < 205) & (b < 135)
-             & (g - r > 18) & (g - b > 50)).astype(np.uint8)
-    if int(green.sum()) < 12:
-        return None
-    rowsum = green.sum(axis=1)
-    row = int(np.argmax(rowsum))
-    if int(rowsum[row]) < 15:
-        return None
-    cols = np.where(green[row] > 0)[0]
-    run = int(cols.max() - cols.min())
-    if run < 15:
-        return None
-
-    # 血条厚度: 从峰值行往上下扩, 命中数还有峰值40%的行都算进去.
-    thr = max(1, int(0.4 * rowsum[row]))
-    thick, ri = 1, row - 1
-    while ri >= 0 and rowsum[ri] >= thr:
-        thick, ri = thick + 1, ri - 1
-    ri = row + 1
-    while ri < len(rowsum) and rowsum[ri] >= thr:
-        thick, ri = thick + 1, ri + 1
-
-    # 血条是"长而薄"的; 绿色仙人掌/沙尘暴半透明身体是一大坨绿 —— 用长宽比 + 厚度
-    # 上限把那种一坨的绿挡掉, 别把怪身当血条.
-    if thick > 12 or run < 4 * thick:
-        return None
-    return (xs0 + int(cols.min()), ys0 + row, xs0 + int(cols.max()), thick)
-
-
-def sample_rarity(image, bbox, tolerance=40, min_pixel_ratio=MIN_RARITY_PIXEL_RATIO):
-    """读一只怪的稀有度. 先用_find_hp_bar()找到怪脚下那条绿血条当锚点, 再在血条
-    正下方、右对齐血条右端的那一小块(florr.io稀有度词的固定位置)按每种稀有度颜色
-    数命中像素、取最多那档(数像素、不取均值 —— 描边文字取均值会被背景冲淡, 跟
-    utils.get_player_location_on_map同手法). 找不到血条、采样窗越界、或最高档占比
-    < min_pixel_ratio → 默认Common(最宽松那档, 读失败不会误触发规避).
-
-    旧实现往框顶上方14px采样 —— 实测名牌整个在怪下方, 那位置永远是空地, 每只怪
-    都读成Common → 全部ENGAGE、该躲的强怪也直接撞上去(见
-    docs/superpowers/specs/2026-08-16-sszone-enemy-detection-design.md稀有度校准
-    遗留项)."""
-    bar = _find_hp_bar(image, bbox)
-    if bar is None:
-        return "Common"
-    bar_x0, bar_y, bar_x1, bar_thick = bar
-    H, W = image.shape[:2]
-    bar_len = bar_x1 - bar_x0
-
-    # 稀有度词: 血条下方(跳过半根血条厚度, 别采到血条本身), 高度~3倍血条厚, 宽度
-    # 取血条右端往左一段(词右对齐血条右端, 2个方块字), 略越过右端好收住边缘.
-    word_h = max(12, 3 * bar_thick)
-    word_w = max(40, int(0.55 * bar_len))
-    ry0 = min(H, bar_y + bar_thick // 2 + 1)
-    ry1 = min(H, ry0 + word_h)
-    rx0 = max(0, bar_x1 - word_w)
-    rx1 = min(W, bar_x1 + max(4, bar_thick))
-    region = image[ry0:ry1, rx0:rx1]
-    if region.size == 0:
-        return "Common"
-
-    # 只扫Common..Ultra. Super/Eternal/Unique这仨这个刷怪区实测不刷(见design doc),
-    # 而且它们的色(2BFFA3绿/555555灰)最容易被血条绿、描边黑误命中 —— 扫了只会
-    # 制造假的高稀有度读数, 反而把本该正常打的怪误判成规避.
-    scan = RARITY_ORDER[:RARITY_RANK["Ultra"] + 1]
-    total_px = region.shape[0] * region.shape[1]
-    best_name, best_count = "Common", 0
-    for name in scan:
-        b, g, r = _hex_to_bgr(RARITY_COLORS[name])
-        lower = np.array([max(0, b - tolerance), max(0, g - tolerance), max(0, r - tolerance)])
-        upper = np.array([min(255, b + tolerance), min(255, g + tolerance), min(255, r + tolerance)])
-        count = int(np.count_nonzero(cv2.inRange(region, lower, upper)))
-        if count > best_count:
-            best_name, best_count = name, count
-
-    if best_count / total_px < min_pixel_ratio:
-        return "Common"
-    return best_name
-
-
-def measure_hp_bar_thickness(detections, image):
-    """每个检测框跑 _find_hp_bar, 收集找到的血条厚度 (第4个返回值), 跳过 None.
-    顺序跟 detections 一致, 纯函数无 I/O. 给 ensure_zoom_for_rarity 判相机 zoom
-    够不够 —— 实测血条 厚<4 时 sample_rarity 的稀有度词像素太少, 全读 Common."""
-    out = []
-    for d in detections:
-        bar = _find_hp_bar(image, d["bbox"])
-        if bar is not None:
-            out.append(bar[3])
-    return out
 
 
 # 数值越大优先级越高(故意跟RARITY_RANK同方向, 好用max()一起挑目标).
@@ -496,66 +351,74 @@ def select_action(detections, avoid_trigger_px=400, cautious_hold_px=250,
     return ("wander", None)
 
 
-_model = None
+_DESERT_SPECIES = {"scorpion", "beetle", "cactus", "sandstorm", "sand_centipede", "soldier_fire_ant"}
+_SPECIES_ALIASES = {}   # florr English name (slugified) -> desert slug, for any spelling mismatch;
+                        # fill after a live check. e.g. {"centipede": "sand_centipede"}
+
+# 名牌稀有度词的颜色 -> RARITY_ORDER 下标. 跟旧稀有度色表同一批值, 只是换成从
+# canvas 绘制调用读到的、带 "#" 的 fill 色. Super(rank 7)/Eternal(rank 8) 实测不刷,
+# rank 8 空着.
+_RANK_BY_RARITY_COLOR = {
+    "#7EEF6D": 0, "#FFE65D": 1, "#4D52E3": 2, "#861FDE": 3, "#DE1F1F": 4,
+    "#1FDBDE": 5, "#FF2B75": 6, "#2BFFA3": 7, "#555555": 9,
+}
 
 
-def load_enemy_model(path="models/desert.pt"):
-    """加载一次desert.pt, 模块级单例缓存. 只走ultralytics.YOLO()的安全加载
-    路径(底层是torch的weights_only安全反序列化), 不直接用不设限的
-    torch.load(..., weights_only=False) —— 见
-    docs/superpowers/specs/2026-08-16-sszone-enemy-detection-design.md的
-    "模型来源"说明。"""
-    global _model
-    if _model is None:
-        _model = YOLO(path)
-    return _model
+def _species_from_name(name):
+    """florr 客户端英文名 -> desert 物种 slug. 六种沙漠怪之外(路过的玩家 / 别的
+    生态的怪)-> None(跳过). 客户端语言必须是 English."""
+    if not name:
+        return None
+    slug = name.strip().lower().replace(" ", "_")
+    if slug in _DESERT_SPECIES:
+        return slug
+    return _SPECIES_ALIASES.get(slug)
 
 
-def scan_enemies(image=None, conf=0.4, model_path="models/desert.pt"):
-    """跑一次YOLO检测, 返回屏幕坐标系(不是小地图坐标系!)下的检测列表.
-    image=None时截一次全屏游戏画面; 传image是为了测试时能喂合成图片, 不用依赖
-    真实截屏(pyautogui.screenshot()在没有真实显示器的环境里跑不了)。model_path
-    转手传给load_enemy_model() —— 不在这里写死, 让调用方(main.py)的配置常量
-    真正管用, 不是摆设。"""
-    if image is None:
-        screenshot = pyautogui.screenshot(region=[0, 0, utils.SCREEN_WIDTH, utils.SCREEN_HEIGHT])
-        image = cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2BGR)
+def _tier_from_color(rarity_color):
+    """名牌稀有度词的颜色 -> RARITY_ORDER 里的档名. 认不出 / None -> Common
+    (跟旧稀有度采样读失败时同款兜底, 不会误触发规避)."""
+    rank = _RANK_BY_RARITY_COLOR.get(rarity_color)
+    return RARITY_ORDER[rank] if rank is not None else "Common"
 
-    model = load_enemy_model(model_path)
-    results = model.predict(image, conf=conf, verbose=False)
-    if not results:
+
+_frame_buffer = []   # drain_canvas_log 每次读空页面 log, 跨调用在这里攒; 每次裁到最新一帧
+
+
+def scan_enemies(image=None, conf=0.4, model_path=None):
+    """解码最新一帧完整的 canvas 绘制记录, 返回检测字典列表(跟旧 YOLO 版同结构:
+    species / rarity / screen_pos / bbox / confidence). image/conf/model_path 保留
+    只为兼容旧调用点, 不再用 -- 识别已经从"截图跑 YOLO"换成"解码 canvas 绘制调用".
+    帧解不出(画面里没怪 -> camera_from_frame 抛) -> [](跟旧模型没框一个意思).
+
+    每 tick 都调 inject_canvas_hook()(幂等) -- florr 重载后下一次扫描自动重注 hook.
+    inject/drain/decode 整段套 try: inject_canvas_hook 版本不符会抛 RuntimeError,
+    _send_cdp_command 找不到标签页也抛, 都当"这次没检测到"退化成 wander."""
+    try:
+        cdp_bridge.inject_canvas_hook()
+        _frame_buffer.extend(cdp_bridge.drain_canvas_log())
+        frames = canvas_decode.group_by_frame(_frame_buffer)
+        if len(frames) < 2:
+            return []
+        keys = sorted(frames)
+        recs = frames[keys[-2]]                 # 最新那帧可能还在画, 取次新的
+        _frame_buffer[:] = [r for r in _frame_buffer if r.get("frame", -1) >= keys[-1]]
+        cam = canvas_decode.camera_from_frame(recs)
+        mobs = canvas_decode.mobs_from_frame(recs, cam)
+    except (ValueError, RuntimeError, KeyError, TypeError):
         return []
 
-    result = results[0]
-    names = result.names
-    detections = []
-    for box in result.boxes:
-        species = names[int(box.cls[0])]
-        confidence = float(box.conf[0])
-        x1, y1, x2, y2 = [float(v) for v in box.xyxy[0]]
-        bbox = (x1, y1, x2, y2)
-        screen_pos = ((x1 + x2) / 2, (y1 + y2) / 2)
-        detections.append({
-            "species": species,
-            "rarity": sample_rarity(image, bbox),
-            "screen_pos": screen_pos,
-            "bbox": bbox,
-            "confidence": confidence,
+    out = []
+    for m in mobs:
+        sp = _species_from_name(m.get("name"))
+        if sp is None:
+            continue
+        sx, sy = m["sx"], m["sy"]
+        out.append({
+            "species": sp,
+            "rarity": _tier_from_color(m.get("rarity_color")),
+            "screen_pos": (sx, sy),
+            "bbox": (sx - 1, sy - 1, sx + 1, sy + 1),
+            "confidence": 1.0,
         })
-    return detections
-
-
-def scan_bar_thickness(image=None, conf=0.4, model_path="models/desert.pt"):
-    """截一帧 + YOLO + measure_hp_bar_thickness, 返回这一帧里能定位到的血条厚度
-    列表. 跟 scan_enemies 平行, 但只关心血条粗细 (给 ensure_zoom_for_rarity 判
-    zoom 够不够), 不算 screen_pos / rarity, 也就省掉每框一次 sample_rarity."""
-    if image is None:
-        screenshot = pyautogui.screenshot(region=[0, 0, utils.SCREEN_WIDTH, utils.SCREEN_HEIGHT])
-        image = cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2BGR)
-
-    model = load_enemy_model(model_path)
-    results = model.predict(image, conf=conf, verbose=False)
-    if not results:
-        return []
-    dets = [{"bbox": tuple(float(v) for v in box.xyxy[0])} for box in results[0].boxes]
-    return measure_hp_bar_thickness(dets, image)
+    return out
