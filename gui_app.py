@@ -16,6 +16,7 @@ import customtkinter as ctk
 
 import app_config
 import afk_watch
+import cdp_bridge
 import gui_chrome_flow
 
 _IS_WINDOWS = sys.platform == "win32"
@@ -277,11 +278,27 @@ class App(ctk.CTk):
             self._log_line("⚠️ 时长 / 短局阈值必须是正整数\n")
             return
 
+        # Chrome 引导: 只有"专用 Chrome 没就绪"时才会关掉现有 Chrome 并开一个新的.
+        # 上一轮开始已经拉起过、还开着的话, is_dedicated_chrome_ready() 为真, 这里
+        # 直接跳过 —— 用户会觉得"点了开始却没开浏览器", 所以把跳过的原因也打到日志里.
+        self._log_line("检查专用 Chrome…\n")
+        self.attributes("-topmost", True)   # 让引导弹窗浮到全屏游戏之上
         try:
-            gui_chrome_flow.ensure_chrome_ready(self)
+            if cdp_bridge.is_dedicated_chrome_ready():
+                self._log_line("专用 Chrome 已就绪(9222 端口 + florr.io 标签页), 不重开\n")
+            else:
+                self._log_line("启动专用 Chrome —— 会先关掉现有 Chrome, 请在弹出的确认框点\"确定\"\n")
+                gui_chrome_flow.ensure_chrome_ready(self)
+                self._log_line("专用 Chrome 就绪\n")
         except gui_chrome_flow.ChromeSetupCancelled:
             self._log_line("已取消(专用 Chrome 未就绪)\n")
             return
+        except RuntimeError as e:
+            self._log_line(f"❌ 启动专用 Chrome 失败: {e}\n")
+            return
+        finally:
+            self.attributes("-topmost", False)
+
         if bool(self.afk_switch.get()):
             self._ensure_afk()
 
