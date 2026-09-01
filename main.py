@@ -39,8 +39,6 @@ ZOOM_SCROLL_AMOUNT = -120 # 每次滚轮 deltaY (走 CDP 打进页面). 负=往�
                           # 一格 ≈120. 方向猜的, 循环里会自翻转
 ZOOM_MAX_SCROLLS   = 15   # 滚这么多次还没到就放弃 (可能已是最大 zoom)
 ZOOM_WAIT_CAP      = 60   # 周围没 mob 时最多等这么多秒, 之后照常开刷
-MOVE_EXTEND_GAIN    = 45  # move_to_position: minimap距离→鼠标px 增益 (基准, 没缩放相机时调的)
-ZOOM_BASELINE_THICK = 2   # MOVE_EXTEND_GAIN 是在血条厚度≈这个值时调的; 相机拉近后按 1/厚度 缩
 # 以上数值是没实机测过的占位默认值, 实机跑一遍后再按观察到的效果调.
 # ================================================
 
@@ -140,7 +138,7 @@ def reset_keyboard():
 
 
 def move_to_position(current_pos, target_pos, max_attempts=200, stall_limit=13,
-                     progress_epsilon=1.5, on_tick=None, extend_gain=None):
+                     progress_epsilon=1.5, on_tick=None):
     """移动到目标位置.
 
     on_tick: 可选回调, 每个内循环 tick(moveTo 之后、sleep 之前)调一次, 传入当前
@@ -217,8 +215,7 @@ def move_to_position(current_pos, target_pos, max_attempts=200, stall_limit=13,
             return "stuck"
 
         # 移动鼠标指向目标
-        gain = extend_gain if extend_gain is not None else MOVE_EXTEND_GAIN
-        extend = max(min(dist * gain, 500), 50) * mouse_scale()
+        extend = max(min(dist * 45, 500), 50) * mouse_scale()
         if dist > 0:
             extend_x = extend * dx / dist
             extend_y = extend * dy / dist
@@ -226,7 +223,7 @@ def move_to_position(current_pos, target_pos, max_attempts=200, stall_limit=13,
             extend_x = extend_y = 0
 
         mouse_pos = clamp_to_screen(SCREEN_WIDTH // 2 + extend_x, SCREEN_HEIGHT // 2 + extend_y)
-        pyautogui.moveTo(*mouse_pos)
+        pyautogui.moveTo(mouse_pos)
 
         # 检查游戏状态 —— 不用check_stage(): 它的in_game_dead/in_menu判定靠
         # 探测固定像素点是不是某个精确RGB, 连1920x1080参照分辨率下都从没真正
@@ -454,23 +451,6 @@ def _drive_and_check_stall(mouse_target, current_pos, chase_pos_history, state, 
     pyautogui.moveTo(clamp_to_screen(*mouse_target))
     time.sleep(0.05)
     return "moved"
-
-
-def _move_gain_for_zoom(zoom_thick):
-    """wander 腿的转向增益. 相机拉得越近 (血条越厚), 同样鼠标偏移玩家动得越多,
-    增益要按比例调小 —— 不然每条腿冲过头, 净漂移一次就甩出刷怪区 (实测).
-    模型: gain ∝ 1/厚度, 以 ZOOM_BASELINE_THICK 归一. zoom_thick=None (没测到 zoom /
-    没缩放) → 用基准. 夹一个下限, 免得某次厚度读特别大把移动缩到几乎不动."""
-    if zoom_thick is None or zoom_thick <= 0:
-        return MOVE_EXTEND_GAIN
-    scaled = MOVE_EXTEND_GAIN * ZOOM_BASELINE_THICK / zoom_thick
-    return max(scaled, MOVE_EXTEND_GAIN * 0.3)
-
-
-def _leaving_area(pos, farming_area):
-    """玩家是不是已经出了刷怪区. _wander_enemy_watch 用它当"硬牵引": wander 腿途中
-    一出界就收手, 让外层从出界 ~1 格处重寻路, 而不是等这条腿走完 (可能已经甩出 60 格)."""
-    return not if_in_area([farming_area], pos)
 
 
 def ensure_zoom_for_rarity(enemy_ai_enabled):
