@@ -299,26 +299,26 @@ def _stub_zoom_env(monkeypatch, thick_seq):
 
 def test_ensure_zoom_disabled_returns_immediately(monkeypatch):
     calls = _stub_zoom_env(monkeypatch, [[9, 9]])
-    assert main.ensure_zoom_for_rarity(False) is None
+    assert main.ensure_zoom_for_rarity(False) is False
     assert calls["scan"] == 0
     assert calls["scroll"] == []
 
 
 def test_ensure_zoom_reaches_target(monkeypatch):
     calls = _stub_zoom_env(monkeypatch, [[2, 2], [3, 3], [4, 4]])
-    assert main.ensure_zoom_for_rarity(True) == 4.0
+    assert main.ensure_zoom_for_rarity(True) is True
     assert len(calls["scroll"]) == 2          # 2 scrolls, 3rd scan median hits 4
 
 
 def test_ensure_zoom_already_ok_no_scroll(monkeypatch):
     calls = _stub_zoom_env(monkeypatch, [[5, 6]])   # median 5.5 >= 4 first scan
-    assert main.ensure_zoom_for_rarity(True) == 5.5
+    assert main.ensure_zoom_for_rarity(True) is True
     assert calls["scroll"] == []
 
 
 def test_ensure_zoom_scroll_cap(monkeypatch):
     calls = _stub_zoom_env(monkeypatch, [[2, 2]])   # never improves
-    assert main.ensure_zoom_for_rarity(True) is None
+    assert main.ensure_zoom_for_rarity(True) is False
     # FIX 1: cap give-up now restores the zoom, so it's ZOOM_MAX_SCROLLS
     # forward scrolls + one restore scroll.
     assert len(calls["scroll"]) == main.ZOOM_MAX_SCROLLS + 1
@@ -326,21 +326,21 @@ def test_ensure_zoom_scroll_cap(monkeypatch):
 
 def test_ensure_zoom_waits_for_mobs_then_succeeds(monkeypatch):
     calls = _stub_zoom_env(monkeypatch, [[], [], [4, 4]])
-    assert main.ensure_zoom_for_rarity(True) == 4.0
+    assert main.ensure_zoom_for_rarity(True) is True
     assert calls["scroll"] == []              # never scrolled during empty rounds
     assert calls["sleep"] >= 4.0
 
 
 def test_ensure_zoom_wait_cap(monkeypatch):
     calls = _stub_zoom_env(monkeypatch, [[]])       # always empty
-    assert main.ensure_zoom_for_rarity(True) is None
+    assert main.ensure_zoom_for_rarity(True) is False
     assert calls["scroll"] == []
     assert calls["sleep"] >= main.ZOOM_WAIT_CAP
 
 
 def test_ensure_zoom_flips_scroll_direction(monkeypatch):
     calls = _stub_zoom_env(monkeypatch, [[3, 3], [2, 2], [4, 4]])
-    assert main.ensure_zoom_for_rarity(True) == 4.0
+    assert main.ensure_zoom_for_rarity(True) is True
     assert calls["scroll"][0] == main.ZOOM_SCROLL_AMOUNT
     assert calls["scroll"][1] == -main.ZOOM_SCROLL_AMOUNT
 
@@ -348,7 +348,7 @@ def test_ensure_zoom_flips_scroll_direction(monkeypatch):
 def test_ensure_zoom_bails_and_restores_when_both_directions_regress(monkeypatch):
     # regress -> flip -> STILL regress: give up, and undo every scroll applied.
     calls = _stub_zoom_env(monkeypatch, [[3, 3], [2, 2], [1, 1]])
-    assert main.ensure_zoom_for_rarity(True) is None
+    assert main.ensure_zoom_for_rarity(True) is False
     assert sum(calls["scroll"]) == 0                       # net zoom restored
     assert calls["scroll"][0] == main.ZOOM_SCROLL_AMOUNT   # forward...
     assert -main.ZOOM_SCROLL_AMOUNT in calls["scroll"]     # ...then a flip
@@ -356,7 +356,7 @@ def test_ensure_zoom_bails_and_restores_when_both_directions_regress(monkeypatch
 
 def test_ensure_zoom_restores_on_scroll_cap(monkeypatch):
     calls = _stub_zoom_env(monkeypatch, [[2, 2]])          # never improves
-    assert main.ensure_zoom_for_rarity(True) is None
+    assert main.ensure_zoom_for_rarity(True) is False
     assert len(calls["scroll"]) == main.ZOOM_MAX_SCROLLS + 1   # + restore
     assert sum(calls["scroll"]) == 0                           # net zoom restored
 
@@ -364,21 +364,21 @@ def test_ensure_zoom_restores_on_scroll_cap(monkeypatch):
 def test_ensure_zoom_wait_cap_bounds_afk(monkeypatch):
     calls = _stub_zoom_env(monkeypatch, [[]])
     monkeypatch.setattr(main.afk_watch, "poll_afk_pause", lambda: True)
-    assert main.ensure_zoom_for_rarity(True) is None
+    assert main.ensure_zoom_for_rarity(True) is False
     assert calls["sleep"] >= main.ZOOM_WAIT_CAP     # top-of-loop cap fires
     assert calls["scroll"] == []
 
 
 def test_ensure_zoom_recenters_mouse_on_entry(monkeypatch):
     calls = _stub_zoom_env(monkeypatch, [[]])       # no mob -> wait-cap out, no scroll
-    assert main.ensure_zoom_for_rarity(True) is None
+    assert main.ensure_zoom_for_rarity(True) is False
     assert calls["scroll"] == []
     assert (main.SCREEN_WIDTH // 2, main.SCREEN_HEIGHT // 2) in calls["moveto"]
 
 
 def test_ensure_zoom_success_does_not_restore(monkeypatch):
     calls = _stub_zoom_env(monkeypatch, [[2, 2], [4, 4]])
-    assert main.ensure_zoom_for_rarity(True) == 4.0
+    assert main.ensure_zoom_for_rarity(True) is True
     assert sum(calls["scroll"]) == main.ZOOM_SCROLL_AMOUNT   # one forward, kept
 
 

@@ -485,10 +485,10 @@ def ensure_zoom_for_rarity(enemy_ai_enabled):
         滚掉的量 scroll(-applied) 还原, 别把 zoom 留在半路比进来时还糟
       - 滚一下中位厚度反而变小 → 方向反了, 翻转一次 ZOOM_SCROLL_AMOUNT 符号;
         翻转后还在变小 → 撤销并放弃 (别顺着噪声一路滚到 cap)
-      - 任何异常 → 打一行警告返回 None
-    返回达成的血条中位厚度 (float); 任何没调到位的情况返回 None. 调用方 (run_worker) 打日志并把它传给 auto_farming 当转向增益的缩放依据."""
+      - 任何异常 → 打一行警告返回 False
+    返回是否达到目标厚度; 调用方 (run_worker) 只打日志, 不管返回值都照常开刷."""
     if not enemy_ai_enabled:
-        return None
+        return False
     overlay.update(state="调整视角", message="拉近相机以便读稀有度...")
     scroll_amount = ZOOM_SCROLL_AMOUNT
     scroll_count = 0
@@ -503,7 +503,7 @@ def ensure_zoom_for_rarity(enemy_ai_enabled):
                 print("⚠️ 视角调整: 超时未完成, 照常开刷")
                 if applied != 0:
                     cdp_bridge.scroll_wheel(-applied)   # 撤销已滚的, 别把 zoom 留在半路
-                return None
+                return False
 
             if afk_watch.poll_afk_pause():
                 overlay.update(state="AFK弹窗处理中", message="等待florr-auto-afk解题")
@@ -519,7 +519,7 @@ def ensure_zoom_for_rarity(enemy_ai_enabled):
             median = statistics.median(thicks)
             if median >= ZOOM_MIN_THICK:
                 print(f"✅ 视角OK (血条中位厚度 {median})")
-                return median
+                return True
 
             if prev_median is not None and median < prev_median - 0.5:
                 if not flipped:
@@ -530,7 +530,7 @@ def ensure_zoom_for_rarity(enemy_ai_enabled):
                     print("⚠️ 视角调整: 两个方向都没改善, 撤销并放弃")
                     if applied != 0:
                         cdp_bridge.scroll_wheel(-applied)
-                    return None
+                    return False
             prev_median = median
 
             if scroll_count >= ZOOM_MAX_SCROLLS:
@@ -538,7 +538,7 @@ def ensure_zoom_for_rarity(enemy_ai_enabled):
                       f"(可能已最大 zoom), 照常开刷")
                 if applied != 0:
                     cdp_bridge.scroll_wheel(-applied)
-                return None
+                return False
 
             cdp_bridge.scroll_wheel(scroll_amount)   # 走 CDP 打进页面, 不看窗口焦点
             applied += scroll_amount
@@ -546,7 +546,7 @@ def ensure_zoom_for_rarity(enemy_ai_enabled):
             time.sleep(0.4)
     except Exception as e:
         print(f"⚠️ 视角调整出错, 照常开刷: {e}")
-        return None
+        return False
 
 
 def auto_farming(farming_area, duration=300, *, enemy_ai_enabled=True):
@@ -824,8 +824,8 @@ def run_worker(cfg):
 
         if lazy_theta_pathing(location, [farming_area]):
             print("✅ 到达刷怪区域！")
-            zoom_thick = ensure_zoom_for_rarity(w["enemy_ai_enabled"])
-            if w["enemy_ai_enabled"] and zoom_thick is None:
+            zoom_ok = ensure_zoom_for_rarity(w["enemy_ai_enabled"])
+            if w["enemy_ai_enabled"] and not zoom_ok:
                 print("⚠️ 视角未调到位, 本轮稀有度识别可能不准 (Mythic 锁定可能不触发)")
             auto_farming(farming_area, farming_duration,
                          enemy_ai_enabled=w["enemy_ai_enabled"])
