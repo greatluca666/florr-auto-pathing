@@ -439,14 +439,22 @@ def select_action(detections, avoid_trigger_px=400, cautious_hold_px=250,
     """每tick的索敌决策入口. detections是scan_enemies()给的检测列表(或测试里
     手搭的同结构字典列表). 返回三选一:
       ("flee", avoid_positions)             —— 触发半径内有AVOID怪, 优先规避
-      ("chase", target, hold_px, repel)     —— 没有近身危险, 但有可打目标; repel是
-                                               半路要绕开的危险怪坐标(AVOID全部 +
-                                               除目标外的CAUTIOUS), 传给
-                                               aim_mouse_target当排斥源
-      ("wander", None)                      —— 啥有效目标都没有, 交回随机漫游
+      ("chase", target, hold_px, repel)     —— 有值得专门追的目标(稀有度>=Mythic,
+                                               或Ultra档CAUTIOUS怪); repel是半路要
+                                               绕开的危险怪坐标(AVOID全部 + 除目标外
+                                               的CAUTIOUS), 传给aim_mouse_target当
+                                               排斥源
+      ("wander", None)                      —— 没有到Mythic档的目标, 交回随机漫游
     AVOID怪永远进不了"chase"候选池, 哪怕它稀有度算下来优先级最高。追击目标还要
     过chase_min_conf置信度关; 没过关的ENGAGE直接丢, 没过关的AVOID/CAUTIOUS仍算
-    危险源(进flee判定/repel), 只是不当追击目标。"""
+    危险源(进flee判定/repel), 只是不当追击目标。
+
+    ★ chase只留给Mythic及以上(和Ultra CAUTIOUS): 密集刷怪区(比如沙尘暴区)每tick
+    都有Common/传奇沙尘暴当最高分候选, 早先版本每tick都返回chase去追它 —— 结果
+    auto_farming永远走chase分支、从不进wander, 对着一个被打死/新刷/乱动的目标
+    原地微振, chase_is_stalled误判"卡住"触发execute_anti_stuck乱跳, 整轮
+    move_count=0一点没刷. Common..传奇这些交回wander撞怪 + 外部"一直攻击"就够了,
+    不值得专门追。"""
     avoid_positions = []
     cautious_dets = []
     candidates = []
@@ -474,12 +482,16 @@ def select_action(detections, avoid_trigger_px=400, cautious_hold_px=250,
         best, best_bucket = max(
             candidates,
             key=lambda pair: priority_score(pair[0]["species"], pair[0]["rarity"]))
-        hold_px = cautious_hold_px if best_bucket == "CAUTIOUS" else None
-        # 半路危险源: 所有AVOID怪(不管在不在flee触发半径内 —— 402px的Ultra蝎子
-        # 不该触发flee, 但追别的怪时也不能直直穿过它) + 除目标外的CAUTIOUS怪。
-        repel = list(avoid_positions)
-        repel += [d["screen_pos"] for d in cautious_dets if d is not best]
-        return ("chase", best, hold_px, repel)
+        # max()按稀有度档优先, 所以best没到Mythic档 == 所有候选都没到. 没到就不追,
+        # 交回wander(见docstring里的"密集刷怪区死循环"). Ultra CAUTIOUS(rank 6)恒
+        # >= Mythic, 保留"对Ultra沙尘暴/仙人掌保持距离接战"这条.
+        if RARITY_RANK[best["rarity"]] >= RARITY_RANK["Mythic"]:
+            hold_px = cautious_hold_px if best_bucket == "CAUTIOUS" else None
+            # 半路危险源: 所有AVOID怪(不管在不在flee触发半径内 —— 402px的Ultra蝎子
+            # 不该触发flee, 但追别的怪时也不能直直穿过它) + 除目标外的CAUTIOUS怪。
+            repel = list(avoid_positions)
+            repel += [d["screen_pos"] for d in cautious_dets if d is not best]
+            return ("chase", best, hold_px, repel)
 
     return ("wander", None)
 

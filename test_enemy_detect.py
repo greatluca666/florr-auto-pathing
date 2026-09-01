@@ -312,8 +312,8 @@ def test_select_action_flees_when_avoid_mob_in_range():
 
 def test_select_action_ignores_avoid_mob_outside_trigger_radius():
     detections = [
-        _det("scorpion", "Ultra", (2000, 540)),   # 1040px, 远超触发半径
-        _det("sandstorm", "Common", (1000, 560)),
+        _det("scorpion", "Ultra", (2000, 540)),      # 1040px, 远超触发半径
+        _det("sandstorm", "Mythic", (1000, 560)),    # Mythic 才够格当追击目标
     ]
     action, target, hold_px, repel = select_action(detections, avoid_trigger_px=400, center=(960, 540))
     assert action == "chase"
@@ -325,13 +325,25 @@ def test_select_action_ignores_avoid_mob_outside_trigger_radius():
 
 def test_select_action_chases_best_priority_candidate():
     detections = [
-        _det("scorpion", "Common", (1000, 540)),
-        _det("sand_centipede", "Rare", (1010, 540)),  # 稀有度更高, 该选它
+        _det("scorpion", "Common", (1000, 540)),          # Common: 不到 Mythic 档, 不追
+        _det("sand_centipede", "Mythic", (1010, 540)),    # Mythic: 唯一够格的目标
     ]
     action, target, hold_px, repel = select_action(detections, center=(960, 540))
     assert action == "chase"
     assert target["species"] == "sand_centipede"
     assert repel == []   # 没有AVOID/别的CAUTIOUS, 没什么要绕的
+
+
+def test_select_action_wanders_when_best_candidate_below_mythic():
+    # 密集刷怪区的实况: 一堆 Common/传奇沙尘暴, 一个 Mythic 都没有 -> 交回 wander,
+    # 别对着乱跳的沙尘暴原地打转 (旧行为 move_count=0 的根因).
+    detections = [
+        _det("sandstorm", "Common", (1000, 540), conf=0.95),
+        _det("sandstorm", "Legendary", (900, 600), conf=0.95),
+        _det("beetle", "Epic", (1100, 500), conf=0.95),
+    ]
+    action, payload = select_action(detections, center=(960, 540))
+    assert action == "wander" and payload is None
 
 
 def test_select_action_holds_distance_for_cautious_target():
@@ -371,8 +383,8 @@ def test_select_action_skips_low_confidence_chase_target():
 
 def test_select_action_prefers_confident_target_over_higher_priority_ghost():
     detections = [
-        _det("sand_centipede", "Rare", (1200, 540), conf=0.45),  # 优先级更高但是幻影
-        _det("scorpion", "Common", (1000, 540), conf=0.92),      # 优先级低但确实存在
+        _det("sand_centipede", "Mythic", (1200, 540), conf=0.45),  # 优先级更高但是幻影
+        _det("scorpion", "Mythic", (1000, 540), conf=0.92),        # 优先级低但确实存在
     ]
     action, target, hold_px, repel = select_action(detections, chase_min_conf=0.55, center=(960, 540))
     assert action == "chase"
@@ -389,14 +401,14 @@ def test_select_action_low_conf_avoid_still_flees():
 
 def test_select_action_low_conf_cautious_repels_but_is_not_chased():
     detections = [
-        _det("scorpion", "Common", (1000, 540), conf=0.9),      # 确实存在的 ENGAGE -> 目标
+        _det("scorpion", "Mythic", (1000, 540), conf=0.9),      # 确实存在的 Mythic -> 目标
         _det("cactus", "Ultra", (900, 400), conf=0.4),          # 低置信 CAUTIOUS -> 只当危险源
     ]
     action, target, hold_px, repel = select_action(detections, chase_min_conf=0.55, center=(960, 540))
     assert action == "chase"
     assert target["species"] == "scorpion"
     assert (900, 400) in repel          # 仍要绕开
-    assert hold_px is None              # 目标是 ENGAGE, 不是那只低置信 CAUTIOUS
+    assert hold_px is None              # 目标是 ENGAGE(Mythic), 不是那只低置信 CAUTIOUS
 
 
 def test_select_action_flee_excludes_out_of_range_avoid_mobs():
