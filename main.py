@@ -4,7 +4,6 @@ import argparse
 import signal
 import sys
 import threading
-import statistics
 import cdp_bridge
 import time
 import random
@@ -13,7 +12,6 @@ import enemy_detect
 import app_config
 
 # ===== 索敌配置 (sszone敌怪检测/追击/规避) =====
-ENEMY_MODEL_PATH = "models/desert.pt"
 ENEMY_SCAN_INTERVAL = 0.12  # 秒, YOLO扫描节流间隔. 这是"决策新鲜度"的主旋钮:
                               # 追击/规避途中每tick都拿这份决策里的怪坐标去moveTo,
                               # 间隔越大, 中间那几tick就越是照着旧坐标全速走 —— 怪
@@ -33,12 +31,6 @@ MYTHIC_RELEASE_MISSES = 3      # 连续多少次扫描没有合格 Mythic 才解
 MYTHIC_STRAFE_RADIUS  = 180    # 甲虫/火蚁: 环绕它转圈的目标半径 (px)
 MYTHIC_CACTUS_HOLD_PX = 220    # 仙人掌: 保持的距离 (px)
 MYTHIC_STRAFE_K_RADIAL = 0.8   # 甲虫/火蚁环绕: 径向修正强度 (d 偏离半径时往里/外带多少)
-ZOOM_MIN_THICK     = 4    # 血条中位厚度到这个像素数, sample_rarity 才稳 (实测)
-ZOOM_MIN_SAMPLES   = 2    # 至少几条可测血条才据此判定 (少于就等 mob 出现)
-ZOOM_SCROLL_AMOUNT = -120 # 每次滚轮 deltaY (走 CDP 打进页面). 负=往上滚=florr 拉近;
-                          # 一格 ≈120. 方向猜的, 循环里会自翻转
-ZOOM_MAX_SCROLLS   = 15   # 滚这么多次还没到就放弃 (可能已是最大 zoom)
-ZOOM_WAIT_CAP      = 60   # 周围没 mob 时最多等这么多秒, 之后照常开刷
 # 以上数值是没实机测过的占位默认值, 实机跑一遍后再按观察到的效果调.
 # ================================================
 
@@ -403,7 +395,7 @@ def _maybe_scan_enemies(enemy_ai_enabled, now, last_enemy_scan, prev_decision, p
         return prev_decision, prev_detections, last_enemy_scan, False
     last_enemy_scan = now
     try:
-        detections = enemy_detect.scan_enemies(model_path=ENEMY_MODEL_PATH)
+        detections = enemy_detect.scan_enemies()
         decision = enemy_detect.select_action(
             detections,
             avoid_trigger_px=AVOID_TRIGGER_PX,
@@ -451,82 +443,6 @@ def _drive_and_check_stall(mouse_target, current_pos, chase_pos_history, state, 
     pyautogui.moveTo(clamp_to_screen(*mouse_target))
     time.sleep(0.05)
     return "moved"
-
-
-def ensure_zoom_for_rarity(enemy_ai_enabled):
-    """开刷前把相机滚轮拉近到"血条中位厚度 >= ZOOM_MIN_THICK" —— 低于这个厚度
-    sample_rarity 读不出稀有度词 (实测 厚<4 时 Mythic 名牌就几个青像素, 全读
-    Common, Mythic 锁定永不触发). best-effort:
-      - enemy_ai_enabled=False → 直接返回 False (zoom 只影响稀有度, 索敌关了不用管)
-      - 进来先把鼠标挪回屏幕中心 —— florr 靠鼠标位置操纵角色, 不居中的话等待/AFK
-        分支里角色会一直往边上走
-      - 够不到 ZOOM_MIN_SAMPLES 条可测血条 (周围没 mob) → 不滚, 等
-      - 任何放弃路径 (超时 / 滚满 ZOOM_MAX_SCROLLS / 两个方向都没改善) 都先把已经
-        滚掉的量 scroll(-applied) 还原, 别把 zoom 留在半路比进来时还糟
-      - 滚一下中位厚度反而变小 → 方向反了, 翻转一次 ZOOM_SCROLL_AMOUNT 符号;
-        翻转后还在变小 → 撤销并放弃 (别顺着噪声一路滚到 cap)
-      - 任何异常 → 打一行警告返回 False
-    返回是否达到目标厚度; 调用方 (run_worker) 只打日志, 不管返回值都照常开刷."""
-    if not enemy_ai_enabled:
-        return False
-    overlay.update(state="调整视角", message="拉近相机以便读稀有度...")
-    scroll_amount = ZOOM_SCROLL_AMOUNT
-    scroll_count = 0
-    prev_median = None
-    applied = 0        # 已经滚掉的净 deltaY (传给 cdp_bridge.scroll_wheel 的和), 放弃时 scroll_wheel(-applied) 还原
-    flipped = False    # 方向只翻转一次; 翻转后还变糟就撤销走人
-    start = time.time()
-    try:
-        pyautogui.moveTo(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2)  # 居中鼠标, 别让角色在等待里瞎走
-        while True:
-            if time.time() - start >= ZOOM_WAIT_CAP:
-                print("⚠️ 视角调整: 超时未完成, 照常开刷")
-                if applied != 0:
-                    cdp_bridge.scroll_wheel(-applied)   # 撤销已滚的, 别把 zoom 留在半路
-                return False
-
-            if afk_watch.poll_afk_pause():
-                overlay.update(state="AFK弹窗处理中", message="等待florr-auto-afk解题")
-                time.sleep(0.2)
-                continue
-
-            thicks = enemy_detect.scan_bar_thickness(model_path=ENEMY_MODEL_PATH)
-
-            if len(thicks) < ZOOM_MIN_SAMPLES:
-                time.sleep(2)
-                continue
-
-            median = statistics.median(thicks)
-            if median >= ZOOM_MIN_THICK:
-                print(f"✅ 视角OK (血条中位厚度 {median})")
-                return True
-
-            if prev_median is not None and median < prev_median - 0.5:
-                if not flipped:
-                    scroll_amount = -scroll_amount
-                    flipped = True
-                    print("↔️ 视角: 滚轮方向反了, 已翻转")
-                else:
-                    print("⚠️ 视角调整: 两个方向都没改善, 撤销并放弃")
-                    if applied != 0:
-                        cdp_bridge.scroll_wheel(-applied)
-                    return False
-            prev_median = median
-
-            if scroll_count >= ZOOM_MAX_SCROLLS:
-                print(f"⚠️ 视角调整: 滚了 {scroll_count} 次仍没到目标厚度 "
-                      f"(可能已最大 zoom), 照常开刷")
-                if applied != 0:
-                    cdp_bridge.scroll_wheel(-applied)
-                return False
-
-            cdp_bridge.scroll_wheel(scroll_amount)   # 走 CDP 打进页面, 不看窗口焦点
-            applied += scroll_amount
-            scroll_count += 1
-            time.sleep(0.4)
-    except Exception as e:
-        print(f"⚠️ 视角调整出错, 照常开刷: {e}")
-        return False
 
 
 def auto_farming(farming_area, duration=300, *, enemy_ai_enabled=True):
@@ -766,19 +682,6 @@ def run_worker(cfg):
     farming_duration = w["farming_duration"]
     CONSECUTIVE_SHORT_ROUND_LIMIT = w["short_round_limit"]
 
-    # 索敌 AI 只有 desert 一张图有 YOLO 模型, 而且那个 .pt 不随仓库发布(第三方
-    # pickle 权重, 见 README), 得用户自己放进 models/. 开着但用不了的话
-    # _maybe_scan_enemies 每 0.12 秒抛一次异常刷屏 —— 这里一次性查清楚, 用不了
-    # 就本次按关闭处理, 只提示一行.
-    if w["enemy_ai_enabled"]:
-        if cfg["map"] != "desert":
-            print(f"⚠️ 索敌 AI 目前只有 desert 图有模型, 当前是 {cfg['map']} 图 —— 本次按关闭处理")
-            w["enemy_ai_enabled"] = False
-        elif not os.path.isfile(ENEMY_MODEL_PATH):
-            print(f"⚠️ 索敌 AI 已开, 但模型文件不在: {ENEMY_MODEL_PATH} —— 本次按关闭处理"
-                  " (需自己把 desert.pt 放进 models/, 见 README)")
-            w["enemy_ai_enabled"] = False
-
     print("🎮 开始自动寻路+刷怪 (掉线/死亡后自动点开始重来, 不主动停)\n")
     consecutive_short_rounds = 0
     round_count = 0
@@ -804,9 +707,6 @@ def run_worker(cfg):
 
         if lazy_theta_pathing(location, [farming_area]):
             print("✅ 到达刷怪区域！")
-            zoom_ok = ensure_zoom_for_rarity(w["enemy_ai_enabled"])
-            if w["enemy_ai_enabled"] and not zoom_ok:
-                print("⚠️ 视角未调到位, 本轮稀有度识别可能不准 (Mythic 锁定可能不触发)")
             auto_farming(farming_area, farming_duration,
                          enemy_ai_enabled=w["enemy_ai_enabled"])
         else:
