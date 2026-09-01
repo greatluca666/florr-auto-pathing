@@ -14,6 +14,11 @@
   python debug_enemy_detect.py                      # 5秒后截当前屏幕
   python debug_enemy_detect.py --image frame.png    # 跑离线帧 (可多张)
   python debug_enemy_detect.py --image a.png b.png --conf 0.25 --tolerance 40
+  python debug_enemy_detect.py --watch              # 循环: 每1秒扫一次, 每只怪一行
+                                                    #   species conf 血条 稀有度 + 各档命中数
+                                                    #   + mythic 候选数 / pick_mythic_target
+                                                    # 边玩边看, 站到 Mythic 怪旁边, 复制几行发回
+  python debug_enemy_detect.py --watch 0.5          # 间隔 0.5 秒
 
 产物 (每帧一组, <stem> = live 或图片文件名):
   <stem>_desert.png      desert.pt 框 (绿) + 采样窗 (黄) + 判定稀有度
@@ -208,18 +213,69 @@ def process(image, stem, conf, tolerance):
     print(f"  产物: {stem}_raw.png  {stem}_desert.png  {stem}_sandstorm.png  {stem}_compare.png")
 
 
+def watch_loop(interval, conf, tolerance):
+    """循环: 每 interval 秒截屏 + desert.pt + 逐怪 rarity_breakdown, 每只怪一行.
+    专门查"为什么 Mythic 怪没被读成 Mythic": 看血条找没找到、各稀有度档命中多少
+    像素(尤其 Mythic 的青色 1FDBDE)、以及 pick_mythic_target 返回啥. Ctrl+C 退出."""
+    import pyautogui
+    model = YOLO(DESERT_PATH)
+    print(f"分辨率 {SCREEN_WIDTH}x{SCREEN_HEIGHT}  间隔 {interval}s  conf>={conf}  Ctrl+C 退出\n")
+    t0 = time.time()
+    while True:
+        shot = pyautogui.screenshot(region=[0, 0, SCREEN_WIDTH, SCREEN_HEIGHT])
+        img = cv2.cvtColor(np.array(shot), cv2.COLOR_RGB2BGR)
+        res = model.predict(img, conf=conf, verbose=False)
+        boxes = res[0].boxes if res else []
+        names = res[0].names if res else {}
+        dets = []
+        print(f"─ scan @ {time.time() - t0:5.1f}s  dets={len(boxes)}")
+        for box in boxes:
+            sp = names[int(box.cls[0])]
+            cf = float(box.conf[0])
+            x1, y1, x2, y2 = [float(v) for v in box.xyxy[0]]
+            bbox = (x1, y1, x2, y2)
+            bar, win, counts, ratio, verdict = rarity_breakdown(img, bbox, tolerance)
+            rar = ed.sample_rarity(img, bbox, tolerance=tolerance)
+            dets.append({"species": sp, "rarity": rar,
+                         "screen_pos": ((x1 + x2) / 2, (y1 + y2) / 2),
+                         "bbox": bbox, "confidence": cf})
+            if bar is None:
+                barinfo = "血条=无"
+                cnts = ""
+            else:
+                barinfo = f"血条y={bar[1]} 厚={bar[3]}"
+                cnts = "  " + " ".join(f"{n}={c}" for n, c in counts[:4])
+            print(f"    {sp:16} conf={cf:.2f}  {barinfo}  -> {rar}{cnts}")
+        mc = ed.mythic_candidates(dets)
+        pick = ed.pick_mythic_target(dets, ed.SCREEN_CENTER)
+        pick_s = None if pick is None else f"{pick['species']}@{tuple(round(v) for v in pick['screen_pos'])}"
+        act = ed.select_action(dets)
+        print(f"    => mythic候选={len(mc)}  pick_mythic_target={pick_s}  select_action={act[0]}"
+              + (f"({act[1]['species']}/{act[1]['rarity']})" if act[0] == 'chase' else ""))
+        time.sleep(interval)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--image", nargs="+", help="离线帧, 不给则截当前屏幕")
     ap.add_argument("--conf", type=float, default=0.4, help="YOLO 置信度阈值 (scan_enemies 默认 0.4)")
     ap.add_argument("--tolerance", type=int, default=40, help="sample_rarity 颜色容差 (默认 40)")
     ap.add_argument("--delay", type=int, default=5, help="实时截屏倒计时秒数")
+    ap.add_argument("--watch", nargs="?", type=float, const=1.0, default=None,
+                    metavar="SEC", help="循环监视模式, 每 SEC 秒一次 (默认 1.0)")
     args = ap.parse_args()
 
     for p in (DESERT_PATH, SANDSTORM_PATH):
         if not os.path.exists(p):
             print(f"❌ 缺模型文件: {p}")
             return
+
+    if args.watch is not None:
+        try:
+            watch_loop(args.watch, args.conf, args.tolerance)
+        except KeyboardInterrupt:
+            print("\n退出")
+        return
 
     if args.image:
         for path in args.image:
