@@ -25,8 +25,9 @@ AVOID_TRIGGER_PX = 400      # 屏幕像素半径, AVOID怪进入此半径触发�
 CAUTIOUS_HOLD_PX = 250      # 屏幕像素, CAUTIOUS怪保持的最小距离(不继续贴近)
 CHASE_MIN_CONF = 0.55      # 追击目标的最低YOLO置信度(幻影框过滤; 危险怪不受此限)
 MYTHIC_LATCH_ENABLED  = True   # 贴脸有 Mythic 怪 → 锁定优先清掉再继续刷 (总开关)
-MYTHIC_ENGAGE_PX      = 450    # Mythic 怪进此半径 → 锁定
-MYTHIC_RELEASE_PX     = 600    # 已锁定后, Mythic 出此半径才算脱离 (迟滞)
+MYTHIC_ENGAGE_PX      = 650    # Mythic 怪进此半径 → 锁定. 实测 --watch: 玩家眼里"贴脸"
+                              # 的 Mythic 蝎子/甲虫 中心距其实 450~540px, 旧值 450 全卡在外
+MYTHIC_RELEASE_PX     = 850    # 已锁定后, Mythic 出此半径才算脱离 (迟滞)
 MYTHIC_RELEASE_MISSES = 3      # 连续多少次扫描没有合格 Mythic 才解锁
 MYTHIC_STRAFE_RADIUS  = 180    # 甲虫/火蚁: 环绕它转圈的目标半径 (px)
 MYTHIC_CACTUS_HOLD_PX = 220    # 仙人掌: 保持的距离 (px)

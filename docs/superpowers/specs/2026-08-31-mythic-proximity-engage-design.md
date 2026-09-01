@@ -39,9 +39,11 @@ Not in scope:
 
 ### Trigger / release (hysteresis)
 
-- **Trigger:** a qualifying Mythic detection within `MYTHIC_ENGAGE_PX` (450) of
-  screen centre → latch on.
-- **While latched:** search radius widens to `MYTHIC_RELEASE_PX` (600).
+- **Trigger:** a qualifying Mythic detection within `MYTHIC_ENGAGE_PX` (650) of
+  screen centre → latch on. (Started at 450; live `--watch` showed the Mythic
+  scorpion/beetle a player calls "point-blank" sit ~450–540px from screen centre,
+  so 450 filtered every one of them out.)
+- **While latched:** search radius widens to `MYTHIC_RELEASE_PX` (850).
 - **Release:** `MYTHIC_RELEASE_MISSES` (3) consecutive enemy scans with no
   qualifying Mythic in the (widened) radius → latch off. ~0.36 s at
   `ENEMY_SCAN_INTERVAL = 0.12`, enough to ride out single-frame detection dropouts.
