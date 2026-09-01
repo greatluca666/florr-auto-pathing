@@ -186,6 +186,7 @@ from enemy_detect import (
     mythic_candidates, pick_mythic_target, mythic_move_target,
     MYTHIC_KITE_SPECIES, MYTHIC_TARGET_RANK,
 )
+from enemy_detect import measure_hp_bar_thickness, scan_bar_thickness
 
 from enemy_detect import select_action, chase_is_stalled
 
@@ -527,3 +528,28 @@ def test_mythic_move_zero_distance_returns_center():
     tgt = _mdet("beetle", (960, 540))
     assert mythic_move_target(tgt, center=(960, 540), strafe_radius=180,
                               cactus_hold_px=220, max_extend=500) == (960, 540)
+
+
+def test_measure_hp_bar_thickness_one_bar():
+    img, bbox = _name_tag_image(_hex_to_bgr(RARITY_COLORS["Rare"]))
+    # _name_tag_image draws its HP bar 5 rows thick (thick=5 in that helper)
+    assert measure_hp_bar_thickness([{"bbox": bbox}], img) == [5]
+
+
+def test_measure_hp_bar_thickness_two_bars_known_thickness():
+    img = np.full((200, 400, 3), _BG_BGR, dtype=np.uint8)
+    img[100:104, 40:160] = _BAR_BGR     # 4 rows thick, under bbox A
+    img[100:107, 240:360] = _BAR_BGR    # 7 rows thick, under bbox B
+    dets = [{"bbox": (60, 20, 140, 90)}, {"bbox": (260, 20, 340, 90)}]
+    assert measure_hp_bar_thickness(dets, img) == [4, 7]
+
+
+def test_measure_hp_bar_thickness_skips_no_bar_and_empty():
+    img = np.full((200, 300, 3), _BG_BGR, dtype=np.uint8)   # no bar anywhere
+    assert measure_hp_bar_thickness([{"bbox": (10, 10, 60, 60)}], img) == []
+    assert measure_hp_bar_thickness([], img) == []
+
+
+def test_scan_bar_thickness_empty_for_blank_image():
+    blank = np.zeros((480, 640, 3), dtype=np.uint8)
+    assert scan_bar_thickness(image=blank) == []

@@ -145,6 +145,18 @@ def sample_rarity(image, bbox, tolerance=40, min_pixel_ratio=MIN_RARITY_PIXEL_RA
     return best_name
 
 
+def measure_hp_bar_thickness(detections, image):
+    """每个检测框跑 _find_hp_bar, 收集找到的血条厚度 (第4个返回值), 跳过 None.
+    顺序跟 detections 一致, 纯函数无 I/O. 给 ensure_zoom_for_rarity 判相机 zoom
+    够不够 —— 实测血条 厚<4 时 sample_rarity 的稀有度词像素太少, 全读 Common."""
+    out = []
+    for d in detections:
+        bar = _find_hp_bar(image, d["bbox"])
+        if bar is not None:
+            out.append(bar[3])
+    return out
+
+
 # 数值越大优先级越高(故意跟RARITY_RANK同方向, 好用max()一起挑目标).
 # sandstorm > cactus > beetle > scorpion > {sand_centipede, soldier_fire_ant}(并列最低)
 SPECIES_RANK = {
@@ -519,3 +531,19 @@ def scan_enemies(image=None, conf=0.4, model_path="models/desert.pt"):
             "confidence": confidence,
         })
     return detections
+
+
+def scan_bar_thickness(image=None, conf=0.4, model_path="models/desert.pt"):
+    """截一帧 + YOLO + measure_hp_bar_thickness, 返回这一帧里能定位到的血条厚度
+    列表. 跟 scan_enemies 平行, 但只关心血条粗细 (给 ensure_zoom_for_rarity 判
+    zoom 够不够), 不算 screen_pos / rarity, 也就省掉每框一次 sample_rarity."""
+    if image is None:
+        screenshot = pyautogui.screenshot(region=[0, 0, utils.SCREEN_WIDTH, utils.SCREEN_HEIGHT])
+        image = cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2BGR)
+
+    model = load_enemy_model(model_path)
+    results = model.predict(image, conf=conf, verbose=False)
+    if not results:
+        return []
+    dets = [{"bbox": tuple(float(v) for v in box.xyxy[0])} for box in results[0].boxes]
+    return measure_hp_bar_thickness(dets, image)
