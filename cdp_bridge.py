@@ -35,6 +35,7 @@ Shell里`*`记得加引号, 不然会被当成通配符展开(zsh下`--remote-al
 哪段JS(那是调用方, 比如switch_server(), 该关心的事).
 """
 import base64
+import hashlib
 import json
 import os
 import subprocess
@@ -42,6 +43,7 @@ import sys
 import time
 import urllib.request
 import urllib.error
+from pathlib import Path
 
 import websocket
 
@@ -269,31 +271,53 @@ def capture_screenshot(timeout=5):
     return base64.b64decode(result["result"]["data"])
 
 
-def scroll_wheel(delta_y, timeout=5):
-    """往florr.io标签页画面中心发一个鼠标滚轮事件(CDP Input.dispatchMouseEvent,
-    type=mouseWheel). delta_y<0 = 往上滚(florr里通常=拉近相机), >0 = 往下滚.
+_CANVAS_HOOK_PATH = Path(__file__).with_name("canvas_hook.js")
 
-    走CDP不走pyautogui.scroll —— pyautogui的滚轮是OS级事件, 要Chrome那个窗口
-    有焦点、光标真的悬在game canvas上, Chrome才会把它分发成页面的wheel事件;
-    main.py跑着的时候用户多半在看别的窗口, 那个滚轮就丢了(实测zoom调整每轮
-    都失败). CDP直接把事件注进渲染进程, 不看焦点 —— 跟capture_screenshot改用
-    CDP同一个原因. 找不到标签页/websocket包装错时抛RuntimeError, 调用方
-    (ensure_zoom_for_rarity)那边有try/except兜, 不阻塞刷怪."""
-    # Runtime.evaluate 的响应是双层 result: {"result": {"result": {"value": [..]}}}
-    # (returnByValue=True 时 value 才是真值). 拿不到就兜底一个常见画面中心.
-    x, y = 640, 360
-    try:
-        wh = _send_cdp_command(
-            "Runtime.evaluate",
-            {"expression": "[Math.floor(innerWidth/2), Math.floor(innerHeight/2)]",
-             "returnByValue": True},
-            timeout=timeout)
-        v = wh.get("result", {}).get("result", {}).get("value")
-        if isinstance(v, (list, tuple)) and len(v) == 2:
-            x, y = int(v[0]), int(v[1])
-    except Exception:
-        pass   # 尺寸拿不到不致命, 用兜底中心照样能发滚轮
-    _send_cdp_command(
-        "Input.dispatchMouseEvent",
-        {"type": "mouseWheel", "x": x, "y": y, "deltaX": 0, "deltaY": delta_y},
-        timeout=timeout)
+
+def _eval_value(expression, timeout=5):
+    """Runtime.evaluate + returnByValue, 拆成里面那个原始值/JSON 值. 拿不到 → None.
+
+    Runtime.evaluate 的响应是双层 result: {"result": {"result": {"value": ...}}}
+    —— returnByValue=True 时最里那层 value 才是真值(以前 scroll_wheel 少剥一层
+    直接 KeyError). 这个 helper 把这层拆包收在一处, drain/inject 都走它."""
+    resp = _send_cdp_command(
+        "Runtime.evaluate", {"expression": expression, "returnByValue": True}, timeout=timeout)
+    return resp.get("result", {}).get("result", {}).get("value")
+
+
+def drain_canvas_log(timeout=5):
+    """读空 window.__canvasLog(canvas_hook.js 往里塞每帧的绘制记录), 返回记录列表.
+    一次 Runtime.evaluate 里读 + 清, 中间不会漏帧. 拿不到 → []."""
+    v = _eval_value(
+        "(()=>{const l=window.__canvasLog||[];window.__canvasLog=[];return l;})()", timeout)
+    return v if isinstance(v, list) else []
+
+
+def inject_canvas_hook(timeout=5):
+    """把 canvas_hook.js 注进 florr.io 标签页(patch CanvasRenderingContext2D 记录绘制调用).
+    幂等: 同版本已装 → 直接返回. 移植自 florragent 的 _inject_canvas_hook, 换成裸 CDP:
+      1. Runtime.evaluate 注 hook(免 reload 路径).
+      2. Page.addScriptToEvaluateOnNewDocument 同一份(跨 reload 持久).
+      3. 版本指纹(sha256[:16]): 页面上装的是别的版本 → Page.reload + 抛 RuntimeError
+         (patchProto 的 per-prototype guard 不能热替).
+      4. 免 reload 注完 drain 一次 + sleep(0.5) + 再 drain: 第二次还是空 → florr 在 patch
+         落地前就绑了 ctx 方法引用 → Page.reload + 抛 RuntimeError.
+    抛 RuntimeError 时调用方(enemy_detect.scan_enemies)会当"本次没检测到"退化成 wander,
+    下次扫描再重试(幂等)."""
+    src = _CANVAS_HOOK_PATH.read_text()
+    version = hashlib.sha256(src.encode()).hexdigest()[:16]
+    installed = _eval_value("!!window.__canvasHookInstalled", timeout)
+    installed_ver = _eval_value("window.__canvasHookInstalledVersion || null", timeout)
+    if installed and installed_ver != version:
+        _send_cdp_command("Page.addScriptToEvaluateOnNewDocument", {"source": src}, timeout=timeout)
+        _send_cdp_command("Page.reload", {}, timeout=timeout)
+        raise RuntimeError("canvas hook 版本不一致(页面上是旧版) —— 已 reload, 请重进游戏后重试")
+    if installed:
+        return
+    _send_cdp_command("Page.addScriptToEvaluateOnNewDocument", {"source": src}, timeout=timeout)
+    _eval_value(f"window.__canvasHookInstalledVersion = {version!r};\n" + src, timeout)
+    drain_canvas_log(timeout)                       # discard the injection's own output
+    time.sleep(0.5)
+    if not drain_canvas_log(timeout):
+        _send_cdp_command("Page.reload", {}, timeout=timeout)
+        raise RuntimeError("canvas hook 注入没生效 —— 已 reload, 请重进游戏后重试")

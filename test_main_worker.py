@@ -283,9 +283,12 @@ def _stub_zoom_env(monkeypatch, thick_seq):
                         types.SimpleNamespace(update=lambda **k: None), raising=False)
     monkeypatch.setattr(main.afk_watch, "poll_afk_pause", lambda: False)
     monkeypatch.setattr(main.pyautogui, "moveTo", lambda *a, **k: calls["moveto"].append(a))
-    # zoom 滚轮走 CDP (main.cdp_bridge.scroll_wheel), 不是 pyautogui.scroll
+    # zoom 滚轮走 CDP (main.cdp_bridge.scroll_wheel), 不是 pyautogui.scroll.
+    # raising=False: Task 2 删掉了 cdp_bridge.scroll_wheel, Task 4 才会删掉这些
+    # zoom 测试; 中间这段时间 setattr 一个已不存在的名字不能炸在 setup 阶段.
     monkeypatch.setattr(main.cdp_bridge, "scroll_wheel",
-                        lambda amt, *a, **k: calls["scroll"].append(amt))
+                        lambda *a, **k: calls["scroll"].append(a[0] if a else None),
+                        raising=False)
     clock = {"t": 0.0}
     monkeypatch.setattr(main.time, "time", lambda: clock["t"])
 
