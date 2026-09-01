@@ -1,80 +1,6 @@
-import os
-
-import numpy as np
-
 from enemy_detect import (
-    sample_rarity, _find_hp_bar, RARITY_COLORS, RARITY_ORDER, RARITY_RANK,
-    _hex_to_bgr, classify_action, priority_score, aim_mouse_target, flee_mouse_target,
+    classify_action, priority_score, aim_mouse_target, flee_mouse_target,
 )
-
-# Sandy background BGR — not green (so _find_hp_bar's green mask ignores it: its
-# R=210 fails the mask's r<205), and outside every rarity color's ±40 cube.
-_BG_BGR = (120, 170, 210)
-# Health-bar green, measured off a real florr.io screenshot (屏幕截图 220017.png):
-# BGR ≈ (48, 208, 112). Passes _find_hp_bar's green mask.
-_BAR_BGR = (48, 208, 112)
-
-
-def _name_tag_image(rarity_bgr, word_rows=10, word_cols=50):
-    """Synthesise a florr.io mob name tag the way the game lays it out: a long
-    thin green HP bar under the mob, with the rarity word (rarity-coloured)
-    just below the bar, right-aligned to the bar's right end. Returns
-    (image, bbox). `word_rows`/`word_cols` control how much of sample_rarity's
-    word region the coloured glyphs actually fill (rest stays background)."""
-    img = np.full((200, 300, 3), _BG_BGR, dtype=np.uint8)
-    bbox = (60, 20, 160, 90)          # mob box, h = 70
-    bar_y, bar_x0, bar_x1, thick = 110, 70, 190, 5
-    img[bar_y:bar_y + thick, bar_x0:bar_x1] = _BAR_BGR
-    # sample_rarity's word region for this bar: ry0 = bar_y + thick//2 + 1 = 113,
-    # rx1 ≈ bar_x1, extending left. Paint the glyphs inside it.
-    gy = bar_y + thick // 2 + 1 + 1
-    gx1 = bar_x1 - 4
-    if rarity_bgr is not None:
-        img[gy:gy + word_rows, gx1 - word_cols:gx1] = rarity_bgr
-    return img, bbox
-
-
-def test_sample_rarity_matches_known_colors():
-    # Only Common..Ultra are scanned (Super/Eternal/Unique don't spawn in this
-    # zone and their colours false-match the bar green / outline black).
-    for name in RARITY_ORDER[:RARITY_RANK["Ultra"] + 1]:
-        img, bbox = _name_tag_image(_hex_to_bgr(RARITY_COLORS[name]))
-        assert sample_rarity(img, bbox) == name, name
-
-
-def test_sample_rarity_above_ultra_colors_read_as_common():
-    # Super/Eternal/Unique are deliberately NOT scanned — feeding their colour
-    # resolves to Common (below floor), never a spurious high-rarity read that
-    # would wrongly trip AVOID on a normal mob.
-    for name in ("Super", "Eternal", "Unique"):
-        img, bbox = _name_tag_image(_hex_to_bgr(RARITY_COLORS[name]))
-        assert sample_rarity(img, bbox) == "Common", name
-
-
-def test_sample_rarity_falls_back_to_common_when_no_hp_bar():
-    image = np.zeros((100, 100, 3), dtype=np.uint8)  # pure black, no green bar
-    assert sample_rarity(image, (40, 60, 60, 80)) == "Common"
-
-
-def test_sample_rarity_falls_back_to_common_below_coverage_floor():
-    # HP bar present (so an anchor is found) but the rarity glyphs cover only a
-    # sliver of the word region — under min_pixel_ratio, so not trusted.
-    img, bbox = _name_tag_image(_hex_to_bgr(RARITY_COLORS["Ultra"]), word_rows=1, word_cols=2)
-    assert sample_rarity(img, bbox) == "Common"
-
-
-def test_find_hp_bar_locates_bar_and_rejects_blob():
-    img, bbox = _name_tag_image(_hex_to_bgr(RARITY_COLORS["Rare"]))
-    bar = _find_hp_bar(img, bbox)
-    assert bar is not None
-    bar_x0, bar_y, bar_x1, thick = bar
-    assert abs(bar_y - 110) <= 1 and thick <= 8 and (bar_x1 - bar_x0) >= 90
-
-    # A big green blob (translucent cactus/sandstorm body) is not bar-shaped:
-    # fails the run >= 4*thick aspect check -> None.
-    blob = np.full((200, 300, 3), _BG_BGR, dtype=np.uint8)
-    blob[40:110, 70:170] = _BAR_BGR
-    assert _find_hp_bar(blob, (60, 20, 160, 90)) is None
 
 
 _ALL_SPECIES = [
@@ -186,7 +112,6 @@ from enemy_detect import (
     mythic_candidates, pick_mythic_target, mythic_move_target,
     MYTHIC_KITE_SPECIES, MYTHIC_TARGET_RANK,
 )
-from enemy_detect import measure_hp_bar_thickness, scan_bar_thickness
 
 from enemy_detect import select_action, chase_is_stalled
 
@@ -452,31 +377,130 @@ def test_chase_is_stalled_handles_none_and_empty():
     assert chase_is_stalled([]) is False
 
 
-import pytest
-
-from enemy_detect import load_enemy_model, scan_enemies
-
-_HAS_MODEL = os.path.exists("models/desert.pt")
-_SKIP_REASON = "models/desert.pt not present locally (gitignored, user-provided)"
+from enemy_detect import scan_enemies, _species_from_name, _tier_from_color
+import enemy_detect as _ed
+from canvas_frame_fixtures import gameplay_frame, minimap_rec, nameplate, player_recs
 
 
-@pytest.mark.skipif(not _HAS_MODEL, reason=_SKIP_REASON)
-def test_load_enemy_model_exposes_expected_classes():
-    model = load_enemy_model()
-    expected = {
-        "scorpion", "beetle", "cactus",
-        "sandstorm", "sand_centipede", "soldier_fire_ant",
-    }
-    assert set(model.names.values()) == expected
+def test_species_from_name_english_slugs():
+    assert _species_from_name("Beetle") == "beetle"
+    assert _species_from_name("Scorpion") == "scorpion"
+    assert _species_from_name("Sand Centipede") == "sand_centipede"
+    assert _species_from_name("Soldier Fire Ant") == "soldier_fire_ant"
+    assert _species_from_name("Sandstorm") == "sandstorm"
+    assert _species_from_name("Cactus") == "cactus"
 
 
-@pytest.mark.skipif(not _HAS_MODEL, reason=_SKIP_REASON)
-def test_scan_enemies_returns_empty_list_for_blank_image():
-    blank = np.zeros((640, 640, 3), dtype=np.uint8)
-    assert scan_enemies(image=blank) == []
+def test_species_from_name_rejects_non_desert_and_none():
+    assert _species_from_name("Ladybug") is None
+    assert _species_from_name("Player #12") is None
+    assert _species_from_name(None) is None
+    assert _species_from_name("") is None
 
 
-import math as _math
+def test_tier_from_color():
+    assert _tier_from_color("#1FDBDE") == "Mythic"
+    assert _tier_from_color("#7EEF6D") == "Common"
+    assert _tier_from_color("#FF2B75") == "Ultra"
+    assert _tier_from_color("#555555") == "Unique"
+    assert _tier_from_color(None) == "Common"
+    assert _tier_from_color("#abcdef") == "Common"
+
+
+def _stub_canvas(monkeypatch, records):
+    monkeypatch.setattr(_ed.cdp_bridge, "inject_canvas_hook", lambda *a, **k: None)
+    monkeypatch.setattr(_ed.cdp_bridge, "drain_canvas_log", lambda *a, **k: list(records))
+    _ed._frame_buffer[:] = []
+
+
+def test_scan_enemies_maps_a_two_mob_frame(monkeypatch):
+    # frame 0 is complete (both mobs); frame 1 is newer but may still be drawing, so
+    # scan_enemies decodes frame 0 and keeps frame 1 buffered for next time.
+    f_old = (player_recs(0)
+             + nameplate(0, 400.0, 200.0, "Beetle", rarity="Mythic", rarity_color="#1FDBDE")
+             + nameplate(0, 720.0, 480.0, "Scorpion")            # fixture default: Common / #7EEF6D
+             + [minimap_rec(0, 5640.0, 6911.0)])
+    f_new = gameplay_frame(1)                                     # player + minimap only, newer
+    _stub_canvas(monkeypatch, f_old + f_new)
+
+    dets = {d["species"]: d for d in scan_enemies()}
+
+    assert set(dets) == {"beetle", "scorpion"}
+    beetle = dets["beetle"]
+    assert beetle["rarity"] == "Mythic"
+    assert beetle["screen_pos"] == (400.0, 200.0)
+    assert beetle["bbox"] == (399.0, 199.0, 401.0, 201.0)
+    assert beetle["confidence"] == 1.0
+    assert dets["scorpion"]["rarity"] == "Common"
+
+
+def test_scan_enemies_drops_non_desert_names(monkeypatch):
+    f_old = gameplay_frame(0, mobs=[(400.0, 200.0, "Ladybug", 1.0)])
+    f_new = gameplay_frame(1)
+    _stub_canvas(monkeypatch, f_old + f_new)
+    assert scan_enemies() == []
+
+
+def test_scan_enemies_empty_when_fewer_than_two_frames(monkeypatch):
+    _stub_canvas(monkeypatch, gameplay_frame(0, mobs=[(400.0, 200.0, "Beetle", 1.0)]))
+    assert scan_enemies() == []
+
+
+def test_scan_enemies_empty_when_camera_undecodable(monkeypatch):
+    # frames present, but the minimap player-dot (the only absolute-position anchor) is
+    # stripped -> camera_from_frame raises ValueError -> scan_enemies degrades to [].
+    f0 = [r for r in gameplay_frame(0, mobs=[(400.0, 200.0, "Beetle", 1.0)])
+          if abs(r["m"][0]) > 0.05]
+    f1 = [r for r in gameplay_frame(1) if abs(r["m"][0]) > 0.05]
+    _stub_canvas(monkeypatch, f0 + f1)
+    assert scan_enemies() == []
+
+
+def test_scan_enemies_swallows_non_tuple_exception_types(monkeypatch):
+    # the decode path now leans on cdp_bridge (websocket.WebSocketException),
+    # file reads (OSError/FileNotFoundError) and division (ZeroDivisionError) —
+    # none of which are ValueError/RuntimeError/KeyError/TypeError. scan_enemies'
+    # contract is "undecodable -> []", so it must catch all of them.
+    monkeypatch.setattr(_ed.cdp_bridge, "inject_canvas_hook", lambda *a, **k: None)
+
+    def boom(*a, **k):
+        raise OSError("boom")
+
+    monkeypatch.setattr(_ed.cdp_bridge, "drain_canvas_log", boom)
+    _ed._frame_buffer[:] = []
+    assert scan_enemies() == []
+
+
+def test_scan_enemies_frame_buffer_stays_bounded_when_frame_number_stuck(monkeypatch):
+    # __canvasFrame stuck at 0 -> every drained record is frame 0 -> group_by_frame
+    # yields one key -> scan_enemies hits the "< 2 frames" early return every tick and
+    # never runs the by-frame prune below it. The _FRAME_BUFFER_CAP hard-cap is the
+    # only thing keeping _frame_buffer from growing unbounded over a multi-hour run.
+    stuck = [{"frame": 0, "op": "fill", "m": [0.7, 0, 0, 0.7, 1.0, 2.0]}
+             for _ in range(8000)]
+    monkeypatch.setattr(_ed.cdp_bridge, "inject_canvas_hook", lambda *a, **k: None)
+    monkeypatch.setattr(_ed.cdp_bridge, "drain_canvas_log", lambda *a, **k: list(stuck))
+    _ed._frame_buffer[:] = []
+    for _ in range(12):                       # 12 * 8000 = 96k records drained total
+        assert scan_enemies() == []
+    assert len(_ed._frame_buffer) <= _ed._FRAME_BUFFER_CAP
+
+
+def test_species_from_name_logs_unknown_name_once(capsys):
+    # recovers the diagnostic the deleted debug_enemy_detect.py used to provide: an
+    # unrecognised mob name gets named in the log exactly once, so a slug mismatch
+    # between YOLO's old class labels and florr's live English names is visible.
+    _ed._seen_unknown_names.discard("desert_weirdo")
+
+    assert _species_from_name("Desert Weirdo") is None
+    first = capsys.readouterr().out
+    assert "Desert Weirdo" in first and "desert_weirdo" in first
+
+    assert _species_from_name("Desert Weirdo") is None      # same name -> silent
+    assert capsys.readouterr().out == ""
+
+    assert _species_from_name("Beetle") == "beetle"         # known slug -> never logs
+    assert capsys.readouterr().out == ""
 
 
 def _mdet(species, screen_pos):
@@ -540,29 +564,3 @@ def test_mythic_move_zero_distance_returns_center():
     tgt = _mdet("beetle", (960, 540))
     assert mythic_move_target(tgt, center=(960, 540), strafe_radius=180,
                               cactus_hold_px=220, max_extend=500) == (960, 540)
-
-
-def test_measure_hp_bar_thickness_one_bar():
-    img, bbox = _name_tag_image(_hex_to_bgr(RARITY_COLORS["Rare"]))
-    # _name_tag_image draws its HP bar 5 rows thick (thick=5 in that helper)
-    assert measure_hp_bar_thickness([{"bbox": bbox}], img) == [5]
-
-
-def test_measure_hp_bar_thickness_two_bars_known_thickness():
-    img = np.full((200, 400, 3), _BG_BGR, dtype=np.uint8)
-    img[100:104, 40:160] = _BAR_BGR     # 4 rows thick, under bbox A
-    img[100:107, 240:360] = _BAR_BGR    # 7 rows thick, under bbox B
-    dets = [{"bbox": (60, 20, 140, 90)}, {"bbox": (260, 20, 340, 90)}]
-    assert measure_hp_bar_thickness(dets, img) == [4, 7]
-
-
-def test_measure_hp_bar_thickness_skips_no_bar_and_empty():
-    img = np.full((200, 300, 3), _BG_BGR, dtype=np.uint8)   # no bar anywhere
-    assert measure_hp_bar_thickness([{"bbox": (10, 10, 60, 60)}], img) == []
-    assert measure_hp_bar_thickness([], img) == []
-
-
-@pytest.mark.skipif(not _HAS_MODEL, reason=_SKIP_REASON)
-def test_scan_bar_thickness_empty_for_blank_image():
-    blank = np.zeros((480, 640, 3), dtype=np.uint8)
-    assert scan_bar_thickness(image=blank) == []

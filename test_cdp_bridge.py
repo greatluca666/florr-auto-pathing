@@ -1,4 +1,6 @@
+import hashlib
 import json
+from pathlib import Path
 from unittest.mock import patch, MagicMock
 from urllib.error import URLError
 
@@ -290,38 +292,174 @@ def test_wait_for_florr_tab_returns_none_on_timeout():
         assert cdp_bridge.wait_for_florr_tab(0) is None
 
 
-def test_scroll_wheel_unwraps_runtime_evaluate_and_dispatches_wheel():
-    # Runtime.evaluate 的响应是双层 result (returnByValue=True): 之前 scroll_wheel
-    # 少剥一层 -> KeyError: 'value' -> zoom 每轮都"出错". 这里钉死正确形状 + 事件参数.
+# ── inject_canvas_hook / drain_canvas_log (canvas 绘制调用解码取代 YOLO+像素) ──
+#
+# 这几个测试全程 mock 掉 _send_cdp_command, 让结果只取决于 inject/drain 自己的
+# 拆包/幂等/reload 分支逻辑, 不碰真 Chrome. fake_send 按 expression 里的子串分流,
+# 子串跟 cdp_bridge.py 里实际写的 JS 字符串必须对得上(改一处要一起改).
+
+_HOOK_SRC = (Path(cdp_bridge.__file__).parent / "canvas_hook.js").read_text(encoding="utf-8")
+_HOOK_VER = hashlib.sha256(_HOOK_SRC.encode()).hexdigest()[:16]
+
+
+def test_canvas_hook_js_is_read_as_utf8():
+    """canvas_hook.js 里有非 ASCII 字符(一个 em-dash + 中文注释). 必须显式按
+    UTF-8 读 —— Windows 上 Path.read_text() 不带 encoding 会用 locale 码
+    (cp936/gbk) 解, 撞上 UTF-8 字节序列直接 UnicodeDecodeError(ValueError 子类),
+    被 scan_enemies 吞掉后索敌永远返回 [] 且一声不吭(同 commit d4a7843 的坑).
+    这里钉死"显式 encoding='utf-8' 能读通且内容确实含非 ASCII"这个意图."""
+    text = cdp_bridge._CANVAS_HOOK_PATH.read_text(encoding="utf-8")
+    assert any(ord(ch) > 127 for ch in text)
+
+
+def _eval_result(value):
+    """伪造 Runtime.evaluate + returnByValue 的双层 result 响应."""
+    return {"id": 1, "result": {"result": {"value": value}}}
+
+
+def test_drain_canvas_log_unwraps_and_clears():
     sent = []
 
     def fake_send(method, params=None, timeout=5):
         sent.append((method, params))
-        if method == "Runtime.evaluate":
-            return {"id": 1, "result": {"result": {"type": "object", "value": [812, 456]}}}
-        return {"id": 1, "result": {}}
+        return _eval_result([{"frame": 1, "op": "fill"}])
 
     with patch("cdp_bridge._send_cdp_command", side_effect=fake_send):
-        cdp_bridge.scroll_wheel(-120)
-
-    methods = [m for m, _ in sent]
-    assert methods == ["Runtime.evaluate", "Input.dispatchMouseEvent"]
-    _, wheel = sent[1]
-    assert wheel["type"] == "mouseWheel"
-    assert (wheel["x"], wheel["y"]) == (812, 456)
-    assert wheel["deltaY"] == -120 and wheel["deltaX"] == 0
+        out = cdp_bridge.drain_canvas_log()
+    assert out == [{"frame": 1, "op": "fill"}]
+    assert sent[0][0] == "Runtime.evaluate"
+    assert "__canvasLog" in sent[0][1]["expression"]
 
 
-def test_scroll_wheel_falls_back_to_default_centre_on_bad_eval_shape():
-    sent = []
+def test_drain_canvas_log_returns_empty_on_bad_shape():
+    with patch("cdp_bridge._send_cdp_command", return_value={"id": 1, "result": {}}):
+        assert cdp_bridge.drain_canvas_log() == []
+
+
+def test_inject_canvas_hook_noop_when_matching_version_installed():
+    calls = []
 
     def fake_send(method, params=None, timeout=5):
-        sent.append(method)
-        if method == "Runtime.evaluate":
-            return {"id": 1, "result": {}}          # no nested result/value
-        return {"id": 1, "result": {}}
+        calls.append((method, (params or {}).get("expression", "")))
+        expr = (params or {}).get("expression", "")
+        if "__canvasHookInstalled" in expr and "Version" not in expr:
+            return _eval_result(True)                      # already installed
+        if "__canvasHookInstalledVersion" in expr:
+            return _eval_result(_HOOK_VER)                 # same version
+        return _eval_result(None)
 
     with patch("cdp_bridge._send_cdp_command", side_effect=fake_send):
-        cdp_bridge.scroll_wheel(120)
+        cdp_bridge.inject_canvas_hook()
+    methods = [m for m, _ in calls]
+    # matching version installed -> must NOT reload and NOT raise
+    assert "Page.reload" not in methods
+    # ...and genuinely idempotent: only the two version-probe reads go out, the hook
+    # source is never re-eval'd (no expression carries the assignment + src).
+    assert methods == ["Runtime.evaluate", "Runtime.evaluate"]
+    assert not any("__canvasHookInstalledVersion = " in e for _, e in calls)
 
-    assert sent == ["Runtime.evaluate", "Input.dispatchMouseEvent"]
+
+def test_inject_canvas_hook_reloads_and_raises_on_stale_version(monkeypatch):
+    monkeypatch.setattr(cdp_bridge, "_last_reload_ts", 0.0)
+    calls = []
+
+    def fake_send(method, params=None, timeout=5):
+        calls.append(method)
+        expr = (params or {}).get("expression", "")
+        if "__canvasHookInstalled" in expr and "Version" not in expr:
+            return _eval_result(True)
+        if "__canvasHookInstalledVersion" in expr:
+            return _eval_result("deadbeefdeadbeef")        # different (non-None) version
+        return _eval_result(None)
+
+    with patch("cdp_bridge._send_cdp_command", side_effect=fake_send):
+        with pytest.raises(RuntimeError, match="版本不一致|旧版"):
+            cdp_bridge.inject_canvas_hook()
+    assert "Page.reload" in calls
+    # stale path must NOT re-eval the hook source before reloading — it can't hot-swap.
+    assert "Runtime.evaluate" in calls and calls.count("Runtime.evaluate") == 2
+
+
+def test_inject_canvas_hook_reloads_and_raises_when_eval_did_not_take(monkeypatch):
+    # fresh page (not installed), eval the hook, then drains stay empty -> reload + raise
+    monkeypatch.setattr(cdp_bridge, "_last_reload_ts", 0.0)
+    calls = []
+
+    def fake_send(method, params=None, timeout=5):
+        calls.append(method)
+        expr = (params or {}).get("expression", "")
+        if "__canvasHookInstalled" in expr and "Version" not in expr:
+            return _eval_result(False)                     # not installed yet
+        if "__canvasHookInstalledVersion" in expr:
+            return _eval_result(None)
+        if "__canvasLog" in expr:
+            return _eval_result([])                        # drains never grow
+        return _eval_result(None)
+
+    monkeypatch.setattr(cdp_bridge.time, "sleep", lambda *a: None)
+    with patch("cdp_bridge._send_cdp_command", side_effect=fake_send):
+        with pytest.raises(RuntimeError, match="没生效|帧号没推进"):
+            cdp_bridge.inject_canvas_hook()
+    assert "Page.reload" in calls
+
+
+def test_inject_canvas_hook_reloads_and_raises_when_frame_number_stuck(monkeypatch):
+    # patch landed and records DO flow, but every record is tagged frame 0 (florr bound
+    # its own pre-hook requestAnimationFrame, __canvasFrame never advances). A non-empty
+    # drain is not enough — the check requires >=2 distinct frame values.
+    monkeypatch.setattr(cdp_bridge, "_last_reload_ts", 0.0)
+    calls = []
+
+    def fake_send(method, params=None, timeout=5):
+        calls.append(method)
+        expr = (params or {}).get("expression", "")
+        if "__canvasHookInstalled" in expr and "Version" not in expr:
+            return _eval_result(False)
+        if "__canvasHookInstalledVersion" in expr:
+            return _eval_result(None)
+        if "__canvasLog" in expr:
+            return _eval_result([{"frame": 0, "op": "fill"}, {"frame": 0, "op": "stroke"}])
+        return _eval_result(None)
+
+    monkeypatch.setattr(cdp_bridge.time, "sleep", lambda *a: None)
+    with patch("cdp_bridge._send_cdp_command", side_effect=fake_send):
+        with pytest.raises(RuntimeError, match="帧号没推进"):
+            cdp_bridge.inject_canvas_hook()
+    assert "Page.reload" in calls
+
+
+def test_inject_canvas_hook_throttles_reload_within_min_interval(monkeypatch):
+    # inject_canvas_hook is called ~8x/second; two failing calls inside
+    # _RELOAD_MIN_INTERVAL must issue only ONE Page.reload (else the user's game
+    # reloads 8x/s forever).
+    monkeypatch.setattr(cdp_bridge, "_last_reload_ts", 0.0)
+    clock = [10_000.0]
+    monkeypatch.setattr(cdp_bridge.time, "sleep", lambda *a: None)
+    monkeypatch.setattr(cdp_bridge.time, "time", lambda: clock[0])
+    calls = []
+
+    def fake_send(method, params=None, timeout=5):
+        calls.append(method)
+        expr = (params or {}).get("expression", "")
+        if "__canvasHookInstalled" in expr and "Version" not in expr:
+            return _eval_result(False)
+        if "__canvasHookInstalledVersion" in expr:
+            return _eval_result(None)
+        if "__canvasLog" in expr:
+            return _eval_result([])                        # empty -> <2 distinct frames
+        return _eval_result(None)
+
+    with patch("cdp_bridge._send_cdp_command", side_effect=fake_send):
+        with pytest.raises(RuntimeError):
+            cdp_bridge.inject_canvas_hook()
+        clock[0] += 5.0                                    # still < _RELOAD_MIN_INTERVAL (30s)
+        with pytest.raises(RuntimeError):
+            cdp_bridge.inject_canvas_hook()
+    assert calls.count("Page.reload") == 1
+
+    # once the interval elapses, the next failing call reloads again
+    clock[0] += cdp_bridge._RELOAD_MIN_INTERVAL + 1.0
+    with patch("cdp_bridge._send_cdp_command", side_effect=fake_send):
+        with pytest.raises(RuntimeError):
+            cdp_bridge.inject_canvas_hook()
+    assert calls.count("Page.reload") == 2
