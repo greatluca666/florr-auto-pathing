@@ -142,6 +142,11 @@ class App(ctk.CTk):
         self.afk_switch.pack(pady=4)
         if self._cfg["afk_enabled"]:
             self.afk_switch.select()
+            # 光 select() 只是把开关画成"开", 不代表 florr-auto-afk 真在跑 ——
+            # 上次开着关掉程序 / 重启电脑后 segment.exe 多半已经没了, 而 poll_afk_pause()
+            # 读不到它的日志就永远不暂停. 启动时按持久化的状态主动补一次 ensure
+            # (跟用户手动拨到"开"一个效果). 用 after() 推到窗口建好之后再跑.
+            self.after(400, self._ensure_afk)
         if not _IS_WINDOWS:
             self.afk_switch.configure(state="disabled")
             ctk.CTkLabel(afk_box, text="(仅 Windows)", font=("", 9),
