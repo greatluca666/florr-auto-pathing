@@ -550,6 +550,7 @@ def test_measure_hp_bar_thickness_skips_no_bar_and_empty():
     assert measure_hp_bar_thickness([], img) == []
 
 
+@pytest.mark.skipif(not _HAS_MODEL, reason=_SKIP_REASON)
 def test_scan_bar_thickness_empty_for_blank_image():
     blank = np.zeros((480, 640, 3), dtype=np.uint8)
     assert scan_bar_thickness(image=blank) == []

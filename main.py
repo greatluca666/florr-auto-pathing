@@ -457,9 +457,13 @@ def ensure_zoom_for_rarity(enemy_ai_enabled):
     sample_rarity 读不出稀有度词 (实测 厚<4 时 Mythic 名牌就几个青像素, 全读
     Common, Mythic 锁定永不触发). best-effort:
       - enemy_ai_enabled=False → 直接返回 False (zoom 只影响稀有度, 索敌关了不用管)
-      - 够不到 ZOOM_MIN_SAMPLES 条可测血条 (周围没 mob) → 不滚, 等, 最多 ZOOM_WAIT_CAP 秒
-      - 滚 ZOOM_MAX_SCROLLS 次仍没到 (可能已最大 zoom) → 放弃
-      - 滚一下中位厚度反而变小 → 方向反了, 翻转 ZOOM_SCROLL_AMOUNT 符号
+      - 进来先把鼠标挪回屏幕中心 —— florr 靠鼠标位置操纵角色, 不居中的话等待/AFK
+        分支里角色会一直往边上走
+      - 够不到 ZOOM_MIN_SAMPLES 条可测血条 (周围没 mob) → 不滚, 等
+      - 任何放弃路径 (超时 / 滚满 ZOOM_MAX_SCROLLS / 两个方向都没改善) 都先把已经
+        滚掉的量 scroll(-applied) 还原, 别把 zoom 留在半路比进来时还糟
+      - 滚一下中位厚度反而变小 → 方向反了, 翻转一次 ZOOM_SCROLL_AMOUNT 符号;
+        翻转后还在变小 → 撤销并放弃 (别顺着噪声一路滚到 cap)
       - 任何异常 → 打一行警告返回 False
     返回是否达到目标厚度; 调用方 (run_worker) 只打日志, 不管返回值都照常开刷."""
     if not enemy_ai_enabled:
@@ -468,9 +472,18 @@ def ensure_zoom_for_rarity(enemy_ai_enabled):
     scroll_amount = ZOOM_SCROLL_AMOUNT
     scroll_count = 0
     prev_median = None
+    applied = 0        # 已经滚掉的净量 (传给 pyautogui.scroll 的和), 放弃时 scroll(-applied) 还原
+    flipped = False    # 方向只翻转一次; 翻转后还变糟就撤销走人
     start = time.time()
     try:
+        pyautogui.moveTo(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2)  # 居中鼠标, 别让角色在等待里瞎走
         while True:
+            if time.time() - start >= ZOOM_WAIT_CAP:
+                print("⚠️ 视角调整: 超时未完成, 照常开刷")
+                if applied != 0:
+                    pyautogui.scroll(-applied)      # 撤销已滚的, 别把 zoom 留在半路
+                return False
+
             if afk_watch.poll_afk_pause():
                 overlay.update(state="AFK弹窗处理中", message="等待florr-auto-afk解题")
                 time.sleep(0.2)
@@ -479,9 +492,6 @@ def ensure_zoom_for_rarity(enemy_ai_enabled):
             thicks = enemy_detect.scan_bar_thickness(model_path=ENEMY_MODEL_PATH)
 
             if len(thicks) < ZOOM_MIN_SAMPLES:
-                if time.time() - start >= ZOOM_WAIT_CAP:
-                    print("⚠️ 视角调整: 周围一直没有可测的怪, 照常开刷")
-                    return False
                 time.sleep(2)
                 continue
 
@@ -491,17 +501,27 @@ def ensure_zoom_for_rarity(enemy_ai_enabled):
                 return True
 
             if prev_median is not None and median < prev_median - 0.5:
-                scroll_amount = -scroll_amount
-                print("↔️ 视角: 滚轮方向反了, 已翻转")
+                if not flipped:
+                    scroll_amount = -scroll_amount
+                    flipped = True
+                    print("↔️ 视角: 滚轮方向反了, 已翻转")
+                else:
+                    print("⚠️ 视角调整: 两个方向都没改善, 撤销并放弃")
+                    if applied != 0:
+                        pyautogui.scroll(-applied)
+                    return False
             prev_median = median
 
             if scroll_count >= ZOOM_MAX_SCROLLS:
                 print(f"⚠️ 视角调整: 滚了 {scroll_count} 次仍没到目标厚度 "
                       f"(可能已最大 zoom), 照常开刷")
+                if applied != 0:
+                    pyautogui.scroll(-applied)
                 return False
 
             pyautogui.moveTo(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2)
             pyautogui.scroll(scroll_amount)
+            applied += scroll_amount
             scroll_count += 1
             time.sleep(0.4)
     except Exception as e:
@@ -784,7 +804,9 @@ def run_worker(cfg):
 
         if lazy_theta_pathing(location, [farming_area]):
             print("✅ 到达刷怪区域！")
-            ensure_zoom_for_rarity(w["enemy_ai_enabled"])
+            zoom_ok = ensure_zoom_for_rarity(w["enemy_ai_enabled"])
+            if w["enemy_ai_enabled"] and not zoom_ok:
+                print("⚠️ 视角未调到位, 本轮稀有度识别可能不准 (Mythic 锁定可能不触发)")
             auto_farming(farming_area, farming_duration,
                          enemy_ai_enabled=w["enemy_ai_enabled"])
         else:
