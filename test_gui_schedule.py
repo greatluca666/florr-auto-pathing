@@ -31,6 +31,7 @@ def test_block_to_active_shapes():
         "map": "ocean", "location": [5, 6], "farming_area": [[1, 1], [2, 2]],
         "farming_duration": 120, "consecutive_short_round_limit": 2,
         "enemy_ai_enabled": True, "auto_switch_server": True,
+        "enter_game_swap": "none", "reach_area_swap": "none",
     }
 
 
@@ -72,4 +73,30 @@ def test_validate_overlap_reports_other_id():
 def test_validate_ignores_self_in_others():
     me = _blk(id="mine")
     assert gs.validate_block(me, [me]) is None
+
+
+class TestLoadoutSwapInGuiSchedule:
+    def test_block_to_active_carries_swaps(self):
+        blk = _blk(enter_game_swap="k", reach_area_swap="digits")
+        act = gs.block_to_active(blk)
+        assert act["enter_game_swap"] == "k"
+        assert act["reach_area_swap"] == "digits"
+
+    def test_block_to_active_defaults_missing_swaps_to_none(self):
+        blk = _blk()
+        blk.pop("enter_game_swap", None)
+        blk.pop("reach_area_swap", None)
+        act = gs.block_to_active(blk)
+        assert act["enter_game_swap"] == "none"
+        assert act["reach_area_swap"] == "none"
+
+    def test_new_block_template_has_none_swaps(self):
+        cfg = {"profiles": [{"alias": "默认", "dir": "d"}], "schedule": []}
+        tpl = gs.new_block_template(cfg)
+        assert tpl["enter_game_swap"] == "none"
+        assert tpl["reach_area_swap"] == "none"
+
+    def test_label_maps_are_inverse(self):
+        for k in ("none", "digits", "k", "l"):
+            assert gs._SWAP_FROM_LABEL[gs._SWAP_LABELS[k]] == k
 
