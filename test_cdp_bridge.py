@@ -479,6 +479,8 @@ class TestLaunchChromeForProfile:
         assert "--start-fullscreen" in argv
         assert "--remote-debugging-port=9222" in argv
         assert "--remote-allow-origins=*" in argv
+        assert "--hide-crash-restore-bubble" in argv
+        assert "--disable-session-crashed-bubble" in argv
         assert argv[-1] == "https://florr.io"
 
     def test_fullscreen_false_omits_flag(self, monkeypatch):

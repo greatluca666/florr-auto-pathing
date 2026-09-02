@@ -159,6 +159,10 @@ def launch_chrome_for_profile(profile_dir, *, open_url="https://florr.io", fulls
         f"--user-data-dir={profile_dir}",
         "--no-first-run",
         "--no-default-browser-check",
+        # _quit_all_chrome() 用 taskkill /F 硬杀, 下次启动 Chrome 会当成上次崩溃
+        # 弹"是否恢复页面"横幅 —— 这两个 flag 把它压掉(前者是新版专用, 后者兼容旧版).
+        "--hide-crash-restore-bubble",
+        "--disable-session-crashed-bubble",
     ]
     if fullscreen:
         args.append("--start-fullscreen")
