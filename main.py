@@ -11,6 +11,7 @@ import afk_watch
 import enemy_detect
 import app_config
 import florr_settings
+import loadout_swap
 
 # ===== 索敌配置 (sszone敌怪检测/追击/规避) =====
 ENEMY_SCAN_INTERVAL = 0.12  # 秒, 索敌扫描节流间隔. 这是"决策新鲜度"的主旋钮:
@@ -662,6 +663,8 @@ def _apply_worker_config(cfg):
                                     d["consecutive_short_round_limit"]),
         "enemy_ai_enabled": src.get("enemy_ai_enabled", d["enemy_ai_enabled"]),
         "auto_switch_server": src.get("auto_switch_server", d["auto_switch_server"]),
+        "enter_game_swap": src.get("enter_game_swap", d["enter_game_swap"]),
+        "reach_area_swap": src.get("reach_area_swap", d["reach_area_swap"]),
     }
 
 
@@ -733,12 +736,18 @@ def run_worker(cfg):
         # 了, 每轮重写一次. on_already 静默(常态), turned_on / failed 才打日志.
         _reassert_invert_attack()
 
+        # 进游戏了: 按配置的键切到"赶路" loadout (florr 重生会把 loadout 拉回账号
+        # 默认, 所以每轮进来都按一次). press_swap 内部 warn-only, 不打断轮次.
+        loadout_swap.press_swap(w["enter_game_swap"])
+
         print(f"📍 目标区域: {farming_area}\n")
         overlay.update(state="启动", target=location,
                        message=f"第{round_count}轮: 开始自动寻路到刷怪区域")
 
         if lazy_theta_pathing(location, [farming_area]):
             print("✅ 到达刷怪区域！")
+            # 到刷怪区了: 按配置的键切到"输出" loadout.
+            loadout_swap.press_swap(w["reach_area_swap"])
             auto_farming(farming_area, farming_duration,
                          enemy_ai_enabled=w["enemy_ai_enabled"])
         else:

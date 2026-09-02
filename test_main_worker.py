@@ -285,6 +285,7 @@ def _stub_run_worker_env(monkeypatch, overlay=None):
     monkeypatch.setattr(main, "_apply_worker_config", lambda cfg: {
         "location": (1, 2), "farming_area": [(0, 0), (9, 9)], "farming_duration": 300,
         "short_round_limit": 2, "enemy_ai_enabled": False, "auto_switch_server": False,
+        "enter_game_swap": "none", "reach_area_swap": "none",
     })
     monkeypatch.setattr(main, "on_death_screen", lambda: False)
     monkeypatch.setattr(main, "on_start_screen", lambda: False)
@@ -318,3 +319,78 @@ def test_run_worker_survives_invert_attack_failure(monkeypatch):
     with pytest.raises(KeyboardInterrupt):   # 到了主循环 = 没被 failed 掐死
         main.run_worker({})
     assert any(m and "反转攻击键" in m for m in warned)
+
+
+def test_apply_worker_config_reads_swap_keys(monkeypatch):
+    monkeypatch.setattr(main, "apply_map", lambda name: None)
+    cfg = {"version": 2, "active": {"map": "desert",
+                                    "enter_game_swap": "k", "reach_area_swap": "digits"}}
+    w = main._apply_worker_config(cfg)
+    assert w["enter_game_swap"] == "k"
+    assert w["reach_area_swap"] == "digits"
+
+
+def test_apply_worker_config_swap_keys_default_none(monkeypatch):
+    monkeypatch.setattr(main, "apply_map", lambda name: None)
+    w = main._apply_worker_config({"version": 2, "active": {"map": "desert"}})
+    assert w["enter_game_swap"] == "none"
+    assert w["reach_area_swap"] == "none"
+
+
+def _swap_env(monkeypatch, *, enter="k", reach="l"):
+    """_stub_run_worker_env + 记录 press_swap 调用 + _apply_worker_config 带 swap 键."""
+    _stub_run_worker_env(monkeypatch)
+    monkeypatch.setattr(main, "_apply_worker_config", lambda cfg: {
+        "location": (1, 2), "farming_area": [(0, 0), (9, 9)], "farming_duration": 300,
+        "short_round_limit": 2, "enemy_ai_enabled": False, "auto_switch_server": False,
+        "enter_game_swap": enter, "reach_area_swap": reach,
+    })
+    monkeypatch.setattr(main.florr_settings, "ensure_invert_attack_on",
+                        lambda ej, *a, **k: ("on_already", ""))
+    seen = []
+    monkeypatch.setattr(main.loadout_swap, "press_swap", lambda spec: seen.append(spec))
+    return seen
+
+
+def test_run_worker_presses_enter_swap_each_round(monkeypatch):
+    seen = _swap_env(monkeypatch, enter="k", reach="l")
+    monkeypatch.setattr(main, "lazy_theta_pathing",
+                        lambda *a, **k: (_ for _ in ()).throw(KeyboardInterrupt))
+    with pytest.raises(KeyboardInterrupt):
+        main.run_worker({})
+    assert seen == ["k"]                 # 进游戏切换按了; 没到区域, reach 没按
+
+
+def test_run_worker_presses_reach_swap_on_arrival(monkeypatch):
+    seen = _swap_env(monkeypatch, enter="k", reach="l")
+    calls = {"n": 0}
+
+    def fake_path(*a, **k):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return True
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(main, "lazy_theta_pathing", fake_path)
+    monkeypatch.setattr(main, "auto_farming",
+                        lambda *a, **k: (_ for _ in ()).throw(KeyboardInterrupt))
+    with pytest.raises(KeyboardInterrupt):
+        main.run_worker({})
+    assert seen == ["k", "l"]            # enter 先, 到区域后 reach
+
+
+def test_run_worker_skips_reach_swap_when_pathing_fails(monkeypatch):
+    seen = _swap_env(monkeypatch, enter="k", reach="l")
+    calls = {"n": 0}
+
+    def fake_path(*a, **k):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return False
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(main, "lazy_theta_pathing", fake_path)
+    with pytest.raises(KeyboardInterrupt):
+        main.run_worker({})
+    assert "l" not in seen               # 没到区域 → reach 永不触发
+    assert seen == ["k", "k"]            # 两轮各按一次 enter

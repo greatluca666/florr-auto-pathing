@@ -53,6 +53,21 @@ damage). To (re)calibrate: open the florr.io devtools console, paste
 `set.mark()` each time, then `set.solve()`), and put the returned address into
 `florr_settings.INVERT_ATTACK_ADDR`.
 
+### 按区域切换 loadout（可选）
+
+每个调度时块可以配两组按键：
+
+- **进游戏切换装备**：每轮进入游戏后按一次。
+- **到刷怪区切换装备**：寻路到刷怪区域后按一次。
+
+取值：
+
+- `不切换` —— 默认，什么都不按。
+- `全部数字键 1–0` —— 顺序点按 `1 2 3 4 5 6 7 8 9 0`，把每个花瓣槽位在主行 / 副行之间对调一遍（换整套）。
+- `k` / `l` —— 按一下 florr 里绑到 loadout 预设的键（需要你先在 florr 设置里绑好，没绑就无反应）。
+
+按键通过前台窗口发给 florr，跟 bot 的其它输入一样要求 florr 窗口在最前。
+
 ## Implements
 
 Resolution is auto-detected at startup (`pyautogui.size()`) and every screen coordinate is scaled
