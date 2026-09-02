@@ -329,6 +329,6 @@ def test_on_guest_screen_false_when_mostly_background(monkeypatch):
     assert utils.on_guest_screen() is False
 
 
-def test_play_as_guest_pos_is_scaled_from_reference(monkeypatch):
-    # 参照分辨率下就是 (960, 498) 原值
-    assert utils._PLAY_AS_GUEST_POS == utils.scale_point(960, 498)
+def test_play_as_guest_pos_is_scaled_from_reference():
+    # 参照分辨率(1920x1080)下 scale_point 是恒等, _PLAY_AS_GUEST_POS 就是 (960, 498)
+    assert utils._PLAY_AS_GUEST_POS == (960, 498)
