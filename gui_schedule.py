@@ -13,6 +13,15 @@ import app_config
 WEEKDAY_LABELS = ("一", "二", "三", "四", "五", "六", "日")
 
 _ACTIVE_KEYS = app_config._ACTIVE_KEYS
+
+_SWAP_LABELS = {"none": "不切换", "digits": "全部数字键 1–0", "k": "k", "l": "l"}
+_SWAP_FROM_LABEL = {v: k for k, v in _SWAP_LABELS.items()}
+
+
+def _coerce_swap(v):
+    return v if isinstance(v, str) and v in _SWAP_LABELS else "none"
+
+
 # 目录名: 保留 \w(含汉字)和连字符, 其余替换成 _, 首尾 _ 去掉.
 _SAFE_DIR_RE = re.compile(r"[^\w\-]", re.UNICODE)
 
@@ -37,6 +46,8 @@ def block_to_active(block):
         "consecutive_short_round_limit": int(block["consecutive_short_round_limit"]),
         "enemy_ai_enabled": bool(block["enemy_ai_enabled"]),
         "auto_switch_server": bool(block["auto_switch_server"]),
+        "enter_game_swap": _coerce_swap(block.get("enter_game_swap")),
+        "reach_area_swap": _coerce_swap(block.get("reach_area_swap")),
     }
 
 
@@ -86,6 +97,7 @@ def new_block_template(cfg):
         "map": "desert", "location": None, "farming_area": None,
         "farming_duration": 300, "consecutive_short_round_limit": 2,
         "enemy_ai_enabled": True, "auto_switch_server": True,
+        "enter_game_swap": "none", "reach_area_swap": "none",
     }
 
 
@@ -231,6 +243,19 @@ class TimeBlockEditor(ctk.CTkToplevel):
             self._autosw.select()
         self._autosw.pack(anchor="w", padx=12, pady=6)
 
+        _swap_vals = list(_SWAP_LABELS.values())
+        ctk.CTkLabel(self, text="进游戏切换装备").pack(anchor="w", padx=12, pady=(6, 0))
+        self._enter_swap = ctk.CTkOptionMenu(self, values=_swap_vals)
+        self._enter_swap.set(_SWAP_LABELS[_coerce_swap(self._block.get("enter_game_swap"))])
+        self._enter_swap.pack(anchor="w", padx=12, pady=2)
+        _Tooltip(self._enter_swap,
+                 "每轮进游戏后按这组键换 loadout. 全部数字键 = 把 1 到 0 都点一遍, 整套主副对调.")
+        ctk.CTkLabel(self, text="到刷怪区切换装备").pack(anchor="w", padx=12, pady=(6, 0))
+        self._reach_swap = ctk.CTkOptionMenu(self, values=_swap_vals)
+        self._reach_swap.set(_SWAP_LABELS[_coerce_swap(self._block.get("reach_area_swap"))])
+        self._reach_swap.pack(anchor="w", padx=12, pady=2)
+        _Tooltip(self._reach_swap, "寻路到刷怪区后按这组键换 loadout.")
+
         self._adv_open = False
         self._adv_btn = ctk.CTkButton(self, text="▸ 高级选项", anchor="w",
                                       fg_color="transparent", command=self._toggle_adv)
@@ -341,6 +366,8 @@ class TimeBlockEditor(ctk.CTkToplevel):
             farming_area=[list(area[0]), list(area[1])] if area else None,
             enemy_ai_enabled=bool(self._enemy.get()),
             auto_switch_server=bool(self._autosw.get()),
+            enter_game_swap=_SWAP_FROM_LABEL.get(self._enter_swap.get(), "none"),
+            reach_area_swap=_SWAP_FROM_LABEL.get(self._reach_swap.get(), "none"),
         )
         try:
             blk["farming_duration"] = int(self._dur_e.get())

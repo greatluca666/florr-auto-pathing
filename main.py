@@ -12,6 +12,7 @@ import enemy_detect
 import app_config
 import florr_settings
 import server_lookup
+import loadout_swap
 
 # ===== 索敌配置 (sszone敌怪检测/追击/规避) =====
 ENEMY_SCAN_INTERVAL = 0.12  # 秒, 索敌扫描节流间隔. 这是"决策新鲜度"的主旋钮:
@@ -664,6 +665,8 @@ def _apply_worker_config(cfg):
         "enemy_ai_enabled": src.get("enemy_ai_enabled", d["enemy_ai_enabled"]),
         "auto_switch_server": src.get("auto_switch_server", d["auto_switch_server"]),
         "biome": server_lookup.biome_key_for_map(src.get("map", d["map"])),
+        "enter_game_swap": src.get("enter_game_swap", d["enter_game_swap"]),
+        "reach_area_swap": src.get("reach_area_swap", d["reach_area_swap"]),
     }
 
 
@@ -772,6 +775,7 @@ def run_worker(cfg):
         round_start_time = time.time()
         print(f"\n{'='*50}\n第 {round_count} 轮\n{'='*50}")
 
+        entered_game = False
         if on_guest_screen():
             print("👤 检测到未登录标题页, 点击『以游客身份游玩』...")
             overlay.update(state="重新开始", message="点击游客登录...")
@@ -781,6 +785,7 @@ def run_worker(cfg):
             print("💀 检测到死亡结算画面, 点击继续...")
             overlay.update(state="重新开始", message="死亡, 点击继续...")
             click_continue_after_death()
+            entered_game = True
             time.sleep(2)
         if on_start_screen():
             print("🔁 检测到开局菜单, 点击开始按钮进入游戏...")
@@ -794,11 +799,20 @@ def run_worker(cfg):
             # 再点, 否则 click_start_game 复查时会把空档当成"已经进去了".
             _wait_for_start_menu()
             click_start_game()
+            entered_game = True
             time.sleep(3)
 
         # 进游戏了(或本来就在局内): florr 刚才可能从账号数据把「反转攻击键」重置
         # 了, 每轮重写一次. on_already 静默(常态), turned_on / failed 才打日志.
         _reassert_invert_attack()
+
+        # 只在这一轮真的(重新)进了游戏、或首轮时才切 loadout —— 一命跑满
+        # farming_duration 没死的下一轮不过上面两个分支, 玩家还在场上、florr 没重置
+        # loadout, 再按一次 digits 这种盲切换会让非对称配置每轮漂移. press_swap
+        # 内部 warn-only, 不打断轮次.
+        swap_this_round = entered_game or round_count == 1
+        if swap_this_round:
+            loadout_swap.press_swap(w["enter_game_swap"])
 
         print(f"📍 目标区域: {farming_area}\n")
         overlay.update(state="启动", target=location,
@@ -806,6 +820,10 @@ def run_worker(cfg):
 
         if lazy_theta_pathing(location, [farming_area]):
             print("✅ 到达刷怪区域！")
+            # 到刷怪区了: 按配置的键切到"输出" loadout. 跟 enter swap 同一道 gate ——
+            # 存活续命轮 florr 没重置 loadout, 不重按.
+            if swap_this_round:
+                loadout_swap.press_swap(w["reach_area_swap"])
             auto_farming(farming_area, farming_duration,
                          enemy_ai_enabled=w["enemy_ai_enabled"])
         else:

@@ -28,6 +28,10 @@ DEFAULTS = {
     # 索敌早已不需要模型文件, 改成解码 canvas 绘制调用了.
     "enemy_ai_enabled": False,
     "auto_switch_server": True,
+    # 进游戏 / 寻路到刷怪区时按一组键切换 florr loadout. "none"=不切换,
+    # "digits"=顺序点按 1..0 (整套主副对调), "k"/"l"=按 florr 里绑的预设键.
+    "enter_game_swap": "none",
+    "reach_area_swap": "none",
     "afk_enabled": False,
 }
 
@@ -45,8 +49,11 @@ _GUI_ENABLED_MAPS = ("desert",)
 _ACTIVE_KEYS = (
     "map", "location", "farming_area", "farming_duration",
     "consecutive_short_round_limit", "enemy_ai_enabled", "auto_switch_server",
+    "enter_game_swap", "reach_area_swap",
 )
 _TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+# loadout 切换键的合法值. 未知 / 缺失 / 错类型 → "none".
+_SWAP_VALUES = ("none", "digits", "k", "l")
 
 
 def _is_int_pair(v):
@@ -88,6 +95,8 @@ def _coerce_v1(raw):
             ok = isinstance(val, int) and not isinstance(val, bool) and val > 0
         elif key == "consecutive_short_round_limit":
             ok = isinstance(val, int) and not isinstance(val, bool) and val >= 1
+        elif key in ("enter_game_swap", "reach_area_swap"):
+            ok = isinstance(val, str) and val in _SWAP_VALUES
         else:  # enemy_ai_enabled / auto_switch_server / afk_enabled
             ok = isinstance(val, bool)
 
@@ -180,6 +189,13 @@ def _coerce_block(raw, aliases, n):
     if profile not in aliases:
         print(f"⚠️ config.json 时块 {bid} 引用的账号 {profile!r} 不存在, 已禁用该时块")
         enabled = False
+
+    # 旧 config.json 的时块没有这两个键 —— 用 raw.get(..., "none"), 绝不 raw[key]
+    # (KeyError 会让整块被丢). 非法值(错类型 / 不在集合)一律回落 "none".
+    def _swap(key):
+        v = raw.get(key, "none")
+        return v if isinstance(v, str) and v in _SWAP_VALUES else "none"
+
     return {
         "id": bid, "enabled": enabled, "days": days, "start": start, "end": end,
         "profile": profile, "map": raw["map"],
@@ -188,6 +204,8 @@ def _coerce_block(raw, aliases, n):
                          [int(area[1][0]), int(area[1][1])]],
         "farming_duration": dur, "consecutive_short_round_limit": lim,
         "enemy_ai_enabled": eai, "auto_switch_server": asw,
+        "enter_game_swap": _swap("enter_game_swap"),
+        "reach_area_swap": _swap("reach_area_swap"),
     }
 
 
