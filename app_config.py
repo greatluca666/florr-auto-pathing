@@ -223,6 +223,41 @@ def _coerce(raw):
     return cfg
 
 
+def _rename_legacy_profile_dir():
+    """阶段1 的 chrome-profile/ → 阶段2 的 chrome-profiles/默认/. best-effort:
+    目标已存在 / 改名失败(目录被占用)都只 print 一句, 不抛 —— 用户下次用
+    『默认』账号时会走登录引导补上。"""
+    root = os.path.dirname(os.path.abspath(sys.argv[0]))
+    old = os.path.join(root, "chrome-profile")
+    new = os.path.join(root, "chrome-profiles", "默认")
+    if not os.path.isdir(old) or os.path.exists(new):
+        return
+    try:
+        os.makedirs(os.path.join(root, "chrome-profiles"), exist_ok=True)
+        os.rename(old, new)
+    except OSError as e:
+        print(f"⚠️ 旧 Chrome profile 目录改名失败({e}); 用『默认』账号时会要求重新登录")
+
+
+def migrate_v1(raw):
+    """v1 扁平配置 → v2: 单『默认』profile + 一个全周全天时块 + active 切片。"""
+    flat = _coerce_v1(raw if isinstance(raw, dict) else {})
+    _rename_legacy_profile_dir()
+    block = {
+        "id": "blk-1", "enabled": True, "days": [0, 1, 2, 3, 4, 5, 6],
+        "start": "00:00", "end": "00:00", "profile": "默认",
+    }
+    for k in _ACTIVE_KEYS:
+        block[k] = copy.deepcopy(flat[k])
+    return {
+        "version": 2,
+        "afk_enabled": flat["afk_enabled"],
+        "profiles": [{"alias": "默认", "dir": "chrome-profiles/默认"}],
+        "schedule": [block],
+        "active": {k: copy.deepcopy(flat[k]) for k in _ACTIVE_KEYS},
+    }
+
+
 def load_config():
     try:
         with open(CONFIG_PATH, "r", encoding="utf-8") as f:
@@ -232,6 +267,16 @@ def load_config():
     except Exception as e:
         print(f"⚠️ 读 config.json 失败, 全部用默认值: {e}")
         return copy.deepcopy(DEFAULTS_V2)
+    if not isinstance(raw, dict):
+        print(f"⚠️ config.json 顶层不是对象(是 {type(raw).__name__}), 全部用默认值")
+        return copy.deepcopy(DEFAULTS_V2)
+    if raw.get("version") != 2:
+        cfg = _coerce(migrate_v1(raw))
+        try:
+            _write(cfg)
+        except OSError as e:
+            print(f"⚠️ 迁移后写回 config.json 失败: {e}")
+        return cfg
     return _coerce(raw)
 
 

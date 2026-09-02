@@ -99,6 +99,61 @@ class TestCoerceV2:
         assert got["active"]["location"] == [5, 5]
 
 
+class TestMigrationV1:
+    def _v1(self, **kw):
+        base = dict(map="ocean", location=[7, 8], farming_area=[[1, 1], [5, 5]],
+                    farming_duration=222, consecutive_short_round_limit=3,
+                    enemy_ai_enabled=False, auto_switch_server=False, afk_enabled=True)
+        base.update(kw)
+        return base
+
+    def test_v1_flat_migrates_to_single_all_week_block(self, cfg_path):
+        cfg_path.write_text(json.dumps(self._v1()), encoding="utf-8")
+        got = app_config.load_config()
+        assert got["version"] == 2
+        assert got["afk_enabled"] is True
+        assert got["profiles"] == [{"alias": "默认", "dir": "chrome-profiles/默认"}]
+        assert len(got["schedule"]) == 1
+        blk = got["schedule"][0]
+        assert blk["days"] == [0, 1, 2, 3, 4, 5, 6]
+        assert blk["start"] == "00:00" and blk["end"] == "00:00"
+        assert blk["profile"] == "默认"
+        assert blk["map"] == "ocean" and blk["location"] == [7, 8]
+        assert blk["farming_duration"] == 222
+        assert got["active"]["map"] == "ocean"
+        assert got["active"]["consecutive_short_round_limit"] == 3
+
+    def test_migration_is_written_back_as_v2(self, cfg_path):
+        cfg_path.write_text(json.dumps(self._v1()), encoding="utf-8")
+        app_config.load_config()
+        on_disk = json.loads(cfg_path.read_text(encoding="utf-8"))
+        assert on_disk["version"] == 2
+        assert "schedule" in on_disk
+
+    def test_migration_tolerates_bad_v1_values(self, cfg_path):
+        cfg_path.write_text(json.dumps(self._v1(map="bogus", farming_duration=-1)),
+                            encoding="utf-8")
+        blk = app_config.load_config()["schedule"][0]
+        assert blk["map"] == app_config.DEFAULTS["map"]
+        assert blk["farming_duration"] == app_config.DEFAULTS["farming_duration"]
+
+    def test_rename_legacy_dir_best_effort(self, tmp_path, monkeypatch):
+        root = tmp_path
+        monkeypatch.setattr(app_config.sys, "argv", [str(root / "app.exe")])
+        (root / "chrome-profile").mkdir()
+        app_config._rename_legacy_profile_dir()
+        assert (root / "chrome-profiles" / "默认").is_dir()
+        assert not (root / "chrome-profile").exists()
+
+    def test_rename_legacy_dir_noop_when_target_exists(self, tmp_path, monkeypatch):
+        root = tmp_path
+        monkeypatch.setattr(app_config.sys, "argv", [str(root / "app.exe")])
+        (root / "chrome-profile").mkdir()
+        (root / "chrome-profiles" / "默认").mkdir(parents=True)
+        app_config._rename_legacy_profile_dir()   # 不该抛
+        assert (root / "chrome-profile").exists()  # 保留原样
+
+
 class TestScheduleMath:
     def _blk(self, **kw):
         base = dict(id="b", enabled=True, days=[0], start="09:00", end="12:00",
