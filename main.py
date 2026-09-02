@@ -644,16 +644,23 @@ def auto_farming(farming_area, duration=300, *, enemy_ai_enabled=True):
 
 def _apply_worker_config(cfg):
     """把 config.json 的值应用/摊平成 run_worker 主循环要用的局部值.
+    v2: 读 cfg['active'](GUI 调度器在起 worker 前刷成"当前生效时块"的刷怪参数);
+    老扁平文件 / 手写调试文件: 回退 cfg 本身; 再缺的键: 回退 app_config.DEFAULTS.
     apply_map() 必须在这里就调 —— utils 的 MAP 是模块级全局, load_binary_map()
     等一堆函数都读它."""
-    apply_map(cfg["map"])
+    src = cfg.get("active")
+    if not isinstance(src, dict):
+        src = cfg
+    d = app_config.DEFAULTS
+    apply_map(src.get("map", d["map"]))
     return {
-        "location": tuple(cfg["location"]),
-        "farming_area": [tuple(p) for p in cfg["farming_area"]],
-        "farming_duration": cfg["farming_duration"],
-        "short_round_limit": cfg["consecutive_short_round_limit"],
-        "enemy_ai_enabled": cfg["enemy_ai_enabled"],
-        "auto_switch_server": cfg["auto_switch_server"],
+        "location": tuple(src.get("location", d["location"])),
+        "farming_area": [tuple(p) for p in src.get("farming_area", d["farming_area"])],
+        "farming_duration": src.get("farming_duration", d["farming_duration"]),
+        "short_round_limit": src.get("consecutive_short_round_limit",
+                                    d["consecutive_short_round_limit"]),
+        "enemy_ai_enabled": src.get("enemy_ai_enabled", d["enemy_ai_enabled"]),
+        "auto_switch_server": src.get("auto_switch_server", d["auto_switch_server"]),
     }
 
 
