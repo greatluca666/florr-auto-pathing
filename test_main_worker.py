@@ -24,6 +24,16 @@ def test_apply_worker_config_reads_active_slice(monkeypatch):
     assert w["auto_switch_server"] is False
 
 
+def test_apply_worker_config_maps_config_map_to_biome_key(monkeypatch):
+    monkeypatch.setattr(main, "apply_map", lambda name: None)
+    w = main._apply_worker_config({"version": 2, "active": {"map": "anthell"}})
+    assert w["biome"] == "ant_hell"        # config anthell -> index key ant_hell
+    w2 = main._apply_worker_config({"version": 2, "active": {"map": "ocean"}})
+    assert w2["biome"] == "ocean"
+    w3 = main._apply_worker_config({"version": 2, "active": {"map": "desert"}})
+    assert w3["biome"] == "desert"
+
+
 def test_apply_worker_config_falls_back_to_flat_when_no_active(monkeypatch):
     monkeypatch.setattr(main, "apply_map", lambda name: None)
     cfg = {"map": "anthell", "location": [1, 1], "farming_area": [[0, 0], [2, 2]],

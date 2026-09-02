@@ -11,6 +11,7 @@ import afk_watch
 import enemy_detect
 import app_config
 import florr_settings
+import server_lookup
 
 # ===== 索敌配置 (sszone敌怪检测/追击/规避) =====
 ENEMY_SCAN_INTERVAL = 0.12  # 秒, 索敌扫描节流间隔. 这是"决策新鲜度"的主旋钮:
@@ -662,6 +663,7 @@ def _apply_worker_config(cfg):
                                     d["consecutive_short_round_limit"]),
         "enemy_ai_enabled": src.get("enemy_ai_enabled", d["enemy_ai_enabled"]),
         "auto_switch_server": src.get("auto_switch_server", d["auto_switch_server"]),
+        "biome": server_lookup.biome_key_for_map(src.get("map", d["map"])),
     }
 
 
