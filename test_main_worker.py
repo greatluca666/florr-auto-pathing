@@ -93,6 +93,28 @@ def test_lock_biome_constants_are_numbers():
         assert isinstance(getattr(main, name), (int, float))
 
 
+def test_wait_for_start_menu_returns_true_when_menu_present(monkeypatch):
+    monkeypatch.setattr(main, "on_start_screen", lambda: True)
+    monkeypatch.setattr(main.time, "sleep", lambda *a, **k: None)
+    assert main._wait_for_start_menu(timeout=5) is True
+
+
+def test_wait_for_start_menu_polls_until_menu_appears(monkeypatch):
+    seq = iter([False, False, True])
+    monkeypatch.setattr(main, "on_start_screen", lambda: next(seq, True))
+    monkeypatch.setattr(main.time, "sleep", lambda *a, **k: None)
+    assert main._wait_for_start_menu(timeout=5) is True
+
+
+def test_wait_for_start_menu_times_out(monkeypatch):
+    clock = [0.0]
+    monkeypatch.setattr(main.time, "time", lambda: clock[0])
+    monkeypatch.setattr(main.time, "sleep", lambda s: clock.__setitem__(0, clock[0] + s))
+    monkeypatch.setattr(main, "on_start_screen", lambda: False)
+    assert main._wait_for_start_menu(timeout=3, interval=0.5) is False
+    assert clock[0] >= 3
+
+
 def test_maybe_scan_enemies_disabled_never_touches_enemy_detect(monkeypatch):
     monkeypatch.setattr(main.enemy_detect, "scan_enemies",
                         lambda **k: (_ for _ in ()).throw(AssertionError("不该扫描")))
@@ -376,22 +398,26 @@ def test_run_worker_survives_invert_attack_failure(monkeypatch):
     assert any(m and "反转攻击键" in m for m in warned)
 
 
-def test_run_worker_locks_biome_before_loop_and_after_start_click(monkeypatch):
+def test_run_worker_locks_biome_on_title_before_clicking_start(monkeypatch):
+    """锁生态区必须在标题页、click_start_game() 之前 —— 反过来(进局后 forceServerID)
+    会把人踢回标题页, 形成死循环. 顺序: _lock_biome -> _wait_for_start_menu ->
+    click_start_game."""
     _stub_run_worker_env(monkeypatch)
-    locks = []
-    monkeypatch.setattr(main, "_lock_biome", lambda b: locks.append(b) or True)
+    events = []
+    monkeypatch.setattr(main, "_lock_biome", lambda b: events.append(("lock", b)) or True)
+    monkeypatch.setattr(main, "_wait_for_start_menu",
+                        lambda *a, **k: events.append("wait") or True)
     monkeypatch.setattr(main, "on_start_screen", lambda: True)
-    monkeypatch.setattr(main, "click_start_game", lambda: True)
+    monkeypatch.setattr(main, "click_start_game", lambda: events.append("click") or True)
     monkeypatch.setattr(main, "_reassert_invert_attack", lambda: "on_already")
     monkeypatch.setattr(main, "lazy_theta_pathing",
                         lambda *a, **k: (_ for _ in ()).throw(KeyboardInterrupt))
     with pytest.raises(KeyboardInterrupt):
         main.run_worker({})
-    # 进循环前 1 次 + 第 1 轮 on_start_screen 分支里(click_start_game 之后)1 次
-    assert locks == ["desert", "desert"]
+    assert events == [("lock", "desert"), "wait", "click"]
 
 
-def test_run_worker_does_not_lock_biome_while_farming(monkeypatch):
+def test_run_worker_does_not_lock_biome_when_not_on_start_screen(monkeypatch):
     _stub_run_worker_env(monkeypatch)   # on_start_screen 恒 False
     locks = []
     monkeypatch.setattr(main, "_lock_biome", lambda b: locks.append(b) or True)
@@ -400,21 +426,7 @@ def test_run_worker_does_not_lock_biome_while_farming(monkeypatch):
                         lambda *a, **k: (_ for _ in ()).throw(KeyboardInterrupt))
     with pytest.raises(KeyboardInterrupt):
         main.run_worker({})
-    assert locks == ["desert"]          # 只有进循环前那一次, 循环体内不锁
-
-
-def test_run_worker_prewarns_when_biome_lock_fails(monkeypatch):
-    ov = _StubOverlay()
-    warned = []
-    ov.update = lambda **kw: warned.append(kw.get("message"))
-    _stub_run_worker_env(monkeypatch, overlay=ov)
-    monkeypatch.setattr(main, "_lock_biome", lambda b: False)
-    monkeypatch.setattr(main, "_reassert_invert_attack", lambda: "on_already")
-    monkeypatch.setattr(main, "lazy_theta_pathing",
-                        lambda *a, **k: (_ for _ in ()).throw(KeyboardInterrupt))
-    with pytest.raises(KeyboardInterrupt):
-        main.run_worker({})
-    assert any(m and "生态区未锁定" in m for m in warned)
+    assert locks == []      # 锁只发生在标题页(点开始前), 不在开局菜单就一次都不锁
 
 
 def test_run_worker_switch_server_uses_configured_biome(monkeypatch):
