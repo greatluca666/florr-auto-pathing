@@ -56,6 +56,8 @@ def validate_block(block, others):
         return "时间格式要是 HH:MM"
     if start == end and start != "00:00":
         return "起止时间不能相同(全天请填 00:00–00:00)"
+    if block.get("map") not in app_config._GUI_ENABLED_MAPS:
+        return "海洋 / 蚁狱暂不可用, 请选沙漠"
     if not block.get("location") and not block.get("farming_area"):
         return "在地图上点个目标点, 或框个刷怪区"
     if not _positive_int(block.get("farming_duration")):
@@ -68,6 +70,11 @@ def validate_block(block, others):
         if app_config.blocks_overlap(block, o):
             return f"跟时块 {o.get('id')} 时间重叠"
     return None
+
+
+def _map_radio_state(map_name):
+    """时块编辑器地图 radio 的 tk state: 不在 _GUI_ENABLED_MAPS 里的置灰."""
+    return "normal" if map_name in app_config._GUI_ENABLED_MAPS else "disabled"
 
 
 def new_block_template(cfg):
