@@ -27,11 +27,12 @@ def test_safe_dirname(raw, out):
 def test_block_to_active_shapes():
     a = gs.block_to_active(_blk(map="ocean", location=(5, 6),
                                farming_area=[(1, 1), (2, 2)], farming_duration="120"))
+    _off = {"enabled": False, "mod": "none", "digit": "1"}
     assert a == {
         "map": "ocean", "location": [5, 6], "farming_area": [[1, 1], [2, 2]],
         "farming_duration": 120, "consecutive_short_round_limit": 2,
         "enemy_ai_enabled": True, "auto_switch_server": True,
-        "enter_game_swap": "none", "reach_area_swap": "none",
+        "enter_game_swap": _off, "reach_area_swap": _off,
     }
 
 
@@ -91,33 +92,39 @@ def test_validate_ignores_self_in_others():
     assert gs.validate_block(me, [me]) is None
 
 
-class TestLoadoutSwapInGuiSchedule:
-    def test_block_to_active_carries_swaps(self):
-        blk = _blk(enter_game_swap="k", reach_area_swap="digits")
-        act = gs.block_to_active(blk)
-        assert act["enter_game_swap"] == "k"
-        assert act["reach_area_swap"] == "digits"
+_OFF = {"enabled": False, "mod": "none", "digit": "1"}
 
-    def test_block_to_active_defaults_missing_swaps_to_none(self):
+
+class TestLoadoutSwapInGuiSchedule:
+    def test_block_to_active_carries_chord(self):
+        blk = _blk(enter_game_swap={"enabled": True, "mod": "k", "digit": "3"},
+                   reach_area_swap={"enabled": True, "mod": "none", "digit": "7"})
+        act = gs.block_to_active(blk)
+        assert act["enter_game_swap"] == {"enabled": True, "mod": "k", "digit": "3"}
+        assert act["reach_area_swap"] == {"enabled": True, "mod": "none", "digit": "7"}
+
+    def test_block_to_active_defaults_missing_swaps(self):
         blk = _blk()
         blk.pop("enter_game_swap", None)
         blk.pop("reach_area_swap", None)
         act = gs.block_to_active(blk)
-        assert act["enter_game_swap"] == "none"
-        assert act["reach_area_swap"] == "none"
+        assert act["enter_game_swap"] == _OFF
+        assert act["reach_area_swap"] == _OFF
 
-    def test_block_to_active_coerces_illegal_present_value_to_none(self):
-        # 键在, 但值不在合法集合里 —— 回落 none, 不是原样带过
-        blk = _blk(enter_game_swap="xyz")
-        assert gs.block_to_active(blk)["enter_game_swap"] == "none"
+    def test_block_to_active_normalizes_bad_chord(self):
+        blk = _blk(enter_game_swap={"enabled": 1, "mod": "ctrl", "digit": "x"})
+        assert gs.block_to_active(blk)["enter_game_swap"] == _OFF
 
-    def test_new_block_template_has_none_swaps(self):
+    def test_new_block_template_swaps_disabled(self):
         cfg = {"profiles": [{"alias": "默认", "dir": "d"}], "schedule": []}
         tpl = gs.new_block_template(cfg)
-        assert tpl["enter_game_swap"] == "none"
-        assert tpl["reach_area_swap"] == "none"
+        assert tpl["enter_game_swap"] == _OFF
+        assert tpl["reach_area_swap"] == _OFF
 
-    def test_label_maps_are_inverse(self):
-        for k in ("none", "digits", "k", "l"):
-            assert gs._SWAP_FROM_LABEL[gs._SWAP_LABELS[k]] == k
+    def test_mod_label_maps_are_inverse(self):
+        for k in ("none", "k", "l"):
+            assert gs._SWAP_MOD_FROM_LABEL[gs._SWAP_MOD_LABELS[k]] == k
+
+    def test_digit_values_are_1_through_0(self):
+        assert gs._SWAP_DIGIT_VALUES == list("1234567890")
 

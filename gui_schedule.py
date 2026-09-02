@@ -14,12 +14,11 @@ WEEKDAY_LABELS = ("一", "二", "三", "四", "五", "六", "日")
 
 _ACTIVE_KEYS = app_config._ACTIVE_KEYS
 
-_SWAP_LABELS = {"none": "不切换", "digits": "全部数字键 1–0", "k": "k", "l": "l"}
-_SWAP_FROM_LABEL = {v: k for k, v in _SWAP_LABELS.items()}
-
-
-def _coerce_swap(v):
-    return v if isinstance(v, str) and v in _SWAP_LABELS else "none"
+# loadout 切换和弦: 每个字段 = 开关 + 修饰键下拉 + 数字下拉.
+_SWAP_MOD_LABELS = {"none": "无", "k": "k", "l": "l"}
+_SWAP_MOD_FROM_LABEL = {v: k for k, v in _SWAP_MOD_LABELS.items()}
+_SWAP_DIGIT_VALUES = list("1234567890")
+_coerce_swap_obj = app_config._coerce_swap_obj   # 单一真源
 
 
 # 目录名: 保留 \w(含汉字)和连字符, 其余替换成 _, 首尾 _ 去掉.
@@ -46,8 +45,8 @@ def block_to_active(block):
         "consecutive_short_round_limit": int(block["consecutive_short_round_limit"]),
         "enemy_ai_enabled": bool(block["enemy_ai_enabled"]),
         "auto_switch_server": bool(block["auto_switch_server"]),
-        "enter_game_swap": _coerce_swap(block.get("enter_game_swap")),
-        "reach_area_swap": _coerce_swap(block.get("reach_area_swap")),
+        "enter_game_swap": _coerce_swap_obj(block.get("enter_game_swap")),
+        "reach_area_swap": _coerce_swap_obj(block.get("reach_area_swap")),
     }
 
 
@@ -97,7 +96,8 @@ def new_block_template(cfg):
         "map": "desert", "location": None, "farming_area": None,
         "farming_duration": 300, "consecutive_short_round_limit": 2,
         "enemy_ai_enabled": True, "auto_switch_server": True,
-        "enter_game_swap": "none", "reach_area_swap": "none",
+        "enter_game_swap": {"enabled": False, "mod": "none", "digit": "1"},
+        "reach_area_swap": {"enabled": False, "mod": "none", "digit": "1"},
     }
 
 
@@ -243,18 +243,12 @@ class TimeBlockEditor(ctk.CTkToplevel):
             self._autosw.select()
         self._autosw.pack(anchor="w", padx=12, pady=6)
 
-        _swap_vals = list(_SWAP_LABELS.values())
-        ctk.CTkLabel(self, text="进游戏切换装备").pack(anchor="w", padx=12, pady=(6, 0))
-        self._enter_swap = ctk.CTkOptionMenu(self, values=_swap_vals)
-        self._enter_swap.set(_SWAP_LABELS[_coerce_swap(self._block.get("enter_game_swap"))])
-        self._enter_swap.pack(anchor="w", padx=12, pady=2)
-        _Tooltip(self._enter_swap,
-                 "每轮进游戏后按这组键换 loadout. 全部数字键 = 把 1 到 0 都点一遍, 整套主副对调.")
-        ctk.CTkLabel(self, text="到刷怪区切换装备").pack(anchor="w", padx=12, pady=(6, 0))
-        self._reach_swap = ctk.CTkOptionMenu(self, values=_swap_vals)
-        self._reach_swap.set(_SWAP_LABELS[_coerce_swap(self._block.get("reach_area_swap"))])
-        self._reach_swap.pack(anchor="w", padx=12, pady=2)
-        _Tooltip(self._reach_swap, "寻路到刷怪区后按这组键换 loadout.")
+        self._enter_swap_w = self._build_swap_field(
+            "enter_game_swap", "进游戏切换装备",
+            "每轮真的(重新)进游戏后按一次和弦换 loadout: 按住修饰键 → 按数字 → 松开.")
+        self._reach_swap_w = self._build_swap_field(
+            "reach_area_swap", "到刷怪区切换装备",
+            "寻路到刷怪区后按一次和弦换 loadout.")
 
         self._adv_open = False
         self._adv_btn = ctk.CTkButton(self, text="▸ 高级选项", anchor="w",
@@ -287,6 +281,35 @@ class TimeBlockEditor(ctk.CTkToplevel):
         br.pack(anchor="e", padx=12, pady=10)
         ctk.CTkButton(br, text="取消", width=70, command=self.destroy).pack(side="left", padx=4)
         ctk.CTkButton(br, text="保存", width=70, command=self._save).pack(side="left")
+
+    def _build_swap_field(self, key, title, tip):
+        """一个 loadout 切换字段: 开关 + 修饰键下拉(无/k/l) + 数字下拉(1..0).
+        返回 (switch, mod_menu, digit_menu); _collect 从这三个读回 {enabled,mod,digit}."""
+        cur = _coerce_swap_obj(self._block.get(key))
+        row = ctk.CTkFrame(self, fg_color="transparent")
+        row.pack(anchor="w", padx=12, pady=(6, 0), fill="x")
+        sw = ctk.CTkSwitch(row, text=title)
+        if cur["enabled"]:
+            sw.select()
+        sw.pack(side="left")
+        _Tooltip(sw, tip)
+        ctk.CTkLabel(row, text="按住").pack(side="left", padx=(10, 2))
+        mod = ctk.CTkOptionMenu(row, width=64, values=list(_SWAP_MOD_LABELS.values()))
+        mod.set(_SWAP_MOD_LABELS[cur["mod"]])
+        mod.pack(side="left")
+        ctk.CTkLabel(row, text="按").pack(side="left", padx=(6, 2))
+        digit = ctk.CTkOptionMenu(row, width=56, values=_SWAP_DIGIT_VALUES)
+        digit.set(cur["digit"])
+        digit.pack(side="left")
+        return sw, mod, digit
+
+    def _collect_swap(self, widgets):
+        sw, mod, digit = widgets
+        return {
+            "enabled": bool(sw.get()),
+            "mod": _SWAP_MOD_FROM_LABEL.get(mod.get(), "none"),
+            "digit": digit.get(),
+        }
 
     def _normalize_entry(self, entry):
         """失焦: 能规整就把输入框内容替换成规范 HH:MM; 规整不了就原样留着,
@@ -366,8 +389,8 @@ class TimeBlockEditor(ctk.CTkToplevel):
             farming_area=[list(area[0]), list(area[1])] if area else None,
             enemy_ai_enabled=bool(self._enemy.get()),
             auto_switch_server=bool(self._autosw.get()),
-            enter_game_swap=_SWAP_FROM_LABEL.get(self._enter_swap.get(), "none"),
-            reach_area_swap=_SWAP_FROM_LABEL.get(self._reach_swap.get(), "none"),
+            enter_game_swap=self._collect_swap(self._enter_swap_w),
+            reach_area_swap=self._collect_swap(self._reach_swap_w),
         )
         try:
             blk["farming_duration"] = int(self._dur_e.get())
