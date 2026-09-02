@@ -419,6 +419,55 @@ def test_run_worker_locks_biome_on_title_before_clicking_start(monkeypatch):
     assert events == [("lock", "desert"), "wait", "click"]
 
 
+def test_run_worker_locks_biome_only_once_across_respawns(monkeypatch):
+    """每次重生都回开局菜单, 但生态区只锁 1 次 —— florr 重生留在同一台服务器,
+    每次重生都 forceServerID 是白重连. 后续重生照常点开始, 不锁."""
+    _stub_run_worker_env(monkeypatch)
+    locks, clicks = [], []
+    monkeypatch.setattr(main, "_lock_biome", lambda b: locks.append(b) or True)
+    monkeypatch.setattr(main, "_wait_for_start_menu", lambda *a, **k: True)
+    monkeypatch.setattr(main, "on_start_screen", lambda: True)
+    monkeypatch.setattr(main, "click_start_game", lambda: clicks.append(1) or True)
+    monkeypatch.setattr(main, "_reassert_invert_attack", lambda: "on_already")
+    n = {"i": 0}
+
+    def pathing(*a, **k):
+        n["i"] += 1
+        if n["i"] >= 3:
+            raise KeyboardInterrupt
+        return False
+
+    monkeypatch.setattr(main, "lazy_theta_pathing", pathing)
+    with pytest.raises(KeyboardInterrupt):
+        main.run_worker({})
+    assert locks == ["desert"]      # 3 轮都进开局菜单, 只锁 1 次
+    assert len(clicks) == 3         # 每轮照常点开始
+
+
+def test_run_worker_retries_biome_lock_next_respawn_if_it_failed(monkeypatch):
+    """首次锁失败(CDP 抽风)不把标记设死 —— 下次回开局菜单再试, 成功后才不再试."""
+    _stub_run_worker_env(monkeypatch)
+    monkeypatch.setattr(main, "on_start_screen", lambda: True)
+    monkeypatch.setattr(main, "click_start_game", lambda: True)
+    monkeypatch.setattr(main, "_wait_for_start_menu", lambda *a, **k: True)
+    monkeypatch.setattr(main, "_reassert_invert_attack", lambda: "on_already")
+    attempts = []
+    monkeypatch.setattr(main, "_lock_biome",
+                        lambda b: attempts.append(b) or len(attempts) >= 2)
+    n = {"i": 0}
+
+    def pathing(*a, **k):
+        n["i"] += 1
+        if n["i"] >= 3:
+            raise KeyboardInterrupt
+        return False
+
+    monkeypatch.setattr(main, "lazy_theta_pathing", pathing)
+    with pytest.raises(KeyboardInterrupt):
+        main.run_worker({})
+    assert attempts == ["desert", "desert"]   # 失败那次下轮重试, 第 2 次成功后不再试
+
+
 def test_run_worker_does_not_lock_biome_when_not_on_start_screen(monkeypatch):
     _stub_run_worker_env(monkeypatch)   # on_start_screen 恒 False
     locks = []
