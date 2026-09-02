@@ -53,7 +53,7 @@ damage). To (re)calibrate: open the florr.io devtools console, paste
 `set.mark()` each time, then `set.solve()`), and put the returned address into
 `florr_settings.INVERT_ATTACK_ADDR`.
 
-### 按区域切换 loadout（可选）
+## 按区域切换 loadout（可选）
 
 每个调度时块可以配两组按键：
 

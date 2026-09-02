@@ -721,24 +721,31 @@ def run_worker(cfg):
         round_start_time = time.time()
         print(f"\n{'='*50}\n第 {round_count} 轮\n{'='*50}")
 
+        entered_game = False
         if on_death_screen():
             print("💀 检测到死亡结算画面, 点击继续...")
             overlay.update(state="重新开始", message="死亡, 点击继续...")
             click_continue_after_death()
+            entered_game = True
             time.sleep(2)
         if on_start_screen():
             print("🔁 检测到开局菜单, 点击开始按钮进入游戏...")
             overlay.update(state="重新开始", message="点击开始按钮...")
             click_start_game()
+            entered_game = True
             time.sleep(3)
 
         # 进游戏了(或本来就在局内): florr 刚才可能从账号数据把「反转攻击键」重置
         # 了, 每轮重写一次. on_already 静默(常态), turned_on / failed 才打日志.
         _reassert_invert_attack()
 
-        # 进游戏了: 按配置的键切到"赶路" loadout (florr 重生会把 loadout 拉回账号
-        # 默认, 所以每轮进来都按一次). press_swap 内部 warn-only, 不打断轮次.
-        loadout_swap.press_swap(w["enter_game_swap"])
+        # 只在这一轮真的(重新)进了游戏、或首轮时才切 loadout —— 一命跑满
+        # farming_duration 没死的下一轮不过上面两个分支, 玩家还在场上、florr 没重置
+        # loadout, 再按一次 digits 这种盲切换会让非对称配置每轮漂移. press_swap
+        # 内部 warn-only, 不打断轮次.
+        swap_this_round = entered_game or round_count == 1
+        if swap_this_round:
+            loadout_swap.press_swap(w["enter_game_swap"])
 
         print(f"📍 目标区域: {farming_area}\n")
         overlay.update(state="启动", target=location,
@@ -746,8 +753,10 @@ def run_worker(cfg):
 
         if lazy_theta_pathing(location, [farming_area]):
             print("✅ 到达刷怪区域！")
-            # 到刷怪区了: 按配置的键切到"输出" loadout.
-            loadout_swap.press_swap(w["reach_area_swap"])
+            # 到刷怪区了: 按配置的键切到"输出" loadout. 跟 enter swap 同一道 gate ——
+            # 存活续命轮 florr 没重置 loadout, 不重按.
+            if swap_this_round:
+                loadout_swap.press_swap(w["reach_area_swap"])
             auto_farming(farming_area, farming_duration,
                          enemy_ai_enabled=w["enemy_ai_enabled"])
         else:

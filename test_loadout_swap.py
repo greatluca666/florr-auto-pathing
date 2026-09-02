@@ -40,4 +40,6 @@ def test_press_exception_is_swallowed(capsys):
     def boom(_k):
         raise RuntimeError("no focus")
     loadout_swap.press_swap("k", press=boom, sleep=lambda _s: None)   # 不抛
-    assert "装备切换按键失败" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "装备切换按键失败" in out
+    assert out.startswith("⚠️")          # constraint 3: warn-only 行带 ⚠️ 前缀

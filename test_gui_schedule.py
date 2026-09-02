@@ -90,6 +90,11 @@ class TestLoadoutSwapInGuiSchedule:
         assert act["enter_game_swap"] == "none"
         assert act["reach_area_swap"] == "none"
 
+    def test_block_to_active_coerces_illegal_present_value_to_none(self):
+        # 键在, 但值不在合法集合里 —— 回落 none, 不是原样带过
+        blk = _blk(enter_game_swap="xyz")
+        assert gs.block_to_active(blk)["enter_game_swap"] == "none"
+
     def test_new_block_template_has_none_swaps(self):
         cfg = {"profiles": [{"alias": "默认", "dir": "d"}], "schedule": []}
         tpl = gs.new_block_template(cfg)

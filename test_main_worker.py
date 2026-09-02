@@ -352,7 +352,9 @@ def _swap_env(monkeypatch, *, enter="k", reach="l"):
     return seen
 
 
-def test_run_worker_presses_enter_swap_each_round(monkeypatch):
+def test_run_worker_presses_enter_swap_on_entry(monkeypatch):
+    # 第 1 轮总会切 (round_count == 1); 这里第 1 轮就在寻路处掐断, 只证明
+    # "进了游戏 → 按 enter swap", 没到区域 → reach 不按.
     seen = _swap_env(monkeypatch, enter="k", reach="l")
     monkeypatch.setattr(main, "lazy_theta_pathing",
                         lambda *a, **k: (_ for _ in ()).throw(KeyboardInterrupt))
@@ -393,4 +395,50 @@ def test_run_worker_skips_reach_swap_when_pathing_fails(monkeypatch):
     with pytest.raises(KeyboardInterrupt):
         main.run_worker({})
     assert "l" not in seen               # 没到区域 → reach 永不触发
-    assert seen == ["k", "k"]            # 两轮各按一次 enter
+    assert seen == ["k"]                 # 第 1 轮进游戏切一次; 第 2 轮没重进游戏
+                                         # (_stub 里 on_start/on_death 恒 False) → 不切
+
+
+def test_run_worker_skips_swaps_on_survived_continuation_round(monkeypatch):
+    # 一命跑满 farming_duration 没死: 下一轮不过 on_death/on_start 分支, florr 没
+    # 重置 loadout, 不该再切. auto_farming 第 1 次正常返回, 第 2 次掐断.
+    seen = _swap_env(monkeypatch, enter="k", reach="l")
+    monkeypatch.setattr(main, "lazy_theta_pathing", lambda *a, **k: True)
+    calls = {"n": 0}
+
+    def fake_farm(*a, **k):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return None
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(main, "auto_farming", fake_farm)
+    with pytest.raises(KeyboardInterrupt):
+        main.run_worker({})
+    assert seen == ["k", "l"]            # 只有第 1 轮切; 第 2 轮存活续命轮不切
+
+
+def test_run_worker_swaps_again_after_real_respawn(monkeypatch):
+    # 每轮都真的过 on_start_screen 分支 (= 真重进游戏) → 每轮都该切 enter swap,
+    # 证明 gate 是"这轮真进了游戏"而不是"仅第 1 轮".
+    seen = _swap_env(monkeypatch, enter="k", reach="l")
+    monkeypatch.setattr(main, "click_start_game", lambda: None)
+    starts = {"n": 0}
+
+    def fake_start_screen():
+        starts["n"] += 1
+        return starts["n"] <= 2          # 第 1、2 轮都在开局菜单
+
+    monkeypatch.setattr(main, "on_start_screen", fake_start_screen)
+    calls = {"n": 0}
+
+    def fake_path(*a, **k):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return False
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(main, "lazy_theta_pathing", fake_path)
+    with pytest.raises(KeyboardInterrupt):
+        main.run_worker({})
+    assert seen == ["k", "k"]            # 两轮都真重进了游戏 → 两轮都切 enter
