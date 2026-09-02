@@ -270,12 +270,21 @@ class TimeBlockEditor(ctk.CTkToplevel):
             self._acct.set(self._profiles[0]["alias"])
             return
 
-        def _ready(new_alias):
-            self._profiles.append({"alias": new_alias, "dir": f"chrome-profiles/{new_alias}"})
-            self._acct.configure(values=[p["alias"] for p in self._profiles] + ["＋ 新建…"])
-            self._acct.set(new_alias)
+        self.new_profile_cb(alias, self._add_profile_to_menu)
 
-        self.new_profile_cb(alias, _ready)
+    def _add_profile_to_menu(self, new_alias):
+        """新建账号 + 登录引导完成后回调: 把新别名加进账号下拉并选中.
+        登录引导是非模态的, 用户可能在登录完成前把这个编辑器关掉了 —— 那样
+        self / self._acct 的 tk 控件已销毁, configure 会 TclError. profile 本身
+        已被 new_profile_cb 建好 + 存盘, 这里只是刷下拉, 编辑器没了就直接跳过."""
+        try:
+            if not self.winfo_exists():
+                return
+        except Exception:
+            return
+        self._profiles.append({"alias": new_alias, "dir": f"chrome-profiles/{new_alias}"})
+        self._acct.configure(values=[p["alias"] for p in self._profiles] + ["＋ 新建…"])
+        self._acct.set(new_alias)
 
     def _on_map_change(self, name):
         self._point = None

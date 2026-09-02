@@ -154,4 +154,5 @@ class AccountsPage(ctk.CTkFrame):
         if not alias:
             return
         if self.new_profile_cb:
-            self.new_profile_cb(alias, lambda *_a: self.refresh())
+            self.new_profile_cb(
+                alias, lambda *_a: self.winfo_exists() and self.refresh())
