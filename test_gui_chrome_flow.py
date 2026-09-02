@@ -1,92 +1,92 @@
-import pytest
-
 import gui_chrome_flow as flow
 
 
-@pytest.fixture(autouse=True)
-def stub_cdp(monkeypatch):
-    state = {"ready": False, "launched": 0, "tab_results": [], "ready_calls": 0,
-             "wait_timeouts": [], "port_reachable": True}
+class FakeAfter:
+    """把 widget.after(ms, fn) 收集起来, 手动 flush —— 不进 tk 主循环。"""
+    def __init__(self):
+        self.calls = []
 
-    def stub_ready():
-        state["ready_calls"] += 1
-        return state["ready"]
+    def __call__(self, ms, fn=None, *a):
+        if fn is not None:
+            self.calls.append((fn, a))
+        return len(self.calls)
 
-    def stub_wait(timeout, *a, **k):
-        state["wait_timeouts"].append(timeout)
-        return state["tab_results"].pop(0)
-
-    monkeypatch.setattr(flow.cdp_bridge, "is_dedicated_chrome_ready", stub_ready)
-    monkeypatch.setattr(flow.cdp_bridge, "quit_and_launch_chrome",
-                        lambda: state.__setitem__("launched", state["launched"] + 1))
-    monkeypatch.setattr(flow.cdp_bridge, "wait_for_florr_tab", stub_wait)
-    # 别让重试分支真去连 127.0.0.1:9222
-    monkeypatch.setattr(flow.cdp_bridge, "is_cdp_port_reachable",
-                        lambda: state["port_reachable"])
-    return state
+    def flush(self):
+        pending, self.calls = self.calls, []
+        for fn, a in pending:
+            fn(*a)
 
 
-def test_returns_immediately_when_already_ready(stub_cdp):
-    stub_cdp["ready"] = True
-    flow.ensure_chrome_ready(None, confirm=lambda p: pytest.fail("不该问确认"),
-                             prompt_retry=lambda p, r: pytest.fail("不该问重试"))
-    assert stub_cdp["launched"] == 0
+class FakeHost:
+    """冒充引导区 CTkFrame: 只记录 show/hide。"""
+    def __init__(self):
+        self.visible = False
+
+    def show(self):
+        self.visible = True
+
+    def hide(self):
+        self.visible = False
 
 
-def test_cancel_at_confirm_raises(stub_cdp):
-    with pytest.raises(flow.ChromeSetupCancelled):
-        flow.ensure_chrome_ready(None, confirm=lambda p: False,
-                                 prompt_retry=lambda p, r: True)
-    assert stub_cdp["launched"] == 0
+def _guide(tab_results, after):
+    launched = []
+    it = iter(tab_results)
+
+    def launch(profile_dir, **kw):
+        launched.append((profile_dir, kw))
+
+    def poll(timeout):
+        try:
+            return next(it)
+        except StopIteration:
+            return None
+
+    host = FakeHost()
+    g = flow.LoginGuide(host, after=after, launch=launch, poll=poll)
+    g._launched = launched
+    return g, host
 
 
-def test_confirm_then_tab_found_succeeds(stub_cdp):
-    stub_cdp["tab_results"] = [{"url": "https://florr.io/"}]
-    flow.ensure_chrome_ready(None, confirm=lambda p: True,
-                             prompt_retry=lambda p, r: pytest.fail("不该问重试"))
-    assert stub_cdp["launched"] == 1
-    # 确保 wait_for_florr_tab 被调用时指定了 15 秒超时
-    assert stub_cdp["wait_timeouts"] == [15]
+def test_start_launches_windowed_florr_and_shows_host():
+    after = FakeAfter()
+    g, host = _guide([None], after)
+    g.start("chrome-profiles/小号2", on_done=lambda: None, on_cancel=lambda: None)
+    assert g._launched[0][0] == "chrome-profiles/小号2"
+    assert g._launched[0][1]["fullscreen"] is False
+    assert g._launched[0][1]["open_url"] == "https://florr.io"
+    assert host.visible is True
 
 
-def test_retry_once_then_found(stub_cdp):
-    stub_cdp["tab_results"] = [None, {"url": "https://florr.io/"}]
-    retries = []
-    flow.ensure_chrome_ready(None, confirm=lambda p: True,
-                             prompt_retry=lambda p, r: retries.append(r) or True)
-    assert len(retries) == 1
-    # 端口通 = "Chrome 起来了, 就差 florr.io 标签页"
-    assert retries == [True]
-    assert stub_cdp["launched"] == 1
-    # 确保就绪状态仅在初始检查时被查询一次，重试循环中不会重新轮询
-    assert stub_cdp["ready_calls"] == 1
+def test_poll_until_tab_then_finish_calls_on_done():
+    after = FakeAfter()
+    g, host = _guide([None, None, {"url": "https://florr.io/"}], after)
+    done = []
+    g.start("d", on_done=lambda: done.append(1), on_cancel=lambda: None)
+    after.flush()   # poll #1 -> None -> reschedule
+    after.flush()   # poll #2 -> None -> reschedule
+    after.flush()   # poll #3 -> tab found
+    assert g._detected is True
+    g.finish()
+    assert done == [1]
+    assert host.visible is False
 
 
-def test_retry_declined_raises(stub_cdp):
-    stub_cdp["tab_results"] = [None]
-    with pytest.raises(flow.ChromeSetupCancelled):
-        flow.ensure_chrome_ready(None, confirm=lambda p: True,
-                                 prompt_retry=lambda p, r: False)
+def test_cancel_hides_and_calls_on_cancel_and_stops_polling():
+    after = FakeAfter()
+    g, host = _guide([None], after)
+    cancelled = []
+    g.start("d", on_done=lambda: None, on_cancel=lambda: cancelled.append(1))
+    g.cancel()
+    assert cancelled == [1]
+    assert host.visible is False
+    after.flush()   # 已取消 —— 不该再有 poll 回调执行(不抛即可)
 
 
-def test_retry_prompt_says_chrome_unreachable_when_port_closed(stub_cdp):
-    """CDP 端口都连不上时, 重试提示要说的是"Chrome 没起来", 而不是让用户
-    再去那个根本不存在的窗口里找 florr.io 标签页."""
-    stub_cdp["tab_results"] = [None]
-    stub_cdp["port_reachable"] = False
-    seen = []
-    with pytest.raises(flow.ChromeSetupCancelled):
-        flow.ensure_chrome_ready(None, confirm=lambda p: True,
-                                 prompt_retry=lambda p, r: seen.append(r) or False)
-    assert seen == [False]
-
-
-def test_default_prompt_retry_picks_message_by_reachability(monkeypatch):
-    """默认实现(真拿 messagebox 的那个)也要分两套文案."""
-    shown = []
-    monkeypatch.setattr(flow.messagebox, "askretrycancel",
-                        lambda title, msg, **k: shown.append((title, msg)) or True)
-    flow._default_prompt_retry(None, True)
-    flow._default_prompt_retry(None, False)
-    assert "florr.io" in shown[0][0]
-    assert "Chrome" in shown[1][0] and "florr.io" not in shown[1][0]
+def test_manual_finish_before_detection_still_works():
+    after = FakeAfter()
+    g, host = _guide([None], after)
+    done = []
+    g.start("d", on_done=lambda: done.append(1), on_cancel=lambda: None)
+    g.finish()      # 用户没等检测就手点「完成」
+    assert done == [1]
