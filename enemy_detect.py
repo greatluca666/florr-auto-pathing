@@ -352,8 +352,21 @@ def select_action(detections, avoid_trigger_px=400, cautious_hold_px=250,
 
 
 _DESERT_SPECIES = {"scorpion", "beetle", "cactus", "sandstorm", "sand_centipede", "soldier_fire_ant"}
-_SPECIES_ALIASES = {}   # florr English name (slugified) -> desert slug, for any spelling mismatch;
-                        # fill after a live check. e.g. {"centipede": "sand_centipede"}
+_SPECIES_ALIASES = {
+    # 中文客户端: canvas 解出的名字是中文, slug = 原字符串(lower/空格替换对中文是 no-op)。
+    # value 必须落在 SPECIES_RANK 那 6 个 slug 里, 否则 priority_score 会 KeyError。
+    "沙尘暴": "sandstorm",
+    "仙人掌": "cactus",
+    "甲虫": "beetle",
+    "蝎子": "scorpion",
+    "蜈蚣": "sand_centipede",
+    "火兵蚁": "soldier_fire_ant",
+    "火蚁": "soldier_fire_ant",       # 工蚁; 本项目不分工/兵, 都归 soldier_fire_ant
+    "火蚁穴": "soldier_fire_ant",     # Fire Ant Hole: 不动的出怪口, 没有独立 slug —— 折到
+                                     # 最接近的火蚁威胁; Mythic 档会被当 strafe 目标, 可接受
+    "瓢虫": "sand_centipede",         # 非沙漠怪(花园的), 无害低价值 —— 折到最低 rank slug
+                                     # 当低优先接战目标, 免得每帧刷"未识别"日志
+}
 
 _seen_unknown_names = set()   # slugs already reported by _species_from_name — recovers the
                               # diagnostic the deleted debug_enemy_detect.py used to give:
