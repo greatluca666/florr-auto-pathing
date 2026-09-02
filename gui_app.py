@@ -1,14 +1,16 @@
 """florr-auto-pathing 的控制面板 GUI. 无参跑 `python main.py` / 双击 exe 就进这里.
 
-进程模型: 这个窗口不跑寻路逻辑 —— 点"开始"时它 (1) 用模态框引导好专用 Chrome
-和 florr-auto-afk, (2) 把界面上的配置写进 config.json, (3) subprocess.Popen 一个
-`main.py --worker` 子进程, 把它的 stdout 逐行灌进日志框. "停止"关掉子进程的 stdin
-管道(EOF), worker 那边的看门线程读到 EOF 就先 reset_keyboard() 再退出.
+阶段2: 中间是"时块列表" —— 按星期几 + 时间段配 账号/地图/目标点/刷怪区.
+点"开始调度"后, GUI 内的调度器(self.after 循环)每 30s 查一次此刻命中哪个时块,
+按需 关掉 Chrome 换 profile 重开(--start-fullscreen + florr.io)、把该时块的刷怪
+参数刷进 config['active']、(重)起一个 `main.py --worker` 子进程. 空档期停 worker.
+调度驱动的运行全程零人工; 只有用户主动"新建账号 / 重新登录"才弹非模态登录引导.
 """
 import os
 import subprocess
 import sys
 import threading
+import time
 import traceback
 from tkinter import messagebox
 
@@ -17,10 +19,13 @@ import customtkinter as ctk
 import app_config
 import afk_watch
 import cdp_bridge
+import gui_accounts
 import gui_chrome_flow
+import gui_schedule
 
 _IS_WINDOWS = sys.platform == "win32"
 _LOG_MAX_LINES = 2000  # 日志框最多留这么多行, 再多就从头截掉
+_TICK_MS = 30_000      # 调度器 tick 间隔
 
 
 def worker_command():
@@ -31,22 +36,6 @@ def worker_command():
         return [sys.executable, "--worker"]
     main_py = os.path.join(os.path.dirname(os.path.abspath(__file__)), "main.py")
     return [sys.executable, "-u", main_py, "--worker"]
-
-
-def build_worker_config(*, map_name, location, area, duration, short_limit,
-                        enemy_ai, auto_switch, afk):
-    """界面上的值 -> app_config schema 的 dict. 坐标统一转成 list(JSON 里没有 tuple)."""
-    return {
-        "map": map_name,
-        "location": [int(location[0]), int(location[1])],
-        "farming_area": [[int(area[0][0]), int(area[0][1])],
-                         [int(area[1][0]), int(area[1][1])]],
-        "farming_duration": int(duration),
-        "consecutive_short_round_limit": int(short_limit),
-        "enemy_ai_enabled": bool(enemy_ai),
-        "auto_switch_server": bool(auto_switch),
-        "afk_enabled": bool(afk),
-    }
 
 
 def parse_positive_ints(*strs):
@@ -107,17 +96,55 @@ def start_afk(*, exe_exists, running, confirm_download):
     return "started"
 
 
+def plan_transition(running_id, new_block, chrome_profile):
+    """给定当前在跑的时块 id + 此刻命中的时块 + 当前 Chrome 用的 profile,
+    算出调度该干什么。纯函数, 无 I/O。
+      noop  —— 什么都不用做(同一个时块, 或本来就空档)
+      idle  —— 停 worker(从跑着变成空档)
+      run   —— 停 worker + (可能)换 Chrome + 起 worker
+    """
+    if new_block is None:
+        return {"action": "idle"} if running_id is not None else {"action": "noop"}
+    if new_block["id"] == running_id:
+        return {"action": "noop"}
+    return {
+        "action": "run",
+        "relaunch_chrome": new_block["profile"] != chrome_profile,
+        "profile": new_block["profile"],
+    }
+
+
+class _GuideHost:
+    """把主窗口里一块 CTkFrame 包成 LoginGuide 要的 show()/hide() 接口。"""
+
+    def __init__(self, frame, grid_kw):
+        self._frame = frame
+        self._grid_kw = grid_kw
+
+    def show(self):
+        self._frame.grid(**self._grid_kw)
+
+    def hide(self):
+        self._frame.grid_remove()
+
+
 class App(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("florr-auto-pathing")
-        self.geometry("880x560")
+        self.geometry("900x620")
         ctk.set_appearance_mode("dark")
 
         self._cfg = app_config.load_config()
         self.proc = None
         self._reader = None
         self._closing = False
+
+        # 调度器状态
+        self._sched_running = False
+        self._running_block_id = None
+        self._chrome_profile = None
+        self._tick_job = None
 
         self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(0, weight=1)
@@ -126,15 +153,11 @@ class App(ctk.CTk):
         side = ctk.CTkFrame(self, width=120, corner_radius=0)
         side.grid(row=0, column=0, sticky="nsew")
         side.grid_rowconfigure(4, weight=1)  # spacer 行
-        self._pages = {}
-        for i, name in enumerate(("控制台", "账号", "时间表")):
-            btn = ctk.CTkButton(side, text=name, anchor="w",
-                                command=lambda n=name: self._show_page(n))
-            btn.grid(row=i, column=0, padx=10, pady=(10 if i == 0 else 4, 4), sticky="ew")
-            if name != "控制台":
-                btn.configure(state="disabled")  # 阶段2
+        for i, name in enumerate(("时间表", "账号")):
+            ctk.CTkButton(side, text=name, anchor="w",
+                          command=lambda n=name: self._show_page(n)).grid(
+                row=i, column=0, padx=10, pady=(10 if i == 0 else 4, 4), sticky="ew")
 
-        # 底部大 AFK 开关
         afk_box = ctk.CTkFrame(side, fg_color="transparent")
         afk_box.grid(row=5, column=0, padx=10, pady=14, sticky="ew")
         ctk.CTkLabel(afk_box, text="自动检测 AFK", font=("", 12)).pack()
@@ -142,303 +165,294 @@ class App(ctk.CTk):
         self.afk_switch.pack(pady=4)
         if self._cfg["afk_enabled"]:
             self.afk_switch.select()
-            # 光 select() 只是把开关画成"开", 不代表 florr-auto-afk 真在跑 ——
-            # 上次开着关掉程序 / 重启电脑后 segment.exe 多半已经没了, 而 poll_afk_pause()
-            # 读不到它的日志就永远不暂停. 启动时按持久化的状态主动补一次 ensure
-            # (跟用户手动拨到"开"一个效果). 用 after() 推到窗口建好之后再跑.
             self.after(400, self._ensure_afk)
         if not _IS_WINDOWS:
             self.afk_switch.configure(state="disabled")
             ctk.CTkLabel(afk_box, text="(仅 Windows)", font=("", 9),
                          text_color="gray").pack()
 
-        # ---- 控制台页 ----
+        # ---- 主区 ----
         self.content = ctk.CTkFrame(self)
         self.content.grid(row=0, column=1, sticky="nsew", padx=12, pady=12)
-        self.content.grid_columnconfigure(0, weight=3)
-        self.content.grid_columnconfigure(1, weight=2)
-        self.content.grid_rowconfigure(1, weight=1)
+        self.content.grid_columnconfigure(0, weight=1)
+        self.content.grid_rowconfigure(0, weight=1)
 
-        self.map_menu = ctk.CTkOptionMenu(
-            self.content, values=list(app_config._VALID_MAPS),
-            command=self._on_map_change)
-        self.map_menu.set(self._cfg["map"])
-        self.map_menu.grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 8))
+        # 登录引导区(默认隐藏) —— 先建, 下面账号页要用它
+        self._guide_frame = ctk.CTkFrame(self.content)
+        self._guide_grid_kw = dict(row=1, column=0, sticky="ew", pady=(8, 0))
+        for txt in ("① 已在 Chrome 打开 florr.io",
+                    "② 在那个窗口登录你的账号",
+                    "③ 登录完成后点右边 →"):
+            ctk.CTkLabel(self._guide_frame, text=txt, anchor="w").pack(
+                anchor="w", padx=10)
+        gbtns = ctk.CTkFrame(self._guide_frame, fg_color="transparent")
+        gbtns.pack(anchor="e", padx=10, pady=6)
+        ctk.CTkButton(gbtns, text="完成", width=70,
+                      command=lambda: self._login_guide.finish()).pack(side="left", padx=4)
+        ctk.CTkButton(gbtns, text="取消", width=70, fg_color="gray",
+                      command=lambda: self._login_guide.cancel()).pack(side="left")
+        self._login_guide = gui_chrome_flow.LoginGuide(
+            _GuideHost(self._guide_frame, self._guide_grid_kw), after=self.after)
 
-        from gui_map_picker import MapPicker
-        self.picker = MapPicker(
-            self.content,
-            on_point_change=self._on_picker_point,
-            on_area_change=self._on_picker_area)
-        self.picker.grid(row=1, column=0, sticky="nsew", padx=(0, 10))
+        self._sched_list = gui_schedule.ScheduleList(
+            self.content, get_cfg=self._get_cfg, save_cfg=self._save_cfg,
+            open_editor=self._open_editor)
+        self._accounts = gui_accounts.AccountsPage(
+            self.content, get_cfg=self._get_cfg, save_cfg=self._save_cfg,
+            login_guide=self._login_guide)
+        self._accounts.new_profile_cb = self._make_profile_then
 
-        right = ctk.CTkFrame(self.content, fg_color="transparent")
-        right.grid(row=1, column=1, sticky="nsew")
-
-        self.duration_entry = self._labeled_entry(right, "刷怪时长 (秒)",
-                                                  str(self._cfg["farming_duration"]))
-        self.enemy_switch = ctk.CTkSwitch(right, text="索敌 AI (YOLO 追击/规避)")
-        self.enemy_switch.pack(anchor="w", pady=6)
-        if self._cfg["enemy_ai_enabled"]:
-            self.enemy_switch.select()
-        self.short_entry = self._labeled_entry(
-            right, "连续短局阈值", str(self._cfg["consecutive_short_round_limit"]))
-        self.autoswitch_check = ctk.CTkCheckBox(right, text="连续没刷满自动换服务器")
-        self.autoswitch_check.pack(anchor="w", pady=6)
-        if self._cfg["auto_switch_server"]:
-            self.autoswitch_check.select()
-
-        self.log_box = ctk.CTkTextbox(right, font=("Menlo", 11), state="disabled")
-        self.log_box.pack(fill="both", expand=True, pady=(8, 0))
+        self.log_box = ctk.CTkTextbox(self.content, font=("Menlo", 11), state="disabled")
+        self.log_box.grid(row=2, column=0, sticky="nsew", pady=(8, 0))
+        self.content.grid_rowconfigure(2, weight=1)
 
         self.status_label = ctk.CTkLabel(self.content, text="状态：未运行", anchor="w")
-        self.status_label.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(8, 4))
+        self.status_label.grid(row=3, column=0, sticky="ew", pady=(8, 4))
 
-        self.start_btn = ctk.CTkButton(self.content, text="▶ 开始", height=40,
+        self.start_btn = ctk.CTkButton(self.content, text="▶ 开始调度", height=40,
                                        command=self._on_start_stop)
-        self.start_btn.grid(row=3, column=0, columnspan=2, sticky="ew")
+        self.start_btn.grid(row=4, column=0, sticky="ew")
 
-        # 初值灌进选择器
-        self.picker.load_map(self._cfg["map"])
-        self.picker.set_point(tuple(self._cfg["location"]))
-        self.picker.set_area([tuple(p) for p in self._cfg["farming_area"]])
-        self._point = tuple(self._cfg["location"])
-        self._area = [tuple(p) for p in self._cfg["farming_area"]]
+        self._page_widgets = {"时间表": self._sched_list, "账号": self._accounts}
+        self._show_page("时间表")
 
         # 放在最后: 这个钩子会往 self.log_box 里写, 得等控件都建好.
         self.report_callback_exception = self._report_exception
 
-    def _report_exception(self, exc_type, exc_value, exc_tb):
-        # console=False 后 Tk 回调里未捕获的异常本来会写进一个丢弃一切的 stderr ——
-        # 这是这个窗口唯一能把"出错了"告诉用户的地方.
-        self._log_line(f"❌ {exc_type.__name__}: {exc_value}\n")
-        traceback.print_exception(exc_type, exc_value, exc_tb)
+    # ---- cfg 读写 ----
+    def _get_cfg(self):
+        return self._cfg
 
-    def _labeled_entry(self, parent, label, initial):
-        ctk.CTkLabel(parent, text=label, anchor="w").pack(anchor="w")
-        e = ctk.CTkEntry(parent)
-        e.insert(0, initial)
-        e.pack(anchor="w", fill="x", pady=(0, 6))
-        return e
-
-    def _on_map_change(self, name):
-        self.picker.load_map(name)
-        self.picker.set_point(None)
-        self.picker.set_area(None)
-        self._point = None
-        self._area = None
-        self._log_line(f"已切到 {name}，请重新点目标点 / 框刷怪区\n")
-
-    def _on_picker_point(self, pt):
-        self._point = pt
-
-    def _on_picker_area(self, area):
-        self._area = [tuple(area[0]), tuple(area[1])]
-
-    def _current_values(self):
-        return dict(
-            map_name=self.map_menu.get(),
-            location=self._point,
-            area=self._area,
-            duration=self.duration_entry.get(),
-            short_limit=self.short_entry.get(),
-            enemy_ai=bool(self.enemy_switch.get()),
-            auto_switch=bool(self.autoswitch_check.get()),
-            afk=bool(self.afk_switch.get()),
-        )
-
-    def _log_line(self, text):
-        self.log_box.configure(state="normal")
-        self.log_box.insert("end", text)
-        # bot 是按天跑的, 日志框不能无限长: 超过上限就把最老的那些行整段删掉,
-        # 只留最近 _LOG_MAX_LINES 行.
-        lines = int(self.log_box.index("end-1c").split(".")[0])
-        if lines > _LOG_MAX_LINES:
-            self.log_box.delete("1.0", f"end-{_LOG_MAX_LINES}l")
-        self.log_box.see("end")
-        self.log_box.configure(state="disabled")
-
-    def _on_start_stop(self):
-        if self.proc and self.proc.poll() is None:
-            self._stop_worker()
-        else:
-            self._start_worker()
-
-    def _start_worker(self):
-        # fail-fast: 先跑本地那几个便宜的校验, 再走重活儿 —— Chrome 重启 / AFK 下载
-        # (最多卡 90 秒) / 切全屏都在校验之后. 点了开始却没框刷怪区 / 数字填错的用户
-        # 立刻收到提示, 不会先被一串对话框拖一遍. 顺序:
-        # 校验 location/area → 校验数字 → 专用 Chrome 就绪 → (开关开着才)确保
-        # florr-auto-afk → 切全屏确认(紧贴 Popen 之前). 任一步取消就静默中止.
-        vals = self._current_values()
-        point, area = resolve_point_and_area(vals["location"], vals["area"])
-        if point is None:
-            self._log_line("⚠️ 请在地图上点一个目标点, 或框一个刷怪区域(二选一即可)\n")
-            return
-        vals["location"] = point
-        vals["area"] = area
-        # 只要校验结果, 转好的数字用不上 —— build_worker_config() 自己会
-        # int() 一遍 vals 里的原始字符串.
-        if parse_positive_ints(vals["duration"], vals["short_limit"]) is None:
-            self._log_line("⚠️ 时长 / 短局阈值必须是正整数\n")
-            return
-
-        # Chrome 引导: 只有"专用 Chrome 没就绪"时才会关掉现有 Chrome 并开一个新的.
-        # 上一轮开始已经拉起过、还开着的话, is_dedicated_chrome_ready() 为真, 这里
-        # 直接跳过 —— 用户会觉得"点了开始却没开浏览器", 所以把跳过的原因也打到日志里.
-        self._log_line("检查专用 Chrome…\n")
-        self.attributes("-topmost", True)   # 让引导弹窗浮到全屏游戏之上
-        try:
-            if cdp_bridge.is_dedicated_chrome_ready():
-                self._log_line("专用 Chrome 已就绪(9222 端口 + florr.io 标签页), 不重开\n")
-            else:
-                self._log_line("启动专用 Chrome —— 会先关掉现有 Chrome, 请在弹出的确认框点\"确定\"\n")
-                gui_chrome_flow.ensure_chrome_ready(self)
-                self._log_line("专用 Chrome 就绪\n")
-        except gui_chrome_flow.ChromeSetupCancelled:
-            self._log_line("已取消(专用 Chrome 未就绪)\n")
-            return
-        except RuntimeError as e:
-            self._log_line(f"❌ 启动专用 Chrome 失败: {e}\n")
-            return
-        finally:
-            self.attributes("-topmost", False)
-
-        if bool(self.afk_switch.get()):
-            self._ensure_afk()
-
-        # 这一步之后 florr.io 多半已经在 F11 全屏了; Windows 的前台锁会让一个
-        # 普通窗口弹出来的对话框排在全屏游戏后面(用户只看到画面卡住, 找不到框).
-        # 临时把主窗口置顶, 让对话框跟着浮到全屏之上, 问完立刻取消置顶.
-        self.attributes("-topmost", True)
-        try:
-            ok = messagebox.askokcancel(
-                "把 florr.io 切到全屏",
-                "开始前请把 florr.io 切到全屏(任意分辨率), 然后点确定。",
-                parent=self)
-        finally:
-            self.attributes("-topmost", False)
-        if not ok:
-            self._log_line("已取消(未确认全屏)\n")
-            return
-
-        cfg = build_worker_config(**vals)
+    def _save_cfg(self, cfg):
         app_config.save_config(cfg)
-        self._cfg = cfg
+        self._cfg = app_config.load_config()
+        return self._cfg
 
-        # 两个平台都给子进程 PYTHONUNBUFFERED=1: frozen(PyInstaller)build 没走
-        # worker_command() 里的 -u, 不设这个 Windows 下子进程 stdout 会块缓冲,
-        # 日志框只能几 KB 一跳.
-        # PYTHONIOENCODING=utf-8: 中文 Windows 上子进程 stdout 默认按 locale(GBK)
-        # 编码, worker 打的 emoji/中文里带的字节 GBK 解不了, _pump_log 那边整个
-        # 线程会 UnicodeDecodeError 崩掉. 两端都钉 utf-8, 再在读取侧 errors=replace
-        # 兜底任何漏网的坏字节.
+    # ---- 页面切换 ----
+    def _show_page(self, name):
+        for n, w in self._page_widgets.items():
+            if n == name:
+                w.grid(row=0, column=0, sticky="nsew")
+            else:
+                w.grid_remove()
+
+    # ---- 时块编辑 ----
+    def _open_editor(self, block):
+        if self._sched_running:
+            return
+        cfg = self._cfg
+        tpl = block if block is not None else gui_schedule.new_block_template(cfg)
+        others = [b for b in cfg["schedule"] if b.get("id") != tpl.get("id")]
+        ed = gui_schedule.TimeBlockEditor(
+            self, block=tpl, others=others, profiles=cfg["profiles"],
+            on_save=self._save_block)
+        ed.new_profile_cb = self._make_profile_then
+
+    def _save_block(self, blk):
+        sched = self._cfg["schedule"]
+        for i, b in enumerate(sched):
+            if b["id"] == blk["id"]:
+                sched[i] = blk
+                break
+        else:
+            sched.append(blk)
+        self._save_cfg(self._cfg)
+        self._sched_list.refresh()
+
+    def _make_profile_then(self, alias, on_ready):
+        """账号页 / 编辑器下拉里"＋新建"共用: 建 profile + 目录 + 存 + 登录引导。"""
+        cfg, err = gui_accounts.add_profile(self._cfg, alias)
+        if err:
+            self._log_line(f"新建账号失败: {err}\n")
+            return
+        rel = gui_accounts.profile_dir(cfg, alias)
+        try:
+            os.makedirs(gui_accounts.abs_profile_path(rel), exist_ok=True)
+        except OSError as e:
+            self._log_line(f"建 profile 目录失败: {e}\n")
+            return
+        self._save_cfg(cfg)
+        self._accounts.refresh()
+        self._login_guide.start(
+            gui_accounts.abs_profile_path(rel),
+            on_done=lambda: (self._accounts.refresh(), on_ready(alias)),
+            on_cancel=lambda: None)
+
+    # ---- 调度器 ----
+    def _on_start_stop(self):
+        if self._sched_running:
+            self._sched_running = False
+            if self._tick_job is not None:
+                self.after_cancel(self._tick_job)
+                self._tick_job = None
+            self._stop_worker_sync()
+            self._running_block_id = None
+            self._sched_list.set_readonly(False)
+            self._accounts.set_readonly(False)
+            self.start_btn.configure(text="▶ 开始调度")
+            self.status_label.configure(text="状态：未运行")
+            self._log_line("—— 调度已停止 ——\n")
+            return
+
+        if not self._cfg["schedule"]:
+            self._log_line("⚠️ 时间表是空的, 先加一个时块\n")
+            return
+        self._sched_running = True
+        self._sched_list.set_readonly(True)
+        self._accounts.set_readonly(True)
+        self.start_btn.configure(text="■ 停止调度")
+        self._log_line("—— 调度已启动 ——\n")
+        self._sched_tick()
+
+    def _sched_tick(self):
+        lt = time.localtime()
+        weekday = lt.tm_wday                       # Python: 周一=0 —— 跟本项目编号一致
+        hhmm = "%02d:%02d" % (lt.tm_hour, lt.tm_min)
+        blk = app_config.active_block(self._cfg["schedule"], weekday, hhmm)
+        plan = plan_transition(self._running_block_id, blk, self._chrome_profile)
+        if plan["action"] == "idle":
+            self._stop_worker_sync()
+            self._running_block_id = None
+            self._log_line("⏸ 空档, worker 已停\n")
+        elif plan["action"] == "run":
+            self._enter_block(blk, plan["relaunch_chrome"])
+        self._update_status(blk, weekday, hhmm)
+        if self._sched_running:
+            self._tick_job = self.after(_TICK_MS, self._sched_tick)
+
+    def _enter_block(self, blk, relaunch):
+        self._stop_worker_sync()
+        if relaunch:
+            rel = gui_accounts.profile_dir(self._cfg, blk["profile"])
+            if rel is None:
+                self._log_line(f"⚠️ 账号『{blk['profile']}』不存在, 跳过时块 {blk['id']}\n")
+                self._running_block_id = None
+                return
+            pdir = gui_accounts.abs_profile_path(rel)
+            if not os.path.isdir(pdir):
+                self._log_line(f"⚠️ 账号『{blk['profile']}』还没登录过, 跳过时块 {blk['id']}\n")
+                self._running_block_id = None
+                return
+            self._log_line(f"切到账号『{blk['profile']}』, 重开 Chrome…\n")
+            try:
+                cdp_bridge.launch_chrome_for_profile(pdir, fullscreen=True)
+            except RuntimeError as e:
+                self._log_line(f"⚠️ 起 Chrome 失败: {e}, 跳过时块 {blk['id']}\n")
+                self._running_block_id = None
+                return
+            if cdp_bridge.wait_for_florr_tab(30) is None:
+                self._log_line(f"⚠️ 账号『{blk['profile']}』未登录 / florr.io 没起来, "
+                               f"跳过时块 {blk['id']}\n")
+                self._running_block_id = None
+                return
+            self._chrome_profile = blk["profile"]
+
+        self._cfg["active"] = gui_schedule.block_to_active(blk)
+        app_config.save_config(self._cfg)
+        self._spawn_worker()
+        self._running_block_id = blk["id"]
+        self._log_line(f"▶ 进入时块 {blk['id']}({blk['profile']} / {blk['map']}) "
+                       f"{blk['start']}–{blk['end']}\n")
+
+    def _update_status(self, blk, weekday, hhmm):
+        nb = app_config.next_start(self._cfg["schedule"], weekday, hhmm)
+        if nb is None:
+            nxt = "下一个 —"
+        else:
+            d, t = nb
+            same = "今天 " if d == weekday else f"周{gui_schedule.WEEKDAY_LABELS[d]} "
+            nxt = f"下一个 {same}{t}"
+        if blk is None:
+            self.status_label.configure(text=f"状态：空档 · {nxt}")
+        else:
+            self.status_label.configure(
+                text=f"状态：{blk['id']}({blk['profile']}/{blk['map']}) "
+                     f"{blk['start']}–{blk['end']} · {nxt}")
+
+    # ---- worker 子进程 ----
+    def _spawn_worker(self):
         kwargs = {"env": {**os.environ, "PYTHONUNBUFFERED": "1",
                           "PYTHONIOENCODING": "utf-8"}}
-
-        # stdin=PIPE 不是为了往里写东西, 而是为了能"关"它: 关掉管道 = 给 worker
-        # 发停止信号(见 _stop_worker). 不给 PIPE 的话子进程会继承 GUI 的 stdin,
-        # 打包成 console=False 的 exe 后那是个死句柄, 永远读不到 EOF.
         self.proc = subprocess.Popen(
             worker_command(), stdin=subprocess.PIPE,
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, encoding="utf-8", errors="replace",
             bufsize=1, **kwargs)
         self._log_line("—— worker 已启动 ——\n")
-        self.start_btn.configure(text="■ 停止")
         self._reader = threading.Thread(target=self._pump_log, args=(self.proc,),
                                         daemon=True)
         self._reader.start()
 
     def _pump_log(self, proc):
-        # 这是后台线程: 窗口一旦 destroy 掉, self.after() 会抛 TclError(而
-        # console=False 下那个 traceback 谁也看不到). _closing 一置起就安静收摊.
         for line in proc.stdout:
             if self._closing:
                 return
             self.after(0, self._log_line, line)
-            self.after(0, lambda l=line: self.status_label.configure(
-                text="状态：" + l.strip()[:60]) if l.strip() else None)
         code = proc.wait()
         if self._closing:
             return
-        # 把 proc 绑进回调: 这条 pump 属于哪个进程, 回调就只对那个进程生效 ——
-        # 否则一个慢半拍的旧 pump 会把刚启动的新 worker 的状态给清了.
         self.after(0, self._on_worker_exit, proc, code)
 
-    def _stop_worker(self):
-        if not self.proc:
+    def _stop_worker_sync(self):
+        """同步、有上限地收干净当前 worker. 关 stdin(EOF)让 worker 自己
+        reset_keyboard() 再退; POSIX 上补一发 SIGTERM; 最多等 3s, 还活着就 kill.
+        收完把 self.proc 置 None —— 慢半拍的 _pump_log 回调会因 proc != self.proc 早退."""
+        proc = self.proc
+        if proc is None:
             return
         try:
-            if self.proc.stdin:
-                # 关掉管道 = worker 那边 stdin 读到 EOF, 它自己 reset_keyboard()
-                # 再退出. 之前用的 CTRL_BREAK_EVENT 只能发给"调用方所在的控制台
-                # 进程组" —— 打包成 console=False 的 exe 后 GUI 根本没有控制台,
-                # 那一发必然失败, 3 秒后直接 kill, 按住的 space+WASD 全留在游戏里.
-                self.proc.stdin.close()
+            if proc.stdin:
+                proc.stdin.close()
         except Exception as e:
             self._log_line(f"发送停止信号失败: {e}\n")
         if not _IS_WINDOWS:
             try:
-                self.proc.terminate()   # POSIX 双保险: SIGTERM 处理器也会 reset_keyboard()
+                proc.terminate()
             except Exception:
                 pass
-        self.after(3000, lambda p=self.proc: self._force_kill_if_alive(p))
-
-    def _force_kill_if_alive(self, proc):
-        # 3 秒前排这个兜底时对的是 proc 那个进程; 期间它可能已经退干净、用户还
-        # 又点了一次开始 —— 那 self.proc 就是另一个进程了, 这一发不能打到它身上.
-        if proc is None or proc is not self.proc:
-            return
+        try:
+            proc.wait(timeout=3)
+        except Exception:
+            pass
         if proc.poll() is None:
             proc.kill()
             self._log_line("—— worker 未响应, 已强制结束 ——\n")
+        self.proc = None
 
     def _on_worker_exit(self, proc, code):
         if proc is not self.proc:
             return
         self._log_line(f"—— worker 结束 (退出码 {code}) ——\n")
-        self.status_label.configure(text="状态：未运行")
-        self.start_btn.configure(text="▶ 开始")
         self.proc = None
+        if self._sched_running:
+            # 崩溃自愈: 清掉当前时块记号, 下次 tick 会重新进这个时块.
+            self._running_block_id = None
+        else:
+            self.status_label.configure(text="状态：未运行")
+            self.start_btn.configure(text="▶ 开始调度")
 
-    def _show_page(self, name):
-        pass  # Task 8: 控制台是唯一可用页, 其余灰置
-
+    # ---- AFK ----
     def _persist_afk(self, enabled):
         cfg = app_config.load_config()
         cfg["afk_enabled"] = bool(enabled)
         app_config.save_config(cfg)
-        self._cfg = cfg
+        self._cfg = app_config.load_config()
 
     def _busy_modal(self, text):
-        """一个没有关闭按钮的小提示框, 显示"后台正在干重活儿". 不 grab_set() ——
-        AFK 准备(最长几分钟的下载)期间主窗口要保持能点, 不能把整个界面锁死.
-        返回 toplevel, 调用方负责 destroy()."""
         top = ctk.CTkToplevel(self)
         top.title("")
         top.geometry("320x90")
         top.resizable(False, False)
         top.transient(self)
-        top.attributes("-topmost", True)
-        top.protocol("WM_DELETE_WINDOW", lambda: None)   # 不给关
+        top.protocol("WM_DELETE_WINDOW", lambda: None)
         ctk.CTkLabel(top, text=text).pack(expand=True, padx=20, pady=20)
         return top
 
     def _ensure_afk(self):
-        """AFK 开关打开时确保 florr-auto-afk 在跑. 决策(要不要下载)留在主线程 ——
-        它得弹模态框; 真正的重活儿(350MB 下载 / 最长 90 秒的启动等待)扔进后台线程,
-        否则 Tk 主循环一卡好几分钟, Windows 会把窗口画成"未响应"让用户去强杀它.
-        本函数起完线程就返回, 不等结果(AFK 助手晚几秒起来没关系, worker 那边
-        poll_afk_pause() 只是在 tail 它的日志)."""
         if not _IS_WINDOWS:
             return
         if getattr(self, "_afk_busy", False):
-            return   # 已经有一个准备线程在跑, 别再起一个
-
-        # download_florr_auto_afk() 本身也是重活儿, 但它藏在 start_afk() 里 ——
-        # 把"确认下载"这一步之后的全部动作(下载 + 启动)一起放进后台线程, 只留
-        # askyesno 在主线程上问.
+            return
         exe_exists = os.path.isfile(afk_watch._EXE_PATH)
         running = afk_watch.is_florr_auto_afk_running()
         if running:
@@ -453,7 +467,7 @@ class App(ctk.CTk):
                 return
 
         self._afk_busy = True
-        self.afk_switch.configure(state="disabled")   # 准备期间不许再拨
+        self.afk_switch.configure(state="disabled")
         modal = self._busy_modal("AFK 助手准备中，请稍候…\n(界面仍可操作)")
 
         def _work():
@@ -462,7 +476,7 @@ class App(ctk.CTk):
                                     confirm_download=lambda: True)
                 if outcome in ("started", "downloaded"):
                     afk_watch.ensure_florr_auto_afk_running()
-            except Exception as e:                       # 后台线程里没人接异常
+            except Exception as e:
                 outcome = f"出错: {e}"
             self.after(0, self._finish_ensure_afk, modal, outcome)
 
@@ -489,21 +503,28 @@ class App(ctk.CTk):
             self._log_line("AFK: 已停止 florr-auto-afk\n")
         self._persist_afk(enabled)
 
+    # ---- 杂项 ----
+    def _report_exception(self, exc_type, exc_value, exc_tb):
+        self._log_line(f"❌ {exc_type.__name__}: {exc_value}\n")
+        traceback.print_exception(exc_type, exc_value, exc_tb)
+
+    def _log_line(self, text):
+        self.log_box.configure(state="normal")
+        self.log_box.insert("end", text)
+        lines = int(self.log_box.index("end-1c").split(".")[0])
+        if lines > _LOG_MAX_LINES:
+            self.log_box.delete("1.0", f"end-{_LOG_MAX_LINES}l")
+        self.log_box.see("end")
+        self.log_box.configure(state="disabled")
+
     def on_closing(self):
-        # _stop_worker 只 self.after(3000, ...) 排一个兜底 kill —— 关窗时 mainloop
-        # 马上就结束了, 那个回调根本不会跑. 所以这里同步、有上限地收干净子进程,
-        # 否则慢 / 卡死 / 收不到停止信号的 worker(连同它的 segment.exe 孙进程)会被
-        # 甩给 init 继续跑, 没有 UI 能再停它.
-        self._closing = True        # 让还在跑的 _pump_log 线程别再往已死的窗口排回调
-        proc = self.proc
-        if proc and proc.poll() is None:
-            self._stop_worker()     # 关 stdin(EOF) + POSIX 上补一发 SIGTERM
+        self._closing = True
+        if self._tick_job is not None:
             try:
-                proc.wait(timeout=3)
+                self.after_cancel(self._tick_job)
             except Exception:
                 pass
-            if proc.poll() is None:
-                proc.kill()
+        self._stop_worker_sync()
         self.destroy()
 
 

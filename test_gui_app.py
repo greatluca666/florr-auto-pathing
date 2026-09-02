@@ -22,21 +22,36 @@ def test_worker_command_frozen_mode(monkeypatch):
     assert gui_app.worker_command() == ["/opt/florr/florr-auto-pathing", "--worker"]
 
 
-def test_build_worker_config_shapes_values():
-    cfg = gui_app.build_worker_config(
-        map_name="ocean", location=(11, 22), area=[(1, 2), (3, 4)],
-        duration=120, short_limit=3, enemy_ai=False, auto_switch=True, afk=True,
-    )
-    assert cfg == {
-        "map": "ocean",
-        "location": [11, 22],
-        "farming_area": [[1, 2], [3, 4]],
-        "farming_duration": 120,
-        "consecutive_short_round_limit": 3,
-        "enemy_ai_enabled": False,
-        "auto_switch_server": True,
-        "afk_enabled": True,
-    }
+def test_plan_transition_noop_same_block():
+    blk = {"id": "b1", "profile": "默认"}
+    assert gui_app.plan_transition("b1", blk, "默认") == {"action": "noop"}
+
+
+def test_plan_transition_idle_when_leaving_to_gap():
+    assert gui_app.plan_transition("b1", None, "默认") == {"action": "idle"}
+
+
+def test_plan_transition_noop_when_already_idle():
+    assert gui_app.plan_transition(None, None, None) == {"action": "noop"}
+
+
+def test_plan_transition_run_same_profile_no_relaunch():
+    blk = {"id": "b2", "profile": "默认"}
+    assert gui_app.plan_transition("b1", blk, "默认") == {
+        "action": "run", "relaunch_chrome": False, "profile": "默认"}
+
+
+def test_plan_transition_run_other_profile_relaunches():
+    blk = {"id": "b2", "profile": "小号2"}
+    assert gui_app.plan_transition("b1", blk, "默认") == {
+        "action": "run", "relaunch_chrome": True, "profile": "小号2"}
+
+
+def test_plan_transition_run_from_idle_after_worker_crash():
+    blk = {"id": "b1", "profile": "默认"}
+    # worker 崩了 -> _running_block_id 清成 None, chrome 还在『默认』
+    assert gui_app.plan_transition(None, blk, "默认") == {
+        "action": "run", "relaunch_chrome": False, "profile": "默认"}
 
 
 @pytest.mark.parametrize("args, expected", [
