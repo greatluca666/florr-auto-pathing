@@ -708,6 +708,19 @@ def _lock_biome(biome):
     return False
 
 
+def _wait_for_start_menu(timeout=15, interval=0.5):
+    """轮询等 florr 开局菜单("开始"按钮)出现/回来. forceServerID 锁生态区会触发一次
+    重连、florr 短暂离开开局菜单 —— 锁完等菜单回来再点, 别在重连空档里空点(那会让
+    click_start_game 复查时以为已经进去了). 到点还没出现返回 False, 调用方
+    (click_start_game) 自己还会重试. 已经在菜单上则立刻返回 True."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if on_start_screen():
+            return True
+        time.sleep(interval)
+    return False
+
+
 def run_worker(cfg):
     """刷怪 worker: 由 GUI 以 `main.py --worker` 子进程拉起. 掉线/死亡后自动点
     开始重来, 不主动停(沿用改造前 __main__ 的行为)."""
@@ -751,12 +764,6 @@ def run_worker(cfg):
     farming_duration = w["farming_duration"]
     CONSECUTIVE_SHORT_ROUND_LIMIT = w["short_round_limit"]
 
-    # florr 不记忆上次选的生态区 —— 进主循环前先把服务器钉到配置的生态区.
-    # worker 刚起时 florr 可能还停在标题页 (cp6 未必加载好), 这次是 best-effort;
-    # 循环里 click_start_game() 之后那次 (一定在局内) 才是可靠的一发.
-    if not _lock_biome(w["biome"]):
-        overlay.update(message="⚠️ 生态区未锁定, 见日志")
-
     print("🎮 开始自动寻路+刷怪 (掉线/死亡后自动点开始重来, 不主动停)\n")
     consecutive_short_rounds = 0
     round_count = 0
@@ -778,11 +785,16 @@ def run_worker(cfg):
         if on_start_screen():
             print("🔁 检测到开局菜单, 点击开始按钮进入游戏...")
             overlay.update(state="重新开始", message="点击开始按钮...")
+            # 在标题页(还没连进局)就把服务器钉到配置的生态区, 再点开始 —— 点开始
+            # 会连到这台服务器 = 进对生态区. 顺序不能反: 先 click_start_game() 进局
+            # 再 forceServerID, 会触发一次重连把人踢回标题页, 形成"进游戏→踢出→
+            # 进游戏"死循环 (florr 从局内 forceServerID 不会原地换服, 是断开重连).
+            _lock_biome(w["biome"])
+            # forceServerID 的重连期间 florr 会短暂离开开局菜单, 等"开始"按钮回来
+            # 再点, 否则 click_start_game 复查时会把空档当成"已经进去了".
+            _wait_for_start_menu()
             click_start_game()
             time.sleep(3)
-            # 已进游戏 -> cp6 就绪 -> forceServerID 重连到配置的生态区 (florr 默认
-            # 通常是花园, 跟寻路用的地图对不上).
-            _lock_biome(w["biome"])
 
         # 进游戏了(或本来就在局内): florr 刚才可能从账号数据把「反转攻击键」重置
         # 了, 每轮重写一次. on_already 静默(常态), turned_on / failed 才打日志.
