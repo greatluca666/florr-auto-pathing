@@ -13,63 +13,90 @@ def cfg_path(tmp_path, monkeypatch):
     return p
 
 
-def test_load_missing_file_returns_defaults(cfg_path):
-    assert app_config.load_config() == app_config.DEFAULTS
-    # 返回的必须是副本, 改它不能污染 DEFAULTS
-    got = app_config.load_config()
-    got["farming_duration"] = 999
-    assert app_config.DEFAULTS["farming_duration"] != 999
+def _v2_block(**kw):
+    base = dict(id="blk-1", enabled=True, days=[0, 1, 2, 3, 4, 5, 6],
+                start="00:00", end="00:00", profile="默认", map="desert",
+                location=[22, 32], farming_area=[[9, 8], [51, 56]],
+                farming_duration=300, consecutive_short_round_limit=2,
+                enemy_ai_enabled=True, auto_switch_server=True)
+    base.update(kw)
+    return base
 
 
-def test_save_then_load_roundtrips(cfg_path):
-    cfg = copy.deepcopy(app_config.DEFAULTS)
-    cfg["map"] = "ocean"
-    cfg["location"] = [100, 120]
-    cfg["farming_area"] = [[10, 10], [40, 40]]
-    cfg["enemy_ai_enabled"] = False
-    app_config.save_config(cfg)
-    assert app_config.load_config() == cfg
+def _v2_cfg(**kw):
+    c = copy.deepcopy(app_config.DEFAULTS_V2)
+    c["schedule"] = [_v2_block()]
+    c["profiles"] = [{"alias": "默认", "dir": "chrome-profiles/默认"}]
+    c.update(kw)
+    return c
 
 
-def test_bad_json_falls_back_to_defaults(cfg_path):
-    cfg_path.write_text("{ not json", encoding="utf-8")
-    assert app_config.load_config() == app_config.DEFAULTS
+class TestCoerceV2:
+    def test_missing_file_returns_defaults_v2(self, cfg_path):
+        assert app_config.load_config() == app_config.DEFAULTS_V2
 
+    def test_v2_roundtrips(self, cfg_path):
+        cfg = _v2_cfg()
+        app_config.save_config(cfg)
+        assert app_config.load_config() == app_config.load_config()  # 稳定
+        got = app_config.load_config()
+        assert got["schedule"][0]["id"] == "blk-1"
+        assert got["profiles"] == [{"alias": "默认", "dir": "chrome-profiles/默认"}]
 
-def test_partial_file_fills_missing_keys(cfg_path):
-    cfg_path.write_text(json.dumps({"map": "anthell"}), encoding="utf-8")
-    got = app_config.load_config()
-    assert got["map"] == "anthell"
-    assert got["farming_duration"] == app_config.DEFAULTS["farming_duration"]
+    def test_top_level_not_dict_falls_back(self, cfg_path):
+        cfg_path.write_text("[1,2,3]", encoding="utf-8")
+        assert app_config.load_config() == app_config.DEFAULTS_V2
 
+    @pytest.mark.parametrize("bad_block", [
+        {"days": []},
+        {"days": [7]},
+        {"start": "9:00"},
+        {"start": "10:00", "end": "10:00"},   # start==end 非全天
+        {"map": "nonsense"},
+        {"location": "12,32"},
+        {"farming_area": [[1, 2], [3]]},
+        {"farming_duration": 0},
+        {"enemy_ai_enabled": "yes"},
+    ])
+    def test_bad_block_is_dropped_whole(self, cfg_path, bad_block):
+        good = _v2_block(id="good")
+        bad = _v2_block(id="bad", **bad_block)
+        cfg_path.write_text(json.dumps(_v2_cfg(schedule=[bad, good])), encoding="utf-8")
+        got = app_config.load_config()
+        assert [b["id"] for b in got["schedule"]] == ["good"]
 
-@pytest.mark.parametrize("bad", [
-    {"map": "nonsense"},
-    {"map": 123},
-    {"location": [1, 2, 3]},
-    {"location": "12,32"},
-    {"farming_area": [[1, 2], [3, 4], [5, 6]]},
-    {"farming_area": [[1, 2], [3]]},
-    {"farming_duration": -5},
-    {"farming_duration": "300"},
-    {"consecutive_short_round_limit": 0},
-    {"enemy_ai_enabled": "yes"},
-])
-def test_bad_value_reverts_that_key_to_default(cfg_path, bad):
-    key = next(iter(bad))
-    cfg_path.write_text(json.dumps(bad), encoding="utf-8")
-    got = app_config.load_config()
-    assert got[key] == app_config.DEFAULTS[key]
+    def test_dangling_profile_disables_block_not_drops(self, cfg_path):
+        blk = _v2_block(id="x", profile="不存在")
+        cfg_path.write_text(json.dumps(_v2_cfg(schedule=[blk])), encoding="utf-8")
+        got = app_config.load_config()
+        assert [b["id"] for b in got["schedule"]] == ["x"]
+        assert got["schedule"][0]["enabled"] is False
 
+    def test_empty_profiles_gets_default(self, cfg_path):
+        cfg_path.write_text(json.dumps(_v2_cfg(profiles=[])), encoding="utf-8")
+        assert app_config.load_config()["profiles"] == [
+            {"alias": "默认", "dir": "chrome-profiles/默认"}]
 
-def test_top_level_not_dict_falls_back(cfg_path):
-    cfg_path.write_text("[1, 2, 3]", encoding="utf-8")
-    assert app_config.load_config() == app_config.DEFAULTS
+    def test_duplicate_alias_deduped(self, cfg_path):
+        cfg_path.write_text(json.dumps(_v2_cfg(profiles=[
+            {"alias": "a", "dir": "chrome-profiles/a"},
+            {"alias": "a", "dir": "chrome-profiles/a2"},
+        ], schedule=[])), encoding="utf-8")
+        got = app_config.load_config()
+        assert [p["alias"] for p in got["profiles"]] == ["a"]
 
+    def test_days_sorted_deduped(self, cfg_path):
+        blk = _v2_block(days=[4, 0, 0, 2])
+        cfg_path.write_text(json.dumps(_v2_cfg(schedule=[blk])), encoding="utf-8")
+        assert app_config.load_config()["schedule"][0]["days"] == [0, 2, 4]
 
-def test_unknown_keys_are_dropped(cfg_path):
-    cfg_path.write_text(json.dumps({"map": "desert", "bogus": 1}), encoding="utf-8")
-    assert "bogus" not in app_config.load_config()
+    def test_active_defaults_from_first_block_when_absent(self, cfg_path):
+        c = _v2_cfg(schedule=[_v2_block(map="ocean", location=[5, 5])])
+        del c["active"]
+        cfg_path.write_text(json.dumps(c), encoding="utf-8")
+        got = app_config.load_config()
+        assert got["active"]["map"] == "ocean"
+        assert got["active"]["location"] == [5, 5]
 
 
 class TestScheduleMath:
