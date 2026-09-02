@@ -770,6 +770,10 @@ def run_worker(cfg):
     print("🎮 开始自动寻路+刷怪 (掉线/死亡后自动点开始重来, 不主动停)\n")
     consecutive_short_rounds = 0
     round_count = 0
+    # 生态区只在本次 worker 启动后的第一次进游戏时锁一次. florr 死亡/重生会留在
+    # 同一台服务器 = 同生态区, 每次重生都 forceServerID 纯属多一次重连、拖慢重生.
+    # 换服务器(连续短局那条)走 switch_server(w["biome"]) 自己保证生态区, 不影响这个标记.
+    biome_locked = False
     while True:
         round_count += 1
         round_start_time = time.time()
@@ -790,14 +794,15 @@ def run_worker(cfg):
         if on_start_screen():
             print("🔁 检测到开局菜单, 点击开始按钮进入游戏...")
             overlay.update(state="重新开始", message="点击开始按钮...")
-            # 在标题页(还没连进局)就把服务器钉到配置的生态区, 再点开始 —— 点开始
-            # 会连到这台服务器 = 进对生态区. 顺序不能反: 先 click_start_game() 进局
-            # 再 forceServerID, 会触发一次重连把人踢回标题页, 形成"进游戏→踢出→
-            # 进游戏"死循环 (florr 从局内 forceServerID 不会原地换服, 是断开重连).
-            _lock_biome(w["biome"])
-            # forceServerID 的重连期间 florr 会短暂离开开局菜单, 等"开始"按钮回来
-            # 再点, 否则 click_start_game 复查时会把空档当成"已经进去了".
-            _wait_for_start_menu()
+            if not biome_locked:
+                # 首次进游戏才锁生态区. 在标题页(还没连进局)就 forceServerID, 再点
+                # 开始 —— 点开始会连到这台服务器 = 进对生态区. 顺序不能反: 先
+                # click_start_game() 进局再 forceServerID 会触发重连把人踢回标题页,
+                # 形成"进游戏→踢出→进游戏"死循环. 锁成功后等"开始"按钮从重连空档回来
+                # 再点, 否则 click_start_game 复查时会把空档当成"已经进去了".
+                if _lock_biome(w["biome"]):
+                    biome_locked = True
+                    _wait_for_start_menu()
             click_start_game()
             entered_game = True
             time.sleep(3)
