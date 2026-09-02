@@ -22,9 +22,10 @@ DEFAULTS = {
     "farming_area": [[9, 8], [51, 56]],
     "farming_duration": 300,
     "consecutive_short_round_limit": 2,
-    # 默认关: 索敌要 models/desert.pt, 那个权重文件没进仓库也没进发布包. 默认开
-    # 的话全新安装一跑就是每 ENEMY_SCAN_INTERVAL(0.3s) 一条"索敌出错"刷屏.
-    # README / PACKAGING 里写的也是"默认关闭, 要自己放权重", 这里跟文档对齐.
+    # 这份扁平 DEFAULTS 现在只当两件事的兜底: (1) v1 迁移取值 (2) 空 schedule 时
+    # 的 active 占位. 索敌这里留 False 是保守占位 —— 空 schedule 时 worker 根本不
+    # 跑. 用户"新建时块"的默认是开 (gui_schedule.new_block_template / 编辑器).
+    # 索敌早已不需要模型文件, 改成解码 canvas 绘制调用了.
     "enemy_ai_enabled": False,
     "auto_switch_server": True,
     "afk_enabled": False,

@@ -52,7 +52,7 @@ def priority_score(species, rarity):
 
 
 # ── Mythic 近身处理 ("先清青怪") ──────────────────────────────────────────
-# 青怪 = Mythic 档 (青 = Mythic 名牌的青色). desert.pt 的 6 类里, sandstorm 是刷怪
+# 青怪 = Mythic 档 (青 = Mythic 名牌的青色). 沙漠的 6 种怪里, sandstorm 是刷怪
 # 目标本身, 不进这套 —— 其余 5 种每种按下面的策略走位磨死.
 MYTHIC_KITE_SPECIES = {
     "beetle": "strafe",           # 直冲型, 垂直环绕让它打空
@@ -283,7 +283,7 @@ def chase_is_stalled(pos_history, min_progress=4.0, window=CHASE_STALL_WINDOW):
     return math.hypot(x1 - x0, y1 - y0) < min_progress
 
 
-CHASE_MIN_CONF = 0.55  # 只有YOLO置信度到这个数的检测框才够格当"追击目标". 0.4~0.55
+CHASE_MIN_CONF = 0.55  # 只有置信度到这个数的检测框才够格当"追击目标". 0.4~0.55
                         # 那档框经常是幻影(半透明沙尘暴边缘、影子), 拿它当目标就是
                         # 朝空气全速冲. 危险怪(AVOID/CAUTIOUS)不受此限 —— 宁可对着
                         # 一个可能不存在的强怪多绕一下, 不能漏躲。
@@ -357,8 +357,9 @@ _SPECIES_ALIASES = {}   # florr English name (slugified) -> desert slug, for any
 
 _seen_unknown_names = set()   # slugs already reported by _species_from_name — recovers the
                               # diagnostic the deleted debug_enemy_detect.py used to give:
-                              # the 6 desert slugs came from YOLO class labels, never checked
-                              # against what florr's English client actually renders. If a real
+                              # the 6 desert slugs are hardcoded (originally from the old YOLO
+                              # class labels), never checked against what florr's English client
+                              # actually renders. If a real
                               # desert mob shows under an unexpected name it silently vanishes
                               # from every detection — this at least names it once in the log.
 
