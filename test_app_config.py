@@ -13,6 +13,13 @@ def cfg_path(tmp_path, monkeypatch):
     return p
 
 
+def test_gui_enabled_maps_is_desert_only_but_valid_maps_untouched():
+    # GUI 里暂时只让选沙漠; coerce 层仍认全部 3 个(旧 ocean 时块不被丢).
+    assert app_config._GUI_ENABLED_MAPS == ("desert",)
+    assert app_config._VALID_MAPS == ("desert", "ocean", "anthell")
+    assert set(app_config._GUI_ENABLED_MAPS).issubset(app_config._VALID_MAPS)
+
+
 def _v2_block(**kw):
     base = dict(id="blk-1", enabled=True, days=[0, 1, 2, 3, 4, 5, 6],
                 start="00:00", end="00:00", profile="默认", map="desert",
