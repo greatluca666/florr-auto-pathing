@@ -8,6 +8,7 @@ DEFAULTS(= 以前硬编码那套) + print 一句警告. 这里只读不写用户
 import copy
 import json
 import os
+import re
 import sys
 
 CONFIG_PATH = os.path.join(
@@ -32,6 +33,13 @@ DEFAULTS = {
 # maps/ 下的 3 个 png(去扩展名). 新增地图要同步这里 —— 跟 utils.check_map_border()
 # 那种"就地写死一小张表"的仓库既有做法一致, 不在 import 时去 listdir.
 _VALID_MAPS = ("desert", "ocean", "anthell")
+
+# 一个时块 / active 切片里的刷怪参数键(不含 afk_enabled —— 那是 GUI 全局的).
+_ACTIVE_KEYS = (
+    "map", "location", "farming_area", "farming_duration",
+    "consecutive_short_round_limit", "enemy_ai_enabled", "auto_switch_server",
+)
+_TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 
 
 def _is_int_pair(v):
@@ -101,3 +109,69 @@ def save_config(cfg):
     cleaned = _coerce(cfg)
     with open(CONFIG_PATH, "w", encoding="utf-8") as f:
         json.dump(cleaned, f, indent=2, ensure_ascii=False)
+
+
+# ─────────────────────────── 调度时间数学(纯函数) ───────────────────────────
+# 星期编号 0=周一 … 6=周日. 时间 "HH:MM" 24h. 区间半开 [start, end).
+
+def _hhmm_to_min(s):
+    h, m = s.split(":")
+    return int(h) * 60 + int(m)
+
+
+def _valid_time(s):
+    return isinstance(s, str) and _TIME_RE.match(s) is not None
+
+
+def expand_block_days(block):
+    """把一个时块摊平成 [(weekday, start_min, end_min)]. 半开区间 [start, end).
+    00:00–00:00 = 全天; start >= end(且非全天)= 跨午夜, 拆成当天尾段 + 次日头段."""
+    s = _hhmm_to_min(block["start"])
+    e = _hhmm_to_min(block["end"])
+    out = []
+    for d in block["days"]:
+        if s == 0 and e == 0:
+            out.append((d, 0, 1440))
+        elif s < e:
+            out.append((d, s, e))
+        else:
+            out.append((d, s, 1440))
+            if e > 0:
+                out.append(((d + 1) % 7, 0, e))
+    return out
+
+
+def blocks_overlap(a, b):
+    for (da, sa, ea) in expand_block_days(a):
+        for (db, sb, eb) in expand_block_days(b):
+            if da == db and sa < eb and sb < ea:
+                return True
+    return False
+
+
+def active_block(schedule, weekday, hhmm):
+    m = _hhmm_to_min(hhmm)
+    for blk in schedule:
+        if not blk.get("enabled"):
+            continue
+        for (d, s, e) in expand_block_days(blk):
+            if d == weekday and s <= m < e:
+                return blk
+    return None
+
+
+def next_start(schedule, weekday, hhmm):
+    """从此刻(weekday, hhmm)起, 一周内最近的一个时块起点. 返回 (weekday, 'HH:MM')."""
+    now = weekday * 1440 + _hhmm_to_min(hhmm)
+    best = None
+    for blk in schedule:
+        if not blk.get("enabled"):
+            continue
+        for (d, s, _e) in expand_block_days(blk):
+            start_abs = d * 1440 + s
+            delta = (start_abs - now) % (7 * 1440)
+            if delta == 0:
+                continue
+            if best is None or delta < best[0]:
+                best = (delta, d, "%02d:%02d" % divmod(s, 60))
+    return None if best is None else (best[1], best[2])
