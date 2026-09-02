@@ -255,20 +255,22 @@ class _ClickSpy:
         self.clicks += 1
 
 
-def _patch_click(monkeypatch, on_screen_sequence):
-    """on_screen_sequence: 每次复查画面时依次返回的值; 用完后保持最后一个值."""
+def _patch_click(monkeypatch, on_screen_sequence, screen_attr="on_start_screen"):
+    """on_screen_sequence: 每次复查画面时依次返回的值; 用完后保持最后一个值.
+    screen_attr: _click_button_until_gone 传进来的复查函数名 (on_start_screen /
+    on_death_screen / on_guest_screen)."""
     spy = _ClickSpy()
     monkeypatch.setattr(utils, "pyautogui", spy)
     monkeypatch.setattr(utils.time, "sleep", lambda *_a, **_kw: None)
     seq = list(on_screen_sequence)
     calls = {"n": 0}
 
-    def fake_on_start_screen():
+    def fake_screen_check():
         i = min(calls["n"], len(seq) - 1)
         calls["n"] += 1
         return seq[i]
 
-    monkeypatch.setattr(utils, "on_start_screen", fake_on_start_screen)
+    monkeypatch.setattr(utils, screen_attr, fake_screen_check)
     return spy
 
 
@@ -291,4 +293,66 @@ def test_click_start_game_gives_up_after_max_attempts_without_crashing(monkeypat
     # 不无限卡在这里, 也不抛异常.
     spy = _patch_click(monkeypatch, [True])
     assert utils.click_start_game() is False
+    assert spy.clicks == 2 * utils._CONFIRM_CLICK_MAX_ATTEMPTS
+
+
+# ── on_guest_screen: 未登录标题页的「以游客身份游玩」绿按钮检测 ──────────────
+
+def _stub_guest_ratio(monkeypatch, value):
+    """把 _green_button_ratio 打桩成定值, 只测 on_guest_screen 的阈值判定."""
+    seen = {}
+
+    def fake_ratio(pos, half_w=15, half_h=10):
+        seen["pos"] = pos
+        seen["half_w"] = half_w
+        seen["half_h"] = half_h
+        return value
+
+    monkeypatch.setattr(utils, "_green_button_ratio", fake_ratio)
+    return seen
+
+
+def test_on_guest_screen_true_when_green_ratio_above_threshold(monkeypatch):
+    seen = _stub_guest_ratio(monkeypatch, 0.5)
+    assert utils.on_guest_screen() is True
+    # 采样的是游客按钮坐标, 用的是宽框(不是 _green_button_ratio 的默认 15x10)
+    assert seen["pos"] == utils._PLAY_AS_GUEST_POS
+    assert seen["half_w"] == utils._GUEST_SCREEN_SAMPLE_HALF_W
+    assert seen["half_h"] == utils._GUEST_SCREEN_SAMPLE_HALF_H
+
+
+def test_on_guest_screen_false_at_exact_threshold(monkeypatch):
+    _stub_guest_ratio(monkeypatch, utils._GUEST_SCREEN_GREEN_THRESHOLD)
+    assert utils.on_guest_screen() is False          # 严格 >
+
+
+def test_on_guest_screen_false_when_mostly_background(monkeypatch):
+    _stub_guest_ratio(monkeypatch, 0.05)
+    assert utils.on_guest_screen() is False
+
+
+def test_play_as_guest_pos_is_scaled_from_reference():
+    # _PLAY_AS_GUEST_POS 在 import 时按 1920x1080 参照缩放到实际分辨率. 用
+    # scale_point 比较而非写死元组 —— 非参照分辨率的开发/CI 机器上也成立, 同时
+    # 仍钉住 960/498 这两个字面量.
+    assert utils._PLAY_AS_GUEST_POS == utils.scale_point(960, 498)
+
+
+# ── click_play_as_guest: 点掉登录选择页 ──────────────────────────────────
+
+def test_click_play_as_guest_stops_after_page_gone_on_first_try(monkeypatch):
+    spy = _patch_click(monkeypatch, [False], screen_attr="on_guest_screen")
+    assert utils.click_play_as_guest() is True
+    assert spy.clicks == 2                       # 一轮 = connect click + 真点
+
+
+def test_click_play_as_guest_retries_until_page_gone(monkeypatch):
+    spy = _patch_click(monkeypatch, [True, True, False], screen_attr="on_guest_screen")
+    assert utils.click_play_as_guest() is True
+    assert spy.clicks == 2 * 3
+
+
+def test_click_play_as_guest_gives_up_after_max_attempts_without_crashing(monkeypatch):
+    spy = _patch_click(monkeypatch, [True], screen_attr="on_guest_screen")
+    assert utils.click_play_as_guest() is False
     assert spy.clicks == 2 * utils._CONFIRM_CLICK_MAX_ATTEMPTS

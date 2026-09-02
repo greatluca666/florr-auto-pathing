@@ -343,6 +343,7 @@ def _stub_run_worker_env(monkeypatch, overlay=None):
     monkeypatch.setattr(main, "switch_server", lambda *a, **k: "stub-srv")
     monkeypatch.setattr(main, "on_death_screen", lambda: False)
     monkeypatch.setattr(main, "on_start_screen", lambda: False)
+    monkeypatch.setattr(main, "on_guest_screen", lambda: False)
     monkeypatch.setattr(main.time, "sleep", lambda *a, **k: None)
 
 
@@ -436,3 +437,35 @@ def test_run_worker_switch_server_uses_configured_biome(monkeypatch):
     with pytest.raises(KeyboardInterrupt):
         main.run_worker({})
     assert sw == [("ocean",)]      # switch_server 收到配置里的 biome, 不是空参
+
+
+# ── 未登录标题页: run_worker 自动点「以游客身份游玩」──────────────────────
+
+def test_run_worker_clicks_play_as_guest_when_on_guest_screen(monkeypatch):
+    """停在未登录登录选择页时, 启动阶段 + 第 1 轮各点一次「以游客身份游玩」."""
+    _stub_run_worker_env(monkeypatch)
+    monkeypatch.setattr(main.florr_settings, "ensure_invert_attack_on",
+                        lambda ej, *a, **k: ("on_already", ""))
+    monkeypatch.setattr(main, "on_guest_screen", lambda: True)
+    clicks = []
+    monkeypatch.setattr(main, "click_play_as_guest", lambda: clicks.append(1))
+    # 掐在寻路 —— 启动那次 + 第 1 轮那次都已经跑过了
+    monkeypatch.setattr(main, "lazy_theta_pathing",
+                        lambda *a, **k: (_ for _ in ()).throw(KeyboardInterrupt))
+    with pytest.raises(KeyboardInterrupt):
+        main.run_worker({})
+    assert len(clicks) == 2                       # 启动前 1 次 + 第 1 轮顶部 1 次
+
+
+def test_run_worker_never_clicks_guest_when_not_on_guest_screen(monkeypatch):
+    """登录过的 profile 的常态: on_guest_screen 恒 False, 一次都不点."""
+    _stub_run_worker_env(monkeypatch)
+    monkeypatch.setattr(main.florr_settings, "ensure_invert_attack_on",
+                        lambda ej, *a, **k: ("on_already", ""))
+    monkeypatch.setattr(main, "on_guest_screen", lambda: False)
+    monkeypatch.setattr(main, "click_play_as_guest",
+                        lambda: pytest.fail("不在游客页不该点「以游客身份游玩」"))
+    monkeypatch.setattr(main, "lazy_theta_pathing",
+                        lambda *a, **k: (_ for _ in ()).throw(KeyboardInterrupt))
+    with pytest.raises(KeyboardInterrupt):
+        main.run_worker({})
