@@ -391,8 +391,24 @@ def test_species_from_name_english_slugs():
     assert _species_from_name("Cactus") == "cactus"
 
 
+def test_species_from_name_chinese_client_aliases():
+    # canvas 解出的名字随客户端语言; 中文客户端下 _DESERT_SPECIES 一个都不匹配,
+    # 全靠 _SPECIES_ALIASES 折回 6 个 slug (否则每个沙漠怪都被丢掉)。
+    assert _species_from_name("沙尘暴") == "sandstorm"
+    assert _species_from_name("仙人掌") == "cactus"
+    assert _species_from_name("甲虫") == "beetle"
+    assert _species_from_name("蝎子") == "scorpion"
+    assert _species_from_name("蜈蚣") == "sand_centipede"
+    assert _species_from_name("火兵蚁") == "soldier_fire_ant"
+    assert _species_from_name("火蚁") == "soldier_fire_ant"      # 工蚁, 同归 soldier_fire_ant
+    # 每个别名的 value 必须是 SPECIES_RANK 认得的 slug —— 否则 priority_score KeyError
+    import enemy_detect as _ed
+    for slug in _ed._SPECIES_ALIASES.values():
+        assert slug in _ed.SPECIES_RANK, slug
+
+
 def test_species_from_name_rejects_non_desert_and_none():
-    assert _species_from_name("Ladybug") is None
+    assert _species_from_name("Ladybug") is None      # English name, not a _SPECIES_ALIASES key
     assert _species_from_name("Player #12") is None
     assert _species_from_name(None) is None
     assert _species_from_name("") is None
