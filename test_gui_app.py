@@ -131,10 +131,12 @@ class TestInvertTogglePersistence:
         # 不起 Tk —— 直接在一个裸对象上绑方法
         obj = type("X", (), {})()
         obj._cfg = app_config.load_config()
-        gui_app.App._persist_flag(obj, "invert_defense", True)
+        # 真 CTkSwitch.get() 回 int 1/0, 不是 bool —— _persist_flag 里的 bool() 转换
+        # 必须把它规整成 True/False, 否则 save_config 的 _coerce 会把非 bool 打回默认.
+        gui_app.App._persist_flag(obj, "invert_defense", 1)
         assert app_config.load_config()["invert_defense"] is True
         assert obj._cfg["invert_defense"] is True
 
-        gui_app.App._persist_flag(obj, "invert_attack", False)
+        gui_app.App._persist_flag(obj, "invert_attack", 0)
         assert app_config.load_config()["invert_attack"] is False
         assert obj._cfg["invert_attack"] is False

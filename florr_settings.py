@@ -13,9 +13,10 @@ bot 自己不按攻击键, 靠「反转攻击键」让 florr 持续攻击 ——
 """
 import json
 
-# settings_finder.js 找出来的地址. florr 大版本更新后可能失效 —— worker 日志报
-# addr-out-of-range / not-bool 时重跑 settings_finder.js 求新值填这里. 设回 None =
-# 该项静默降级成"只警告".
+# settings_finder.js 找出来的地址 (INVERT_ATTACK_ADDR: 2026-09-02 中文客户端上标定;
+# INVERT_DEFENSE_ADDR: 用户提供, 未二次核对). florr 大版本更新后可能失效 —— worker
+# 日志报 addr-out-of-range / not-bool 时重跑 settings_finder.js 求新值填这里.
+# 设回 None = 该项静默降级成"只警告".
 INVERT_ATTACK_ADDR = 0x53430E
 INVERT_DEFENSE_ADDR = 0x534310
 

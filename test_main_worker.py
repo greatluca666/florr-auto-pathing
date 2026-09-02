@@ -210,6 +210,8 @@ def test_run_worker_does_not_start_florr_auto_afk(monkeypatch):
         "biome": "desert",
     })
     monkeypatch.setattr(main, "_lock_biome", lambda b: True)   # 本测跟锁生态区无关
+    monkeypatch.setattr(main.florr_settings, "ensure_flag",
+                        lambda ej, addr, want: ("unchanged", ""))
     # 主循环体的第一个调用 —— 在这里掐断, 前面的 setup 已经全跑完了.
     monkeypatch.setattr(main, "on_death_screen",
                         lambda: (_ for _ in ()).throw(KeyboardInterrupt))

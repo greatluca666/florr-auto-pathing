@@ -449,10 +449,7 @@ class App(ctk.CTk):
 
     # ---- AFK ----
     def _persist_afk(self, enabled):
-        cfg = app_config.load_config()
-        cfg["afk_enabled"] = bool(enabled)
-        app_config.save_config(cfg)
-        self._cfg = app_config.load_config()
+        self._persist_flag("afk_enabled", enabled)
 
     def _persist_flag(self, key, value):
         """通用: 把一个顶层 bool 开关落盘. 不做 CDP 写 —— 下一轮 worker 生效."""

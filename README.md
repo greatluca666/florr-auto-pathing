@@ -37,21 +37,29 @@ default; currently only meaningful on the desert map. See
 and `2026-08-16-sszone-enemy-detection-design.md` for the rarity-color-table
 caveats.
 
-## florr「反转攻击键」
+## florr 反转键（反转攻击 / 反转防御）
 
 The worker never presses attack — it relies on florr's **Settings → Controls →
-"Invert attack button"** being on (so flowers stay open and keep attacking
-without a held key). On startup `run_worker` tries to enable it automatically by
-writing one byte in florr's WASM memory over CDP (`florr_settings.py`).
+反转攻击键 / "Invert attack button"** being ON, so flowers stay open and keep
+attacking without a held key. `反转防御键` is the symmetric optional control.
 
-That write needs a calibrated address in `florr_settings.INVERT_ATTACK_ADDR`,
-which is `None` out of the box. Until it's set — or after florr ships a new
-build that moves the byte — the worker just logs a warning (`⚠️ 没能确认 …
-反转攻击键`) and keeps farming (it will path and circle correctly but deal no
-damage). To (re)calibrate: open the florr.io devtools console, paste
-`settings_finder.js`, follow its USAGE header (toggle the checkbox 4–6× calling
-`set.mark()` each time, then `set.solve()`), and put the returned address into
-`florr_settings.INVERT_ATTACK_ADDR`.
+Two global `config.json` keys (top-level, not per-time-block): `invert_attack`
+(default `true`) and `invert_defense` (default `false`). Each round the worker
+forces florr's byte to match the switch: **ON → writes `1`, OFF → writes `0`**
+(force-disable — *not* "leave whatever the account has"). The GUI sidebar has
+two switches (「反转攻击键」/「反转防御键」) that toggle these; they only write
+`config.json` — the running/next worker applies the bytes over CDP.
+
+The addresses are calibrated constants in `florr_settings.py`:
+`INVERT_ATTACK_ADDR = 0x53430E`, `INVERT_DEFENSE_ADDR = 0x534310`. The
+invert-defense address is user-supplied and not re-verified with
+`settings_finder.js`. If florr ships a new build that moves a byte, the worker
+logs a warning (`⚠️ … 未确认 …`) for that flag and keeps farming (it will
+path/circle fine but deal no damage if invert-attack is the broken one). To
+(re)calibrate: open the florr.io devtools console, paste `settings_finder.js`,
+follow its USAGE header (toggle the checkbox 4–6× calling `set.mark()` each
+time, then `set.solve()`), and put the returned address into the matching
+constant in `florr_settings.py`.
 
 ## 按区域切换 loadout（可选）
 

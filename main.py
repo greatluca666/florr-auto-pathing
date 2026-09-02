@@ -684,7 +684,7 @@ def _reassert_florr_toggles(want_attack, want_defense):
         status, detail = florr_settings.ensure_flag(cdp_bridge.eval_js, addr, want)
         out[name] = status
         if status == "changed":
-            print(f"✅ {label} 已(重新)设为 {want}")
+            print(f"✅ {label} 已(重新)设为 {'开' if want else '关'}")
         elif status == "failed":
             print(f"⚠️ {label} 未确认 ({detail}) —— 手动到 设置→控制 里勾/取消")
     return out

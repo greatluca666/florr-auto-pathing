@@ -124,7 +124,7 @@ def _coerce_v1(raw):
             ok = isinstance(val, int) and not isinstance(val, bool) and val > 0
         elif key == "consecutive_short_round_limit":
             ok = isinstance(val, int) and not isinstance(val, bool) and val >= 1
-        else:  # enemy_ai_enabled / auto_switch_server / afk_enabled
+        else:  # enemy_ai_enabled / auto_switch_server / afk_enabled / invert_attack / invert_defense
             ok = isinstance(val, bool)
 
         if ok:
