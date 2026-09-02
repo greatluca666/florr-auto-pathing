@@ -740,6 +740,12 @@ def run_worker(cfg):
     farming_duration = w["farming_duration"]
     CONSECUTIVE_SHORT_ROUND_LIMIT = w["short_round_limit"]
 
+    # florr 不记忆上次选的生态区 —— 进主循环前先把服务器钉到配置的生态区.
+    # worker 刚起时 florr 可能还停在标题页 (cp6 未必加载好), 这次是 best-effort;
+    # 循环里 click_start_game() 之后那次 (一定在局内) 才是可靠的一发.
+    if not _lock_biome(w["biome"]):
+        overlay.update(message="⚠️ 生态区未锁定, 见日志")
+
     print("🎮 开始自动寻路+刷怪 (掉线/死亡后自动点开始重来, 不主动停)\n")
     consecutive_short_rounds = 0
     round_count = 0
@@ -758,6 +764,9 @@ def run_worker(cfg):
             overlay.update(state="重新开始", message="点击开始按钮...")
             click_start_game()
             time.sleep(3)
+            # 已进游戏 -> cp6 就绪 -> forceServerID 重连到配置的生态区 (florr 默认
+            # 通常是花园, 跟寻路用的地图对不上).
+            _lock_biome(w["biome"])
 
         # 进游戏了(或本来就在局内): florr 刚才可能从账号数据把「反转攻击键」重置
         # 了, 每轮重写一次. on_already 静默(常态), turned_on / failed 才打日志.
@@ -790,7 +799,7 @@ def run_worker(cfg):
                 overlay.update(state="换服务器",
                                message=f"连续{consecutive_short_rounds}轮没刷满, 切换中")
                 try:
-                    switch_server()
+                    switch_server(w["biome"])
                     consecutive_short_rounds = 0
                     time.sleep(2)
                 except Exception as e:
