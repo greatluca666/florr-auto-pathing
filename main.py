@@ -12,7 +12,7 @@ import enemy_detect
 import app_config
 
 # ===== 索敌配置 (sszone敌怪检测/追击/规避) =====
-ENEMY_SCAN_INTERVAL = 0.12  # 秒, YOLO扫描节流间隔. 这是"决策新鲜度"的主旋钮:
+ENEMY_SCAN_INTERVAL = 0.12  # 秒, 索敌扫描节流间隔. 这是"决策新鲜度"的主旋钮:
                               # 追击/规避途中每tick都拿这份决策里的怪坐标去moveTo,
                               # 间隔越大, 中间那几tick就越是照着旧坐标全速走 —— 怪
                               # 早挪窝了, 人一头撞上去. 实测一次推理≈0.1s(Mac MPS;
@@ -22,7 +22,7 @@ ENEMY_SCAN_INTERVAL = 0.12  # 秒, YOLO扫描节流间隔. 这是"决策新鲜�
                               # max_attempts限制(见下方wander分支).
 AVOID_TRIGGER_PX = 400      # 屏幕像素半径, AVOID怪进入此半径触发逃离
 CAUTIOUS_HOLD_PX = 250      # 屏幕像素, CAUTIOUS怪保持的最小距离(不继续贴近)
-CHASE_MIN_CONF = 0.55      # 追击目标的最低YOLO置信度(幻影框过滤; 危险怪不受此限)
+CHASE_MIN_CONF = 0.55      # 追击目标的最低置信度(幻影框过滤; 危险怪不受此限)
 MYTHIC_LATCH_ENABLED  = True   # 贴脸有 Mythic 怪 → 锁定优先清掉再继续刷 (总开关)
 MYTHIC_ENGAGE_PX      = 650    # Mythic 怪进此半径 → 锁定. 实测 --watch: 玩家眼里"贴脸"
                               # 的 Mythic 蝎子/甲虫 中心距其实 450~540px, 旧值 450 全卡在外
@@ -534,7 +534,7 @@ def auto_farming(farming_area, duration=300, *, enemy_ai_enabled=True):
             mythic_latch, mythic_misses, mythic_target_pos = False, 0, None
             continue
 
-        # 索敌: 按ENEMY_SCAN_INTERVAL节流跑YOLO(不是每tick都跑, 推理有开销).
+        # 索敌: 按ENEMY_SCAN_INTERVAL节流解码canvas帧(不是每tick都跑, 有开销).
         # 索敌是附加功能, 任何异常都退化成"漫游", 不能让它打断刷怪主循环.
         now = time.time()
         enemy_decision, detections, last_enemy_scan, scanned = _maybe_scan_enemies(
@@ -644,16 +644,23 @@ def auto_farming(farming_area, duration=300, *, enemy_ai_enabled=True):
 
 def _apply_worker_config(cfg):
     """把 config.json 的值应用/摊平成 run_worker 主循环要用的局部值.
+    v2: 读 cfg['active'](GUI 调度器在起 worker 前刷成"当前生效时块"的刷怪参数);
+    老扁平文件 / 手写调试文件: 回退 cfg 本身; 再缺的键: 回退 app_config.DEFAULTS.
     apply_map() 必须在这里就调 —— utils 的 MAP 是模块级全局, load_binary_map()
     等一堆函数都读它."""
-    apply_map(cfg["map"])
+    src = cfg.get("active")
+    if not isinstance(src, dict):
+        src = cfg
+    d = app_config.DEFAULTS
+    apply_map(src.get("map", d["map"]))
     return {
-        "location": tuple(cfg["location"]),
-        "farming_area": [tuple(p) for p in cfg["farming_area"]],
-        "farming_duration": cfg["farming_duration"],
-        "short_round_limit": cfg["consecutive_short_round_limit"],
-        "enemy_ai_enabled": cfg["enemy_ai_enabled"],
-        "auto_switch_server": cfg["auto_switch_server"],
+        "location": tuple(src.get("location", d["location"])),
+        "farming_area": [tuple(p) for p in src.get("farming_area", d["farming_area"])],
+        "farming_duration": src.get("farming_duration", d["farming_duration"]),
+        "short_round_limit": src.get("consecutive_short_round_limit",
+                                    d["consecutive_short_round_limit"]),
+        "enemy_ai_enabled": src.get("enemy_ai_enabled", d["enemy_ai_enabled"]),
+        "auto_switch_server": src.get("auto_switch_server", d["auto_switch_server"]),
     }
 
 

@@ -463,3 +463,49 @@ def test_inject_canvas_hook_throttles_reload_within_min_interval(monkeypatch):
         with pytest.raises(RuntimeError):
             cdp_bridge.inject_canvas_hook()
     assert calls.count("Page.reload") == 2
+
+
+class TestLaunchChromeForProfile:
+    def test_windows_args_include_profile_and_url(self, monkeypatch):
+        monkeypatch.setattr(cdp_bridge.sys, "platform", "win32")
+        monkeypatch.setattr(cdp_bridge, "_quit_all_chrome", lambda: None)
+        with patch("cdp_bridge._find_windows_chrome", return_value=r"C:\chrome.exe"), \
+             patch("cdp_bridge.subprocess.Popen") as mock_popen:
+            cdp_bridge.launch_chrome_for_profile(r"D:\profiles\小号2",
+                                                open_url="https://florr.io", fullscreen=True)
+        argv = mock_popen.call_args[0][0]
+        assert argv[0] == r"C:\chrome.exe"
+        assert r"--user-data-dir=D:\profiles\小号2" in argv
+        assert "--start-fullscreen" in argv
+        assert "--remote-debugging-port=9222" in argv
+        assert "--remote-allow-origins=*" in argv
+        assert argv[-1] == "https://florr.io"
+
+    def test_fullscreen_false_omits_flag(self, monkeypatch):
+        monkeypatch.setattr(cdp_bridge.sys, "platform", "win32")
+        monkeypatch.setattr(cdp_bridge, "_quit_all_chrome", lambda: None)
+        with patch("cdp_bridge._find_windows_chrome", return_value=r"C:\chrome.exe"), \
+             patch("cdp_bridge.subprocess.Popen") as mock_popen:
+            cdp_bridge.launch_chrome_for_profile(r"D:\p", fullscreen=False)
+        assert "--start-fullscreen" not in mock_popen.call_args[0][0]
+
+    def test_macos_uses_open_dash_a_with_args(self, monkeypatch):
+        monkeypatch.setattr(cdp_bridge.sys, "platform", "darwin")
+        monkeypatch.setattr(cdp_bridge, "_quit_all_chrome", lambda: None)
+        with patch("cdp_bridge.subprocess.Popen") as mock_popen:
+            cdp_bridge.launch_chrome_for_profile("/tmp/p", open_url="https://florr.io")
+        argv = mock_popen.call_args[0][0]
+        assert argv[:4] == ["open", "-a", "Google Chrome", "--args"]
+        assert "--user-data-dir=/tmp/p" in argv
+        assert argv[-1] == "https://florr.io"
+
+    def test_windows_missing_chrome_raises(self, monkeypatch):
+        monkeypatch.setattr(cdp_bridge.sys, "platform", "win32")
+        monkeypatch.setattr(cdp_bridge, "_quit_all_chrome", lambda: None)
+        with patch("cdp_bridge._find_windows_chrome", return_value=None):
+            with pytest.raises(RuntimeError):
+                cdp_bridge.launch_chrome_for_profile(r"D:\p")
+
+    def test_default_profile_dir_is_under_chrome_profiles(self):
+        assert cdp_bridge._CHROME_PROFILE_DIR.endswith(
+            __import__("os").path.join("chrome-profiles", "默认"))

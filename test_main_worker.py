@@ -6,19 +6,14 @@ import pytest
 import main
 
 
-def test_apply_worker_config_maps_keys(monkeypatch):
+def test_apply_worker_config_reads_active_slice(monkeypatch):
     applied = {}
     monkeypatch.setattr(main, "apply_map", lambda name: applied.setdefault("map", name))
-    cfg = {
-        "map": "ocean",
-        "location": [11, 22],
-        "farming_area": [[1, 2], [3, 4]],
-        "farming_duration": 120,
-        "consecutive_short_round_limit": 5,
-        "enemy_ai_enabled": False,
-        "auto_switch_server": False,
-        "afk_enabled": True,
-    }
+    cfg = {"version": 2, "active": {
+        "map": "ocean", "location": [11, 22], "farming_area": [[1, 2], [3, 4]],
+        "farming_duration": 120, "consecutive_short_round_limit": 5,
+        "enemy_ai_enabled": False, "auto_switch_server": False,
+    }}
     w = main._apply_worker_config(cfg)
     assert applied["map"] == "ocean"
     assert w["location"] == (11, 22)
@@ -27,6 +22,24 @@ def test_apply_worker_config_maps_keys(monkeypatch):
     assert w["short_round_limit"] == 5
     assert w["enemy_ai_enabled"] is False
     assert w["auto_switch_server"] is False
+
+
+def test_apply_worker_config_falls_back_to_flat_when_no_active(monkeypatch):
+    monkeypatch.setattr(main, "apply_map", lambda name: None)
+    cfg = {"map": "anthell", "location": [1, 1], "farming_area": [[0, 0], [2, 2]],
+           "farming_duration": 99, "consecutive_short_round_limit": 4,
+           "enemy_ai_enabled": True, "auto_switch_server": True}
+    w = main._apply_worker_config(cfg)
+    assert w["farming_duration"] == 99
+    assert w["short_round_limit"] == 4
+
+
+def test_apply_worker_config_fills_missing_from_defaults(monkeypatch):
+    monkeypatch.setattr(main, "apply_map", lambda name: None)
+    w = main._apply_worker_config({"version": 2, "active": {"map": "desert"}})
+    import app_config
+    assert w["farming_duration"] == app_config.DEFAULTS["farming_duration"]
+    assert w["location"] == tuple(app_config.DEFAULTS["location"])
 
 
 def test_maybe_scan_enemies_disabled_never_touches_enemy_detect(monkeypatch):
