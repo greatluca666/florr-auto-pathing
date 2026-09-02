@@ -29,17 +29,13 @@ To decide on the positions and areas, I've already prepared `map_select.py` and 
 
 ## Enemy Detection (Sandstorm Zone)
 
-`auto_farming()` can chase/avoid mobs by rarity using a YOLO model. This needs
-`models/desert.pt` (6 classes: scorpion, beetle, cactus, sandstorm,
-sand_centipede, soldier_fire_ant) placed at that exact path — it's not
-included in this repo (third-party binary weights, gitignored). Get it from
-[Shiny-Ladybug/assets](https://github.com/Shiny-Ladybug/assets) yourself and
-verify its source before use; whoever/whatever wires this up should not be
-downloading and loading arbitrary `.pt` files from the internet without a
-human confirming that step (`.pt` files are pickle-based and can execute
-code on load). See
-`docs/superpowers/specs/2026-08-16-sszone-enemy-detection-design.md` for the
-full design and the rarity-color-table caveats.
+`auto_farming()` can chase/avoid mobs by rarity. It reads mob position, HP and
+rarity by decoding florr.io's canvas draw calls over CDP — no model file, no
+screenshot inference (the old YOLO `models/desert.pt` path is gone). Enabled by
+default; currently only meaningful on the desert map. See
+`docs/superpowers/specs/2026-09-01-canvas-decode-enemy-detection-design.md`
+and `2026-08-16-sszone-enemy-detection-design.md` for the rarity-color-table
+caveats.
 
 ## Implements
 
@@ -49,26 +45,39 @@ from its original 1920x1080 calibration — see
 section for the one thing that isn't verified (non-16:9 windows, if florr.io turns out to letterbox
 instead of stretching its UI — recalibrate the affected constant with `debug_screen_pos.py` if so).
 
-Run `python main.py` to open the control-panel GUI. From there you can:
+Run `python main.py` to open the control-panel GUI.
 
-- 选地图 (select ground or sandstorm map)
-- 点目标点 (click a target point on the map)
-- 框刷怪区 (frame a farming area with drag-select)
-- 切敌检 (toggle enemy detection AI — off by default, needs `models/desert.pt`)
-- 切 AFK (toggle auto-AFK detection)
-- 一键启停 (click 开始 to start a farming run, or stop if already running)
+**时间表 (schedule) page** — the main view is a list of time blocks. Each block
+covers a set of weekdays + a start/end time (a block whose start ≥ end crosses
+midnight; `00:00–00:00` means all day) and carries: which account, which map, a
+target point / farming area (map picker), enemy-detection AI, auto-switch-server,
+and — under 高级选项 — farming duration and the consecutive-short-round threshold
+(both with hover `?` explanations). Overlapping blocks (shared weekday + time)
+are rejected on save. Click **▶ 开始调度** and the GUI drives everything by the
+weekly plan: at each block boundary it stops the worker, relaunches Chrome on
+that block's account profile (`--start-fullscreen`, opens florr.io) if the
+account changed, writes the block's params into `config.json`, and starts a
+fresh worker. Gaps in the plan leave the worker stopped. The whole scheduled run
+needs zero interaction — the worker clicks the in-game start button and handles
+death screens itself.
 
-Clicking 开始 spawns a worker process that runs the actual pathfinding loop.
-Worker logs appear in the GUI's log box in real time — no separate console window.
+**账号 (accounts) page** — each florr.io account is its own Chrome profile
+directory under `chrome-profiles/<别名>/`. New / login / re-login opens a
+non-modal login guide (Chrome opens florr.io in a normal window; log in, click
+完成). Rename updates every block that referenced the old name; delete is
+blocked while any block still uses the account.
 
-**Direct CLI mode:** If you already have a ready Chrome instance, you can skip
-the GUI and run `python main.py --worker` directly. This runs the bot loop
-immediately, equivalent to clicking 开始 in the GUI. (The GUI mode is
-recommended for normal use because it handles Chrome setup automatically.)
+The bottom-left **AFK** switch is global and independent of the schedule.
 
-Configuration saves to `config.json` next to the script — your map/point/area
-choices and AI/AFK toggles persist across runs. First run has no config file
-yet; the app uses built-in defaults.
+**Direct CLI mode:** with a ready Chrome instance you can skip the GUI and run
+`python main.py --worker` — it reads `config.json`'s `active` slice (the params
+the GUI last wrote for the running block) and runs the bot loop immediately.
+
+Configuration saves to `config.json` next to the script (schema v2:
+`profiles` + `schedule` + `active` + `afk_enabled`). An old flat v1 config is
+migrated automatically on first launch into a single all-week block under a
+`默认` account (the old `chrome-profile/` dir is renamed to
+`chrome-profiles/默认/`). First run with no config file uses built-in defaults.
 
 To package this as a standalone Windows `.exe` instead, see [PACKAGING.md](PACKAGING.md).
 
