@@ -470,6 +470,15 @@ def click_start_game():
     return _click_button_until_gone(_START_BUTTON_POS, on_start_screen, "开始")
 
 
+def click_play_as_guest():
+    """点「以游客身份游玩」, 让 florr 从未登录的登录选择页进到正常标题页.
+    连点两下 + 复查 on_guest_screen() 确认这一页消失, 没消失就重试(理由见
+    _click_button_until_gone 上面的注释). 之后由 on_start_screen() /
+    click_start_game() 接手真正进游戏.
+    """
+    return _click_button_until_gone(_PLAY_AS_GUEST_POS, on_guest_screen, "以游客身份游玩")
+
+
 def check_stage():
     full_screen = [0, 0, SCREEN_WIDTH, SCREEN_HEIGHT]
     color = pyautogui.screenshot(region=full_screen).getpixel(scale_point(316, 32))

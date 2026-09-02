@@ -255,20 +255,22 @@ class _ClickSpy:
         self.clicks += 1
 
 
-def _patch_click(monkeypatch, on_screen_sequence):
-    """on_screen_sequence: 每次复查画面时依次返回的值; 用完后保持最后一个值."""
+def _patch_click(monkeypatch, on_screen_sequence, screen_attr="on_start_screen"):
+    """on_screen_sequence: 每次复查画面时依次返回的值; 用完后保持最后一个值.
+    screen_attr: _click_button_until_gone 传进来的复查函数名 (on_start_screen /
+    on_death_screen / on_guest_screen)."""
     spy = _ClickSpy()
     monkeypatch.setattr(utils, "pyautogui", spy)
     monkeypatch.setattr(utils.time, "sleep", lambda *_a, **_kw: None)
     seq = list(on_screen_sequence)
     calls = {"n": 0}
 
-    def fake_on_start_screen():
+    def fake_screen_check():
         i = min(calls["n"], len(seq) - 1)
         calls["n"] += 1
         return seq[i]
 
-    monkeypatch.setattr(utils, "on_start_screen", fake_on_start_screen)
+    monkeypatch.setattr(utils, screen_attr, fake_screen_check)
     return spy
 
 
@@ -332,3 +334,23 @@ def test_on_guest_screen_false_when_mostly_background(monkeypatch):
 def test_play_as_guest_pos_is_scaled_from_reference():
     # 参照分辨率(1920x1080)下 scale_point 是恒等, _PLAY_AS_GUEST_POS 就是 (960, 498)
     assert utils._PLAY_AS_GUEST_POS == (960, 498)
+
+
+# ── click_play_as_guest: 点掉登录选择页 ──────────────────────────────────
+
+def test_click_play_as_guest_stops_after_page_gone_on_first_try(monkeypatch):
+    spy = _patch_click(monkeypatch, [False], screen_attr="on_guest_screen")
+    assert utils.click_play_as_guest() is True
+    assert spy.clicks == 2                       # 一轮 = connect click + 真点
+
+
+def test_click_play_as_guest_retries_until_page_gone(monkeypatch):
+    spy = _patch_click(monkeypatch, [True, True, False], screen_attr="on_guest_screen")
+    assert utils.click_play_as_guest() is True
+    assert spy.clicks == 2 * 3
+
+
+def test_click_play_as_guest_gives_up_after_max_attempts_without_crashing(monkeypatch):
+    spy = _patch_click(monkeypatch, [True], screen_attr="on_guest_screen")
+    assert utils.click_play_as_guest() is False
+    assert spy.clicks == 2 * utils._CONFIRM_CLICK_MAX_ATTEMPTS
