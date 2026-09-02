@@ -181,6 +181,8 @@ class TimeBlockEditor(ctk.CTkToplevel):
         self._end_e = ctk.CTkEntry(tr, width=70, placeholder_text="12:00")
         self._end_e.insert(0, self._block.get("end", ""))
         self._end_e.pack(side="left")
+        for e in (self._start_e, self._end_e):
+            e.bind("<FocusOut>", lambda ev, w=e: self._normalize_entry(w), add="+")
         ctk.CTkLabel(tr, text="  (跨午夜: 起 > 止; 全天: 00:00–00:00)",
                      font=("", 9), text_color="gray").pack(side="left")
 
@@ -246,6 +248,14 @@ class TimeBlockEditor(ctk.CTkToplevel):
         ctk.CTkButton(br, text="取消", width=70, command=self.destroy).pack(side="left", padx=4)
         ctk.CTkButton(br, text="保存", width=70, command=self._save).pack(side="left")
 
+    def _normalize_entry(self, entry):
+        """失焦: 能规整就把输入框内容替换成规范 HH:MM; 规整不了就原样留着,
+        交给保存时的 validate_block 红字. 纯 UI 便利, 不参与校验闭环(_collect 自己也规整)."""
+        fixed = app_config.normalize_time(entry.get().strip())
+        if fixed is not None and fixed != entry.get():
+            entry.delete(0, "end")
+            entry.insert(0, fixed)
+
     def _toggle_adv(self):
         self._adv_open = not self._adv_open
         self._adv_btn.configure(text=("▾ 高级选项" if self._adv_open else "▸ 高级选项"))
@@ -303,9 +313,13 @@ class TimeBlockEditor(ctk.CTkToplevel):
         from gui_app import resolve_point_and_area
         point, area = resolve_point_and_area(self._point, self._area)
         days = [i for i, v in enumerate(self._day_vars) if v.get()]
+        start_raw = self._start_e.get().strip()
+        end_raw = self._end_e.get().strip()
         blk = dict(self._block)
         blk.update(
-            days=days, start=self._start_e.get().strip(), end=self._end_e.get().strip(),
+            days=days,
+            start=app_config.normalize_time(start_raw) or start_raw,
+            end=app_config.normalize_time(end_raw) or end_raw,
             profile=self._acct.get(), map=self._map.get(),
             location=list(point) if point else None,
             farming_area=[list(area[0]), list(area[1])] if area else None,

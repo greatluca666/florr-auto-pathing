@@ -50,7 +50,7 @@ class TestCoerceV2:
     @pytest.mark.parametrize("bad_block", [
         {"days": []},
         {"days": [7]},
-        {"start": "9:00"},
+        {"start": "9am"},                     # normalize_time 解析不了 -> 丢块
         {"start": "10:00", "end": "10:00"},   # start==end 非全天
         {"map": "nonsense"},
         {"location": "12,32"},
@@ -97,6 +97,19 @@ class TestCoerceV2:
         got = app_config.load_config()
         assert got["active"]["map"] == "ocean"
         assert got["active"]["location"] == [5, 5]
+
+    def test_coerce_block_normalizes_loose_time(self, cfg_path):
+        blk = _v2_block(id="loose", start="9:00", end="1230")
+        cfg_path.write_text(json.dumps(_v2_cfg(schedule=[blk])), encoding="utf-8")
+        got = app_config.load_config()["schedule"]
+        assert [b["id"] for b in got] == ["loose"]
+        assert got[0]["start"] == "09:00" and got[0]["end"] == "12:30"
+
+    def test_coerce_block_drops_unparseable_time(self, cfg_path):
+        good = _v2_block(id="good")
+        bad = _v2_block(id="bad", start="9am")
+        cfg_path.write_text(json.dumps(_v2_cfg(schedule=[bad, good])), encoding="utf-8")
+        assert [b["id"] for b in app_config.load_config()["schedule"]] == ["good"]
 
 
 class TestMigrationV1:
@@ -232,3 +245,41 @@ class TestScheduleMath:
 
     def test_next_start_none_when_empty(self):
         assert app_config.next_start([], 0, "09:00") is None
+
+
+class TestNormalizeTime:
+    _OK = [
+        ("09:00", "09:00"),
+        (" 9:00 ", "09:00"),
+        ("9:5", "09:05"),
+        ("09：00", "09:00"),          # 全角冒号
+        ("０９:００", "09:00"),        # 全角数字
+        ("　9:00　", "09:00"),        # 全角空格
+        ("9.00", "09:00"),
+        ("9-30", "09:30"),
+        ("9", "09:00"),
+        ("18", "18:00"),
+        ("930", "09:30"),
+        ("0930", "09:30"),
+        ("1830", "18:30"),
+        ("0", "00:00"),
+        ("23:59", "23:59"),
+    ]
+    _BAD = ["2400", "25:00", "9:70", "12:00:00", "9am", "", "   ", "abc",
+            "99999", ":30", "9:", "1:2:3"]
+
+    @pytest.mark.parametrize("raw, out", _OK)
+    def test_normalizes(self, raw, out):
+        assert app_config.normalize_time(raw) == out
+
+    @pytest.mark.parametrize("raw", _BAD)
+    def test_rejects(self, raw):
+        assert app_config.normalize_time(raw) is None
+
+    @pytest.mark.parametrize("raw", [None, 123, 9.0, ["09:00"]])
+    def test_non_str_is_none(self, raw):
+        assert app_config.normalize_time(raw) is None
+
+    @pytest.mark.parametrize("_raw, out", _OK)
+    def test_idempotent(self, _raw, out):
+        assert app_config.normalize_time(out) == out
