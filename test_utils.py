@@ -332,8 +332,10 @@ def test_on_guest_screen_false_when_mostly_background(monkeypatch):
 
 
 def test_play_as_guest_pos_is_scaled_from_reference():
-    # 参照分辨率(1920x1080)下 scale_point 是恒等, _PLAY_AS_GUEST_POS 就是 (960, 498)
-    assert utils._PLAY_AS_GUEST_POS == (960, 498)
+    # _PLAY_AS_GUEST_POS 在 import 时按 1920x1080 参照缩放到实际分辨率. 用
+    # scale_point 比较而非写死元组 —— 非参照分辨率的开发/CI 机器上也成立, 同时
+    # 仍钉住 960/498 这两个字面量.
+    assert utils._PLAY_AS_GUEST_POS == utils.scale_point(960, 498)
 
 
 # ── click_play_as_guest: 点掉登录选择页 ──────────────────────────────────

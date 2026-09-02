@@ -393,6 +393,13 @@ def on_death_screen():
 _GUEST_SCREEN_SAMPLE_HALF_W = 60
 _GUEST_SCREEN_SAMPLE_HALF_H = 16
 _GUEST_SCREEN_GREEN_THRESHOLD = 0.25
+# 未验证: florr 登录后的标题页也有一块绿色「开始」按钮. _START_BUTTON_POS
+# (1059,527) 跟这里的 (960,498) 采样框重叠约 5%(远低于阈值), 但只在浏览器
+# 登出态量过, 登录态标题页没采样过. 若那颗「开始」按钮明显更高, 重叠可能
+# 冲到阈值以上 —— on_guest_screen() 会在登录过的号上每轮误触发, 白跑
+# click_play_as_guest() 的 10 次重试(~17s)后 on_start_screen() 才接手
+# (会自愈, 不卡死). 上 Windows 机后截一张登录态标题页, 跑
+# _green_button_ratio(_PLAY_AS_GUEST_POS, 60, 16) 确认 < 0.25, 把数值补进这里.
 
 
 def on_guest_screen():

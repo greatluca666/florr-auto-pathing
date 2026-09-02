@@ -159,3 +159,4 @@ if on_guest_screen():
 - **歧义:** 「未登录标题页」= `_PLAY_AS_GUEST_POS` 处 `_green_button_ratio > _GUEST_SCREEN_GREEN_THRESHOLD`,一个明确的像素判据。「先查游客页再查 start」的顺序在接入代码里写死。
 - **范围:** utils.py 加两函数 + 三常量,main.py 两处各 3~5 行接入,两个测试文件各扩几个用例。单一 plan 够,不需要拆。
 - **风险(接入时验证):** ① florr 改标题页布局 → 坐标失效 → `on_guest_screen()` 恒 False → 退化成「当前行为」(卡游客页误换服),不会更糟,用户重新截图量坐标。② 真机 1920×1080 全屏下 florr canvas 若不是整窗口尺寸(缩放/黑边)→ 实测值偏移 → 同 ①。③ 非 16:9 分辨率:`scale_point` 按 `_REF_WIDTH/_REF_HEIGHT` 独立轴缩放,水平居中的按钮在宽高比不同的屏上 x 会偏——已知局限,跟现有 start/continue 按钮一样,不在本 spec 解决。
+- **风险(误报方向,尚未测量):** 上面 ①~③ 全是「假阴性」方向的分析——坐标漂移让 `on_guest_screen()` 返回 False,顶多退回当前行为。反过来的「假阳性」方向(已登录的标题页那颗绿色「开始」按钮把 `_PLAY_AS_GUEST_POS` 处的绿占比顶过 `0.25`,在登录过的号上每轮误判成游客页)只是被断言、没被量过——实测那次浏览器是登出态,没有登录态标题页的采样。即便误判也会优雅降级:`click_play_as_guest()` 10 次重试(~17s)点空后 `on_start_screen()` 接手,不卡死。收口动作:上 Windows 机截一张登录态标题页,跑 `_green_button_ratio(_PLAY_AS_GUEST_POS, 60, 16)` 确认 < 0.25,把实测值补进 `utils.py` 注释。
