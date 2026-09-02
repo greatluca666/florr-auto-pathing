@@ -361,7 +361,8 @@ def _stub_run_worker_env(monkeypatch, overlay=None):
         "location": (1, 2), "farming_area": [(0, 0), (9, 9)], "farming_duration": 300,
         "short_round_limit": 2, "enemy_ai_enabled": False, "auto_switch_server": False,
         "biome": "desert",
-        "enter_game_swap": "none", "reach_area_swap": "none",
+        "enter_game_swap": {"enabled": False, "mod": "none", "digit": "1"},
+        "reach_area_swap": {"enabled": False, "mod": "none", "digit": "1"},
     })
     monkeypatch.setattr(main, "switch_server", lambda *a, **k: "stub-srv")
     monkeypatch.setattr(main, "on_death_screen", lambda: False)
@@ -487,22 +488,30 @@ def test_run_worker_never_clicks_guest_when_not_on_guest_screen(monkeypatch):
 
 def test_apply_worker_config_reads_swap_keys(monkeypatch):
     monkeypatch.setattr(main, "apply_map", lambda name: None)
+    e = {"enabled": True, "mod": "k", "digit": "3"}
+    r = {"enabled": True, "mod": "none", "digit": "7"}
     cfg = {"version": 2, "active": {"map": "desert",
-                                    "enter_game_swap": "k", "reach_area_swap": "digits"}}
+                                    "enter_game_swap": e, "reach_area_swap": r}}
     w = main._apply_worker_config(cfg)
-    assert w["enter_game_swap"] == "k"
-    assert w["reach_area_swap"] == "digits"
+    assert w["enter_game_swap"] == e
+    assert w["reach_area_swap"] == r
 
 
-def test_apply_worker_config_swap_keys_default_none(monkeypatch):
+def test_apply_worker_config_swap_keys_default_disabled(monkeypatch):
     monkeypatch.setattr(main, "apply_map", lambda name: None)
+    off = {"enabled": False, "mod": "none", "digit": "1"}
     w = main._apply_worker_config({"version": 2, "active": {"map": "desert"}})
-    assert w["enter_game_swap"] == "none"
-    assert w["reach_area_swap"] == "none"
+    assert w["enter_game_swap"] == off
+    assert w["reach_area_swap"] == off
 
 
 def _swap_env(monkeypatch, *, enter="k", reach="l"):
-    """_stub_run_worker_env + 记录 press_swap 调用 + _apply_worker_config 带 swap 键."""
+    """_stub_run_worker_env + 记录 press_swap 调用 + _apply_worker_config 带 swap 键.
+
+    enter/reach 是不透明哨兵 —— main.loadout_swap.press_swap 被 stub 成"记下参数",
+    真按键逻辑(和弦 / 对象形状)由 test_loadout_swap.py 覆盖. 这里只关心"哪个字段的
+    值被传给了 press_swap、顺序、以及 swap_this_round 门控".
+    """
     _stub_run_worker_env(monkeypatch)
     monkeypatch.setattr(main, "_apply_worker_config", lambda cfg: {
         "location": (1, 2), "farming_area": [(0, 0), (9, 9)], "farming_duration": 300,

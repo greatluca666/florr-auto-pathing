@@ -1,35 +1,46 @@
-"""进游戏 / 到刷怪区时按一组键切换 florr loadout.
+"""进游戏 / 到刷怪区时按一次和弦切换 florr loadout.
 
 跟 florr_settings.py / server_lookup.py 一样: 小、单一职责、不 import GUI、
-不 import main. press / sleep 通过参数注入, 方便单测.
-"""
-import time
+不 import main. 三个按键原语通过参数注入, 方便单测.
 
+和弦 = 像 Ctrl+C: 按住修饰键 (k/l) → 按数字 → 松开修饰键. mod=="none" 就只按数字.
+"""
 import pyautogui
 
-_DIGITS = "1234567890"
+# tuple 不是 str —— `"12" in "1234567890"` 是子串匹配会误判成合法, tuple 成员判定才对.
+_DIGITS = tuple("1234567890")
+_MODS = ("k", "l")
 
 
-def press_swap(spec, *, press=pyautogui.press, sleep=time.sleep):
-    """按一组切换 loadout 的键.
+def press_swap(cfg, *, press=pyautogui.press,
+               key_down=pyautogui.keyDown, key_up=pyautogui.keyUp):
+    """按一次 loadout 切换和弦.
 
-    spec:
-      - "none" / None / "" / 未知值: 什么都不做.
-      - "k" / "l": 按一下 (florr 里绑的 loadout 预设键).
-      - "digits": 顺序点按 1..0, 每键之间 ~40ms —— 把每个槽位在主/副行之间
-        对调一遍 = 换整套.
+    cfg: {"enabled": bool, "mod": "none"|"k"|"l", "digit": "1".."9"|"0"}.
+      - 非 dict / enabled 假           → 什么都不做.
+      - digit 不在 1..0               → 什么都不做 (+ ⚠️ 日志).
+      - mod == "none" / 未知           → press(digit).
+      - mod in (k, l)                 → key_down(mod); press(digit); key_up(mod).
+        key_up 走 finally —— press 抛了也要把修饰键松开.
 
-    任何异常吞掉 + 打日志, 绝不抛给调用方: 切装备是附加动作, 不能打断刷怪轮次
+    任何异常吞掉 + ⚠️ 日志, 绝不抛给调用方: 切装备是附加动作, 不能打断刷怪轮次
     (对齐 main._reassert_invert_attack 的 warn-only).
     """
-    if spec not in ("k", "l", "digits"):
+    if not isinstance(cfg, dict) or not cfg.get("enabled"):
+        return
+    digit = cfg.get("digit")
+    mod = cfg.get("mod", "none")
+    if not (isinstance(digit, str) and digit in _DIGITS):
+        print(f"⚠️ 装备切换和弦: 无效数字键 {digit!r}, 跳过")
         return
     try:
-        if spec in ("k", "l"):
-            press(spec)
+        if mod in _MODS:
+            key_down(mod)
+            try:
+                press(digit)
+            finally:
+                key_up(mod)
         else:
-            for k in _DIGITS:
-                press(k)
-                sleep(0.04)
+            press(digit)
     except Exception as e:
-        print(f"⚠️ 装备切换按键失败 ({spec}): {e}")
+        print(f"⚠️ 装备切换按键失败 (mod={mod} digit={digit}): {e}")
