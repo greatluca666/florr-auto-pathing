@@ -142,8 +142,9 @@ def _coerce_block(raw, aliases, n):
             isinstance(d, int) and not isinstance(d, bool) and 0 <= d <= 6 for d in days)):
         return None
     days = sorted(set(days))
-    start, end = raw.get("start"), raw.get("end")
-    if not (_valid_time(start) and _valid_time(end)):
+    start = normalize_time(raw.get("start"))
+    end = normalize_time(raw.get("end"))
+    if start is None or end is None:
         return None
     if start == end and start != "00:00":
         return None
@@ -301,6 +302,51 @@ def _hhmm_to_min(s):
 
 def _valid_time(s):
     return isinstance(s, str) and _TIME_RE.match(s) is not None
+
+
+# 宽松时间输入 -> 规范 "HH:MM". 校验层(_valid_time / gui_schedule.validate_block)
+# 保持严格只判定; 这是独立的变换层, 跑在校验之前. 规则见
+# docs/superpowers/specs/2026-09-02-time-input-tolerance-design.md.
+_TIME_TRANSLATE = {ord("："): ":", ord("．"): ".", ord("－"): "-", ord("　"): None}
+_TIME_TRANSLATE.update({ord("０") + _i: str(_i) for _i in range(10)})
+
+
+def _ascii_digits(x):
+    return x != "" and all("0" <= c <= "9" for c in x)
+
+
+def normalize_time(s):
+    """把宽松写法('9:00' / '09：00' / '930' / '9' / '9.00' / 全角数字)规整成规范
+    'HH:MM'. 无法解析 / 越界返回 None(调用方落回原有失败路径: GUI 红字, coerce 丢块)."""
+    if not isinstance(s, str):
+        return None
+    s = s.translate(_TIME_TRANSLATE).strip()
+    if not s:
+        return None
+    s = s.replace(".", ":").replace("-", ":")
+    if s.count(":") > 1:
+        return None
+    if ":" in s:
+        h_str, m_str = s.split(":")
+        if not (_ascii_digits(h_str) and _ascii_digits(m_str)):
+            return None
+        if not (1 <= len(h_str) <= 2 and 1 <= len(m_str) <= 2):
+            return None
+        h, m = int(h_str), int(m_str)
+    elif _ascii_digits(s):
+        if len(s) <= 2:              # "9" / "18" -> 整点
+            h, m = int(s), 0
+        elif len(s) == 3:            # "930" -> 9:30
+            h, m = int(s[0]), int(s[1:])
+        elif len(s) == 4:           # "1830" -> 18:30
+            h, m = int(s[:2]), int(s[2:])
+        else:
+            return None
+    else:
+        return None
+    if not (0 <= h <= 23 and 0 <= m <= 59):
+        return None
+    return "%02d:%02d" % (h, m)
 
 
 def expand_block_days(block):
