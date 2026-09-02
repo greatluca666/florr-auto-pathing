@@ -76,3 +76,21 @@ def test_two_mobs_decode_independently():
     recs = gameplay_frame(0, mobs=[(400.0, 200.0, "Beetle", 1.0), (700.0, 500.0, "Scorpion", 1.0)])
     mobs = mobs_from_frame(recs, camera_from_frame(recs))
     assert sorted(m["name"] for m in mobs) == ["Beetle", "Scorpion"]
+
+
+def test_batched_bars_then_batched_labels_still_attribute_each_mob():
+    # high mob density / zoomed out: florr draws several mobs' bars back to back, THEN
+    # their name+rarity text back to back. Stream-order text consumption gave the first
+    # mob in the batch an empty nameplate (a real Mythic sandstorm was lost this way).
+    recs = list(player_recs(0))
+    recs += healthbar_recs(0, 400.0, 200.0, hp=1.0)      # mob A bars
+    recs += healthbar_recs(0, 700.0, 500.0, hp=1.0)      # mob B bars, straight after
+    recs += [text_rec(0, 400.0 - 34, 200.0 + 39, "Sandstorm")] * 2          # A name
+    recs += [text_rec(0, 400.0 + 8, 200.0 + 60, "Mythic", "#1FDBDE")] * 2   # A rarity
+    recs += [text_rec(0, 700.0 - 34, 500.0 + 39, "Beetle")] * 2            # B name
+    recs += [text_rec(0, 700.0 + 8, 500.0 + 60, "Legendary", "#DE1F1F")] * 2  # B rarity
+    recs += [minimap_rec(0, 5000.0, 6000.0)]
+
+    mobs = {m["name"]: m for m in mobs_from_frame(recs, camera_from_frame(recs))}
+    assert mobs["Sandstorm"]["rarity_color"] == "#1FDBDE"
+    assert mobs["Beetle"]["rarity_color"] == "#DE1F1F"
