@@ -37,6 +37,22 @@ default; currently only meaningful on the desert map. See
 and `2026-08-16-sszone-enemy-detection-design.md` for the rarity-color-table
 caveats.
 
+## florr「反转攻击键」
+
+The worker never presses attack — it relies on florr's **Settings → Controls →
+"Invert attack button"** being on (so flowers stay open and keep attacking
+without a held key). On startup `run_worker` tries to enable it automatically by
+writing one byte in florr's WASM memory over CDP (`florr_settings.py`).
+
+That write needs a calibrated address in `florr_settings.INVERT_ATTACK_ADDR`,
+which is `None` out of the box. Until it's set — or after florr ships a new
+build that moves the byte — the worker just logs a warning (`⚠️ 没能确认 …
+反转攻击键`) and keeps farming (it will path and circle correctly but deal no
+damage). To (re)calibrate: open the florr.io devtools console, paste
+`settings_finder.js`, follow its USAGE header (toggle the checkbox 4–6× calling
+`set.mark()` each time, then `set.solve()`), and put the returned address into
+`florr_settings.INVERT_ATTACK_ADDR`.
+
 ## Implements
 
 Resolution is auto-detected at startup (`pyautogui.size()`) and every screen coordinate is scaled

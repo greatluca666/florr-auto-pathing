@@ -10,6 +10,7 @@ import random
 import afk_watch
 import enemy_detect
 import app_config
+import florr_settings
 
 # ===== 索敌配置 (sszone敌怪检测/追击/规避) =====
 ENEMY_SCAN_INTERVAL = 0.12  # 秒, 索敌扫描节流间隔. 这是"决策新鲜度"的主旋钮:
@@ -682,6 +683,19 @@ def run_worker(cfg):
     #     又给它拉回去.
     global overlay
     overlay = create_overlay()
+
+    # bot 自己不按攻击键, 靠 florr 的「反转攻击键」设置持续输出. 关着的话到位也
+    # 不出伤害. 启动时通过 CDP 往 florr 的 WASM 内存写一个字节确保它开着 ——
+    # 做不到就大声警告, 但不中断(bot 照常跑, 用户看到警告去手动勾).
+    _ia_status, _ia_detail = florr_settings.ensure_invert_attack_on(cdp_bridge.eval_js)
+    if _ia_status == "turned_on":
+        print("✅ 已开启 florr「反转攻击键」")
+    elif _ia_status == "on_already":
+        print("florr「反转攻击键」已是开")
+    else:
+        print(f"⚠️ 没能确认 florr「反转攻击键」({_ia_detail}) —— 请手动到 "
+              f"设置→控制→反转攻击键 打勾, 否则 bot 到位也不出伤害")
+        overlay.update(message="⚠️ 反转攻击键未确认, 见日志")
 
     w = _apply_worker_config(cfg)
     location = w["location"]
