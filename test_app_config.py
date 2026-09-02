@@ -292,34 +292,49 @@ class TestNormalizeTime:
         assert app_config.normalize_time(out) == out
 
 
+_SWAP_OFF = {"enabled": False, "mod": "none", "digit": "1"}
+
+
 class TestLoadoutSwapKeys:
-    def test_defaults_have_none(self):
-        assert app_config.DEFAULTS["enter_game_swap"] == "none"
-        assert app_config.DEFAULTS["reach_area_swap"] == "none"
+    def test_defaults_are_disabled_chord_objects(self):
+        assert app_config.DEFAULTS["enter_game_swap"] == _SWAP_OFF
+        assert app_config.DEFAULTS["reach_area_swap"] == _SWAP_OFF
 
     def test_active_keys_include_swaps(self):
         assert "enter_game_swap" in app_config._ACTIVE_KEYS
         assert "reach_area_swap" in app_config._ACTIVE_KEYS
 
     def test_defaults_v2_active_slice_has_swaps(self):
-        assert app_config.DEFAULTS_V2["active"]["enter_game_swap"] == "none"
-        assert app_config.DEFAULTS_V2["active"]["reach_area_swap"] == "none"
+        assert app_config.DEFAULTS_V2["active"]["enter_game_swap"] == _SWAP_OFF
+        assert app_config.DEFAULTS_V2["active"]["reach_area_swap"] == _SWAP_OFF
 
-    def test_valid_values_roundtrip(self, cfg_path):
+    def test_valid_chord_roundtrip(self, cfg_path):
         cfg = _v2_cfg()
-        cfg["schedule"] = [_v2_block(enter_game_swap="k", reach_area_swap="digits")]
+        cfg["schedule"] = [_v2_block(
+            enter_game_swap={"enabled": True, "mod": "k", "digit": "3"},
+            reach_area_swap={"enabled": True, "mod": "none", "digit": "0"})]
         app_config.save_config(cfg)
         blk = app_config.load_config()["schedule"][0]
-        assert blk["enter_game_swap"] == "k"
-        assert blk["reach_area_swap"] == "digits"
+        assert blk["enter_game_swap"] == {"enabled": True, "mod": "k", "digit": "3"}
+        assert blk["reach_area_swap"] == {"enabled": True, "mod": "none", "digit": "0"}
 
-    def test_illegal_value_falls_back_to_none(self, cfg_path):
+    def test_bad_fields_normalized(self, cfg_path):
         cfg = _v2_cfg()
-        cfg["schedule"] = [_v2_block(enter_game_swap="capslock", reach_area_swap=7)]
+        cfg["schedule"] = [_v2_block(
+            enter_game_swap={"enabled": 1, "mod": "ctrl", "digit": "99"},
+            reach_area_swap="k")]   # 旧字符串形式 → 默认禁用对象
         app_config.save_config(cfg)
         blk = app_config.load_config()["schedule"][0]
-        assert blk["enter_game_swap"] == "none"
-        assert blk["reach_area_swap"] == "none"
+        # enabled 非严格 True → False; mod 非法 → none; digit 非法 → "1"
+        assert blk["enter_game_swap"] == _SWAP_OFF
+        assert blk["reach_area_swap"] == _SWAP_OFF
+
+    def test_partial_chord_fills_missing(self, cfg_path):
+        cfg = _v2_cfg()
+        cfg["schedule"] = [_v2_block(enter_game_swap={"enabled": True, "mod": "l"})]
+        app_config.save_config(cfg)
+        blk = app_config.load_config()["schedule"][0]
+        assert blk["enter_game_swap"] == {"enabled": True, "mod": "l", "digit": "1"}
 
     def test_old_block_without_keys_still_valid(self, cfg_path):
         # 旧 config.json: 时块 dict 里根本没有这两个键 —— 不能被整块丢
@@ -331,8 +346,8 @@ class TestLoadoutSwapKeys:
         app_config.save_config(cfg)
         got = app_config.load_config()
         assert len(got["schedule"]) == 1
-        assert got["schedule"][0]["enter_game_swap"] == "none"
-        assert got["schedule"][0]["reach_area_swap"] == "none"
+        assert got["schedule"][0]["enter_game_swap"] == _SWAP_OFF
+        assert got["schedule"][0]["reach_area_swap"] == _SWAP_OFF
 
     def test_v1_migration_adds_defaults(self, cfg_path):
         cfg_path.write_text(json.dumps({
@@ -341,6 +356,15 @@ class TestLoadoutSwapKeys:
             "enemy_ai_enabled": False, "auto_switch_server": True,
         }), encoding="utf-8")
         got = app_config.load_config()
-        assert got["schedule"][0]["enter_game_swap"] == "none"
-        assert got["schedule"][0]["reach_area_swap"] == "none"
-        assert got["active"]["enter_game_swap"] == "none"
+        assert got["schedule"][0]["enter_game_swap"] == _SWAP_OFF
+        assert got["schedule"][0]["reach_area_swap"] == _SWAP_OFF
+        assert got["active"]["enter_game_swap"] == _SWAP_OFF
+
+    def test_coerce_swap_obj_unit(self):
+        f = app_config._coerce_swap_obj
+        assert f(None) == _SWAP_OFF
+        assert f("digits") == _SWAP_OFF          # 旧字符串形式
+        assert f({"enabled": True, "mod": "k", "digit": "5"}) == {
+            "enabled": True, "mod": "k", "digit": "5"}
+        assert f({"enabled": True, "mod": "l", "digit": 5})["digit"] == "1"  # int 非法
+        assert f({"enabled": "yes"})["enabled"] is False   # 非严格 True
