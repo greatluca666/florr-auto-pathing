@@ -51,8 +51,10 @@ CDP_HOST = "127.0.0.1"
 CDP_PORT = 9222
 
 _CHROME_PROFILE_DIR = os.path.join(
-    os.path.dirname(os.path.abspath(sys.argv[0])), "chrome-profile"
+    os.path.dirname(os.path.abspath(sys.argv[0])), "chrome-profiles", "默认"
 )
+# 阶段1 是单个写死的 chrome-profile/; 阶段2 每个账号一个 chrome-profiles/<别名>/,
+# 这个常量指向迁移出来的『默认』账号(命令行版 / 旧引导仍用它).
 # sys.argv[0]: 打包成exe后是exe自己的路径, 脚本模式下是main.py的路径 —— 两种
 # 情况都想要"跟可执行文件同级". 不用sys.executable(那是python解释器本身的
 # 路径, 脚本模式下跟main.py不在同一目录, 只有frozen模式才等于exe路径, 两种
@@ -145,10 +147,37 @@ def is_dedicated_chrome_ready():
         return False
 
 
+def launch_chrome_for_profile(profile_dir, *, open_url="https://florr.io", fullscreen=False):
+    """杀掉所有 Chrome, 用指定 profile 目录拉起专用实例, 顺带打开 open_url.
+    调度器换账号时用(fullscreen=True 让 florr.io canvas 直接铺满); 登录引导用
+    (fullscreen=False, 普通窗口方便登录). 找不到 chrome.exe(仅 Windows 需按路径
+    找)时抛 RuntimeError。"""
+    _quit_all_chrome()
+    args = [
+        f"--remote-debugging-port={CDP_PORT}",
+        "--remote-allow-origins=*",
+        f"--user-data-dir={profile_dir}",
+        "--no-first-run",
+        "--no-default-browser-check",
+    ]
+    if fullscreen:
+        args.append("--start-fullscreen")
+    args.append(open_url)
+    if sys.platform == "win32":
+        chrome_path = _find_windows_chrome()
+        if chrome_path is None:
+            raise RuntimeError("没找到 Chrome, 请先安装: https://www.google.com/chrome/")
+        subprocess.Popen([chrome_path] + args)
+    elif sys.platform == "darwin":
+        subprocess.Popen(["open", "-a", "Google Chrome", "--args"] + args)
+    else:
+        raise RuntimeError(f"不支持的平台: {sys.platform}")
+
+
 def quit_and_launch_chrome():
-    """非交互版: 杀掉所有Chrome + 带三个CDP参数拉起专用实例. 不等florr.io标签页
-    (调用方用wait_for_florr_tab()自己等). 找不到Chrome可执行文件时
-    _launch_chrome_process()会抛RuntimeError, 原样透出去."""
+    """非交互版: 杀掉所有Chrome + 带三个CDP参数拉起专用实例(『默认』profile, 不开
+    florr.io, 不全屏). 命令行版 launch_dedicated_chrome() 用它. GUI 调度器换账号
+    走 launch_chrome_for_profile()(带 open_url + fullscreen), 不走这条."""
     _quit_all_chrome()
     _launch_chrome_process()
 
