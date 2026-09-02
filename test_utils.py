@@ -292,3 +292,43 @@ def test_click_start_game_gives_up_after_max_attempts_without_crashing(monkeypat
     spy = _patch_click(monkeypatch, [True])
     assert utils.click_start_game() is False
     assert spy.clicks == 2 * utils._CONFIRM_CLICK_MAX_ATTEMPTS
+
+
+# ── on_guest_screen: 未登录标题页的「以游客身份游玩」绿按钮检测 ──────────────
+
+def _stub_guest_ratio(monkeypatch, value):
+    """把 _green_button_ratio 打桩成定值, 只测 on_guest_screen 的阈值判定."""
+    seen = {}
+
+    def fake_ratio(pos, half_w=15, half_h=10):
+        seen["pos"] = pos
+        seen["half_w"] = half_w
+        seen["half_h"] = half_h
+        return value
+
+    monkeypatch.setattr(utils, "_green_button_ratio", fake_ratio)
+    return seen
+
+
+def test_on_guest_screen_true_when_green_ratio_above_threshold(monkeypatch):
+    seen = _stub_guest_ratio(monkeypatch, 0.5)
+    assert utils.on_guest_screen() is True
+    # 采样的是游客按钮坐标, 用的是宽框(不是 _green_button_ratio 的默认 15x10)
+    assert seen["pos"] == utils._PLAY_AS_GUEST_POS
+    assert seen["half_w"] == utils._GUEST_SCREEN_SAMPLE_HALF_W
+    assert seen["half_h"] == utils._GUEST_SCREEN_SAMPLE_HALF_H
+
+
+def test_on_guest_screen_false_at_exact_threshold(monkeypatch):
+    _stub_guest_ratio(monkeypatch, utils._GUEST_SCREEN_GREEN_THRESHOLD)
+    assert utils.on_guest_screen() is False          # 严格 >
+
+
+def test_on_guest_screen_false_when_mostly_background(monkeypatch):
+    _stub_guest_ratio(monkeypatch, 0.05)
+    assert utils.on_guest_screen() is False
+
+
+def test_play_as_guest_pos_is_scaled_from_reference(monkeypatch):
+    # 参照分辨率下就是 (960, 498) 原值
+    assert utils._PLAY_AS_GUEST_POS == utils.scale_point(960, 498)

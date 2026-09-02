@@ -322,6 +322,12 @@ def switch_server(biome="desert"):
 _BUTTON_GREEN_RGB = (27, 203, 37)  # florr.io确认类按钮统一用这个绿色底(开始/继续都是)
 _START_BUTTON_POS = scale_point(1059, 527)     # 开局菜单"开始"按钮(还没进过局/或已经回到开局菜单), 1920x1080下量出来的
 _CONTINUE_BUTTON_POS = scale_point(959, 634)   # 死亡结算画面"继续"按钮(注意: 跟开局菜单是两个完全不同的界面!), 同样是1920x1080下量出来的
+# 未登录的 Chrome profile 打开 florr.io 时, 标题页先是个登录选择页 —— 绿色
+# 「以游客身份游玩」按钮 + Discord/Apple 登录. 得先点掉游客按钮才到正常的
+# 「开始」菜单. 这个页面是否出现取决于账号(登录过的直接跳过). 坐标/颜色:
+# 2026-09-02 浏览器 florr.io 登出态实测, canvas 内部 1920x1080 下量的
+# (docs/superpowers/specs/2026-09-02-play-as-guest-click-design.md).
+_PLAY_AS_GUEST_POS = scale_point(960, 498)
 
 
 def _green_button_ratio(pos, half_w=15, half_h=10):
@@ -379,6 +385,30 @@ def on_death_screen():
         half_h=_DEATH_SCREEN_SAMPLE_HALF_H,
     )
     return ratio > _DEATH_SCREEN_GREEN_THRESHOLD
+
+
+# 「以游客身份游玩」按钮 ~207x32, 中间横一条白字. 跟死亡页「继续」一样, 默认
+# 15x10 采样框会正好卡在白字上、测不出纯绿 —— 用宽框(半宽 60 / 半高 16)把整个
+# 按钮高度 + 两侧纯绿都框进来, 白字只占中间一小块, 绿占比回到 0.4~0.65.
+_GUEST_SCREEN_SAMPLE_HALF_W = 60
+_GUEST_SCREEN_SAMPLE_HALF_H = 16
+_GUEST_SCREEN_GREEN_THRESHOLD = 0.25
+
+
+def on_guest_screen():
+    """检测屏幕上是不是正显示着未登录标题页的绿色「以游客身份游玩」按钮.
+
+    只有没登录过的 Chrome profile 才会卡在这一页(登录过的直接进正常标题页).
+    正常标题页 / 游戏内 / 死亡结算页在 _PLAY_AS_GUEST_POS 处都不是这个亮绿,
+    返回 False —— 不会误点. 点掉这一页之后由 on_start_screen() / click_start_game()
+    接手真正进游戏.
+    """
+    ratio = _green_button_ratio(
+        _PLAY_AS_GUEST_POS,
+        half_w=_GUEST_SCREEN_SAMPLE_HALF_W,
+        half_h=_GUEST_SCREEN_SAMPLE_HALF_H,
+    )
+    return ratio > _GUEST_SCREEN_GREEN_THRESHOLD
 
 
 def click_continue_after_death():
