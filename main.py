@@ -701,6 +701,15 @@ def run_worker(cfg):
     # 都会从账号数据重载设置、把这个字节盖回原值 —— 所以不能只在这写一次, 每轮
     # 进游戏后都要重写(_reassert_invert_attack, 见主循环). 这里先探一次给即时
     # 反馈: 地址没标定 / florr 更新导致地址失效时立刻在悬浮窗警告, 不用等第一轮.
+    # 没登录过的 Chrome profile 停在 florr 的登录选择页(绿色「以游客身份游玩」
+    # + Discord/Apple). 先点掉它, 让 florr 开始加载游戏 —— 否则下面的
+    # _reassert_invert_attack() 走 CDP 读 window.Module 时 WASM 还没就绪, 白报
+    # 一次 failed. 登录过的号 on_guest_screen() 恒 False, 这段是 no-op.
+    if on_guest_screen():
+        print("👤 未登录标题页, 先点『以游客身份游玩』进正常标题页...")
+        click_play_as_guest()
+        time.sleep(2)
+
     if _reassert_invert_attack() == "failed":
         overlay.update(message="⚠️ 反转攻击键未确认, 见日志")
 
@@ -718,6 +727,11 @@ def run_worker(cfg):
         round_start_time = time.time()
         print(f"\n{'='*50}\n第 {round_count} 轮\n{'='*50}")
 
+        if on_guest_screen():
+            print("👤 检测到未登录标题页, 点击『以游客身份游玩』...")
+            overlay.update(state="重新开始", message="点击游客登录...")
+            click_play_as_guest()
+            time.sleep(2)
         if on_death_screen():
             print("💀 检测到死亡结算画面, 点击继续...")
             overlay.update(state="重新开始", message="死亡, 点击继续...")
