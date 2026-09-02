@@ -28,6 +28,10 @@ DEFAULTS = {
     # 索敌早已不需要模型文件, 改成解码 canvas 绘制调用了.
     "enemy_ai_enabled": False,
     "auto_switch_server": True,
+    # florr 反转攻击键 / 反转防御键: worker 每轮把对应 WASM 字节写成 (1 if True else 0).
+    # attack 默认 True —— 旧 config 无键时行为跟"无条件强制开"完全一致, 不静默关伤害.
+    "invert_attack": True,
+    "invert_defense": False,
     # 进游戏 / 寻路到刷怪区时按一次和弦切换 florr loadout.
     # {enabled: 开关, mod: 修饰键 "none"/"k"/"l", digit: 数字键 "1".."0"}.
     # enabled 打开时: 按住 mod (若非 none) → 按 digit → 松开 mod (像 Ctrl+C).
@@ -120,7 +124,7 @@ def _coerce_v1(raw):
             ok = isinstance(val, int) and not isinstance(val, bool) and val > 0
         elif key == "consecutive_short_round_limit":
             ok = isinstance(val, int) and not isinstance(val, bool) and val >= 1
-        else:  # enemy_ai_enabled / auto_switch_server / afk_enabled
+        else:  # enemy_ai_enabled / auto_switch_server / afk_enabled / invert_attack / invert_defense
             ok = isinstance(val, bool)
 
         if ok:
@@ -138,6 +142,8 @@ def _coerce_v1(raw):
 DEFAULTS_V2 = {
     "version": 2,
     "afk_enabled": False,
+    "invert_attack": True,
+    "invert_defense": False,
     "profiles": [{"alias": "默认", "dir": "chrome-profiles/默认"}],
     # 全新装是空的 —— 用户自己加时块. 空 schedule 时 worker 不会真跑.
     "schedule": [],
@@ -261,6 +267,8 @@ def _coerce(raw):
         return copy.deepcopy(DEFAULTS_V2)
     cfg = {"version": 2}
     cfg["afk_enabled"] = raw["afk_enabled"] if isinstance(raw.get("afk_enabled"), bool) else False
+    cfg["invert_attack"] = raw["invert_attack"] if isinstance(raw.get("invert_attack"), bool) else True
+    cfg["invert_defense"] = raw["invert_defense"] if isinstance(raw.get("invert_defense"), bool) else False
     cfg["profiles"] = _coerce_profiles(raw.get("profiles"))
     aliases = {p["alias"] for p in cfg["profiles"]}
     cfg["schedule"] = _coerce_schedule(raw.get("schedule"), aliases)
@@ -297,6 +305,8 @@ def migrate_v1(raw):
     return {
         "version": 2,
         "afk_enabled": flat["afk_enabled"],
+        "invert_attack": flat["invert_attack"],
+        "invert_defense": flat["invert_defense"],
         "profiles": [{"alias": "默认", "dir": "chrome-profiles/默认"}],
         "schedule": [block],
         "active": {k: copy.deepcopy(flat[k]) for k in _ACTIVE_KEYS},

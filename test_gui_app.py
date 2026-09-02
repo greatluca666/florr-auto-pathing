@@ -119,3 +119,24 @@ def test_resolve_point_and_area_only_point_derives_box():
 def test_resolve_point_and_area_only_point_clamps_to_map_edges():
     p, a = gui_app.resolve_point_and_area((2, 297), None)
     assert a == [(0, 297 - gui_app._DERIVED_AREA_HALF), (2 + gui_app._DERIVED_AREA_HALF, 299)]
+
+
+class TestInvertTogglePersistence:
+    def test_persist_flag_writes_key_and_reloads(self, monkeypatch, tmp_path):
+        import app_config
+        p = tmp_path / "config.json"
+        monkeypatch.setattr(app_config, "CONFIG_PATH", str(p))
+        app_config.save_config(app_config.load_config())   # 落一份带默认键的
+
+        # 不起 Tk —— 直接在一个裸对象上绑方法
+        obj = type("X", (), {})()
+        obj._cfg = app_config.load_config()
+        # 真 CTkSwitch.get() 回 int 1/0, 不是 bool —— _persist_flag 里的 bool() 转换
+        # 必须把它规整成 True/False, 否则 save_config 的 _coerce 会把非 bool 打回默认.
+        gui_app.App._persist_flag(obj, "invert_defense", 1)
+        assert app_config.load_config()["invert_defense"] is True
+        assert obj._cfg["invert_defense"] is True
+
+        gui_app.App._persist_flag(obj, "invert_attack", 0)
+        assert app_config.load_config()["invert_attack"] is False
+        assert obj._cfg["invert_attack"] is False

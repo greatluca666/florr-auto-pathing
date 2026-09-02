@@ -210,6 +210,8 @@ def test_run_worker_does_not_start_florr_auto_afk(monkeypatch):
         "biome": "desert",
     })
     monkeypatch.setattr(main, "_lock_biome", lambda b: True)   # 本测跟锁生态区无关
+    monkeypatch.setattr(main.florr_settings, "ensure_flag",
+                        lambda ej, addr, want: ("unchanged", ""))
     # 主循环体的第一个调用 —— 在这里掐断, 前面的 setup 已经全跑完了.
     monkeypatch.setattr(main, "on_death_screen",
                         lambda: (_ for _ in ()).throw(KeyboardInterrupt))
@@ -371,33 +373,64 @@ def _stub_run_worker_env(monkeypatch, overlay=None):
     monkeypatch.setattr(main.time, "sleep", lambda *a, **k: None)
 
 
-def test_run_worker_reasserts_invert_attack_at_startup_and_each_round(monkeypatch):
+def test_run_worker_reasserts_florr_toggles_at_startup_and_each_round(monkeypatch):
     _stub_run_worker_env(monkeypatch)
     calls = []
-    monkeypatch.setattr(main.florr_settings, "ensure_invert_attack_on",
-                        lambda ej, *a, **k: calls.append(ej) or ("on_already", ""))
-    # 掐在寻路 —— 它在"每轮重写反转攻击键"之后, 所以第 1 轮那次也算进去
+    monkeypatch.setattr(main.florr_settings, "ensure_flag",
+                        lambda ej, addr, want: calls.append((addr, want)) or ("unchanged", ""))
+    # 掐在寻路 —— 它在"每轮重写"之后, 所以第 1 轮那次也算进去
     monkeypatch.setattr(main, "lazy_theta_pathing",
                         lambda *a, **k: (_ for _ in ()).throw(KeyboardInterrupt))
     with pytest.raises(KeyboardInterrupt):
         main.run_worker({})
-    assert len(calls) == 2                      # 启动 1 次 + 第 1 轮进游戏后 1 次
-    assert all(c is main.cdp_bridge.eval_js for c in calls)
+    # 启动 1 次 + 第 1 轮进游戏后 1 次 = _reassert_florr_toggles 调 2 次
+    # 每次内部对 attack + defense 各调一次 ensure_flag = 4 次
+    assert len(calls) == 4
+    A, D = main.florr_settings.INVERT_ATTACK_ADDR, main.florr_settings.INVERT_DEFENSE_ADDR
+    # 默认 cfg={} → invert_attack 默认 True → want 1; invert_defense 默认 False → want 0
+    assert calls == [(A, 1), (D, 0), (A, 1), (D, 0)]
 
 
-def test_run_worker_survives_invert_attack_failure(monkeypatch):
-    """ensure_invert_attack_on 返回 failed 时 worker 照常进主循环, 不 SystemExit."""
+def test_run_worker_toggle_wants_follow_cfg(monkeypatch):
+    _stub_run_worker_env(monkeypatch)
+    calls = []
+    monkeypatch.setattr(main.florr_settings, "ensure_flag",
+                        lambda ej, addr, want: calls.append((addr, want)) or ("unchanged", ""))
+    monkeypatch.setattr(main, "lazy_theta_pathing",
+                        lambda *a, **k: (_ for _ in ()).throw(KeyboardInterrupt))
+    with pytest.raises(KeyboardInterrupt):
+        main.run_worker({"invert_attack": False, "invert_defense": True})
+    A, D = main.florr_settings.INVERT_ATTACK_ADDR, main.florr_settings.INVERT_DEFENSE_ADDR
+    assert calls == [(A, 0), (D, 1), (A, 0), (D, 1)]
+
+
+def test_run_worker_survives_toggle_failure(monkeypatch):
+    """ensure_flag 返回 failed 时 worker 照常进主循环, 不 SystemExit, 悬浮窗警告."""
     ov = _StubOverlay()
     warned = []
     ov.update = lambda **kw: warned.append(kw.get("message"))
     _stub_run_worker_env(monkeypatch, overlay=ov)
-    monkeypatch.setattr(main.florr_settings, "ensure_invert_attack_on",
-                        lambda ej, *a, **k: ("failed", "addr-out-of-range"))
+    monkeypatch.setattr(main.florr_settings, "ensure_flag",
+                        lambda ej, addr, want: ("failed", "not-bool:9"))
     monkeypatch.setattr(main, "lazy_theta_pathing",
                         lambda *a, **k: (_ for _ in ()).throw(KeyboardInterrupt))
     with pytest.raises(KeyboardInterrupt):   # 到了主循环 = 没被 failed 掐死
         main.run_worker({})
-    assert any(m and "反转攻击键" in m for m in warned)
+    assert any(m and "反转" in m for m in warned)
+
+
+def test_reassert_florr_toggles_returns_per_flag_status(monkeypatch):
+    seen = []
+
+    def fake(ej, addr, want):
+        seen.append((addr, want))
+        return ("changed", "") if addr == main.florr_settings.INVERT_ATTACK_ADDR else ("unchanged", "")
+
+    monkeypatch.setattr(main.florr_settings, "ensure_flag", fake)
+    out = main._reassert_florr_toggles(True, False)
+    assert out == {"attack": "changed", "defense": "unchanged"}
+    A, D = main.florr_settings.INVERT_ATTACK_ADDR, main.florr_settings.INVERT_DEFENSE_ADDR
+    assert seen == [(A, 1), (D, 0)]
 
 
 def test_run_worker_locks_biome_on_title_before_clicking_start(monkeypatch):
@@ -411,7 +444,8 @@ def test_run_worker_locks_biome_on_title_before_clicking_start(monkeypatch):
                         lambda *a, **k: events.append("wait") or True)
     monkeypatch.setattr(main, "on_start_screen", lambda: True)
     monkeypatch.setattr(main, "click_start_game", lambda: events.append("click") or True)
-    monkeypatch.setattr(main, "_reassert_invert_attack", lambda: "on_already")
+    monkeypatch.setattr(main, "_reassert_florr_toggles",
+                        lambda *a, **k: {"attack": "unchanged", "defense": "unchanged"})
     monkeypatch.setattr(main, "lazy_theta_pathing",
                         lambda *a, **k: (_ for _ in ()).throw(KeyboardInterrupt))
     with pytest.raises(KeyboardInterrupt):
@@ -428,7 +462,8 @@ def test_run_worker_locks_biome_only_once_across_respawns(monkeypatch):
     monkeypatch.setattr(main, "_wait_for_start_menu", lambda *a, **k: True)
     monkeypatch.setattr(main, "on_start_screen", lambda: True)
     monkeypatch.setattr(main, "click_start_game", lambda: clicks.append(1) or True)
-    monkeypatch.setattr(main, "_reassert_invert_attack", lambda: "on_already")
+    monkeypatch.setattr(main, "_reassert_florr_toggles",
+                        lambda *a, **k: {"attack": "unchanged", "defense": "unchanged"})
     n = {"i": 0}
 
     def pathing(*a, **k):
@@ -450,7 +485,8 @@ def test_run_worker_retries_biome_lock_next_respawn_if_it_failed(monkeypatch):
     monkeypatch.setattr(main, "on_start_screen", lambda: True)
     monkeypatch.setattr(main, "click_start_game", lambda: True)
     monkeypatch.setattr(main, "_wait_for_start_menu", lambda *a, **k: True)
-    monkeypatch.setattr(main, "_reassert_invert_attack", lambda: "on_already")
+    monkeypatch.setattr(main, "_reassert_florr_toggles",
+                        lambda *a, **k: {"attack": "unchanged", "defense": "unchanged"})
     attempts = []
     monkeypatch.setattr(main, "_lock_biome",
                         lambda b: attempts.append(b) or len(attempts) >= 2)
@@ -472,7 +508,8 @@ def test_run_worker_does_not_lock_biome_when_not_on_start_screen(monkeypatch):
     _stub_run_worker_env(monkeypatch)   # on_start_screen 恒 False
     locks = []
     monkeypatch.setattr(main, "_lock_biome", lambda b: locks.append(b) or True)
-    monkeypatch.setattr(main, "_reassert_invert_attack", lambda: "on_already")
+    monkeypatch.setattr(main, "_reassert_florr_toggles",
+                        lambda *a, **k: {"attack": "unchanged", "defense": "unchanged"})
     monkeypatch.setattr(main, "lazy_theta_pathing",
                         lambda *a, **k: (_ for _ in ()).throw(KeyboardInterrupt))
     with pytest.raises(KeyboardInterrupt):
@@ -489,7 +526,8 @@ def test_run_worker_switch_server_uses_configured_biome(monkeypatch):
         "enter_game_swap": "none", "reach_area_swap": "none",
     })
     monkeypatch.setattr(main, "_lock_biome", lambda b: True)
-    monkeypatch.setattr(main, "_reassert_invert_attack", lambda: "on_already")
+    monkeypatch.setattr(main, "_reassert_florr_toggles",
+                        lambda *a, **k: {"attack": "unchanged", "defense": "unchanged"})
     monkeypatch.setattr(main, "lazy_theta_pathing", lambda *a, **k: False)  # 没到区 -> 短局
     sw = []
 
@@ -508,8 +546,8 @@ def test_run_worker_switch_server_uses_configured_biome(monkeypatch):
 def test_run_worker_clicks_play_as_guest_when_on_guest_screen(monkeypatch):
     """停在未登录登录选择页时, 启动阶段 + 第 1 轮各点一次「以游客身份游玩」."""
     _stub_run_worker_env(monkeypatch)
-    monkeypatch.setattr(main.florr_settings, "ensure_invert_attack_on",
-                        lambda ej, *a, **k: ("on_already", ""))
+    monkeypatch.setattr(main.florr_settings, "ensure_flag",
+                        lambda ej, addr, want: ("unchanged", ""))
     monkeypatch.setattr(main, "on_guest_screen", lambda: True)
     clicks = []
     monkeypatch.setattr(main, "click_play_as_guest", lambda: clicks.append(1))
@@ -524,8 +562,8 @@ def test_run_worker_clicks_play_as_guest_when_on_guest_screen(monkeypatch):
 def test_run_worker_never_clicks_guest_when_not_on_guest_screen(monkeypatch):
     """登录过的 profile 的常态: on_guest_screen 恒 False, 一次都不点."""
     _stub_run_worker_env(monkeypatch)
-    monkeypatch.setattr(main.florr_settings, "ensure_invert_attack_on",
-                        lambda ej, *a, **k: ("on_already", ""))
+    monkeypatch.setattr(main.florr_settings, "ensure_flag",
+                        lambda ej, addr, want: ("unchanged", ""))
     monkeypatch.setattr(main, "on_guest_screen", lambda: False)
     monkeypatch.setattr(main, "click_play_as_guest",
                         lambda: pytest.fail("不在游客页不该点「以游客身份游玩」"))
@@ -568,8 +606,8 @@ def _swap_env(monkeypatch, *, enter="k", reach="l"):
         "biome": "desert",
         "enter_game_swap": enter, "reach_area_swap": reach,
     })
-    monkeypatch.setattr(main.florr_settings, "ensure_invert_attack_on",
-                        lambda ej, *a, **k: ("on_already", ""))
+    monkeypatch.setattr(main.florr_settings, "ensure_flag",
+                        lambda ej, addr, want: ("unchanged", ""))
     seen = []
     monkeypatch.setattr(main.loadout_swap, "press_swap", lambda spec: seen.append(spec))
     return seen

@@ -670,17 +670,24 @@ def _apply_worker_config(cfg):
     }
 
 
-def _reassert_invert_attack():
-    """确保 florr 的「反转攻击键」是开的. florr 每次从菜单进局 / 定期服务端回同步
-    都会把它重置成账号里的值, 所以要反复写 —— run_worker 启动时一次 + 每轮进游戏
-    后一次. 返回 florr_settings.ensure_invert_attack_on 的 status.
-    on_already(常态)静默; turned_on / failed 才打日志."""
-    status, detail = florr_settings.ensure_invert_attack_on(cdp_bridge.eval_js)
-    if status == "turned_on":
-        print("✅ 反转攻击键已(重新)开启")
-    elif status == "failed":
-        print(f"⚠️ 反转攻击键未确认 ({detail}) —— 手动到 设置→控制→反转攻击键 打勾")
-    return status
+def _reassert_florr_toggles(want_attack, want_defense):
+    """按 config 把 florr 的反转攻击键 / 反转防御键字节写成 1(True)/0(False).
+    florr 每次从菜单进局会从账号数据把这两个字节盖回 —— 所以 run_worker 启动时一次 +
+    每轮进游戏后一次都要重写. 返回 {"attack": status, "defense": status}
+    (status ∈ unchanged/changed/failed). unchanged 静默; changed / failed 才打日志;
+    任一 failed 都不中断 worker."""
+    out = {}
+    for name, label, addr, want in (
+        ("attack", "反转攻击键", florr_settings.INVERT_ATTACK_ADDR, 1 if want_attack else 0),
+        ("defense", "反转防御键", florr_settings.INVERT_DEFENSE_ADDR, 1 if want_defense else 0),
+    ):
+        status, detail = florr_settings.ensure_flag(cdp_bridge.eval_js, addr, want)
+        out[name] = status
+        if status == "changed":
+            print(f"✅ {label} 已(重新)设为 {'开' if want else '关'}")
+        elif status == "failed":
+            print(f"⚠️ {label} 未确认 ({detail}) —— 手动到 设置→控制 里勾/取消")
+    return out
 
 
 _BIOME_LOCK_RETRIES = 3
@@ -694,7 +701,7 @@ def _lock_biome(biome):
     复用 switch_server(biome) 的 CDP forceServerID(仓库历史确认过能触发重连).
 
     失败重试 _BIOME_LOCK_RETRIES 次(隔 _BIOME_LOCK_RETRY_SLEEP 秒), 都不成只警告
-    不阻断(跟 _reassert_invert_attack 一个风格)—— 宁可这轮进错生态区, 也不卡死在
+    不阻断(跟 _reassert_florr_toggles 一个风格)—— 宁可这轮进错生态区, 也不卡死在
     开局菜单外面. 成功后 sleep 等重连落地再让调用方开始寻路. 返回 True/False.
     """
     for attempt in range(1, _BIOME_LOCK_RETRIES + 1):
@@ -743,14 +750,15 @@ def run_worker(cfg):
     global overlay
     overlay = create_overlay()
 
-    # bot 自己不按攻击键, 靠 florr 的「反转攻击键」持续输出. florr 每次从菜单进局
-    # 都会从账号数据重载设置、把这个字节盖回原值 —— 所以不能只在这写一次, 每轮
-    # 进游戏后都要重写(_reassert_invert_attack, 见主循环). 这里先探一次给即时
-    # 反馈: 地址没标定 / florr 更新导致地址失效时立刻在悬浮窗警告, 不用等第一轮.
+    # bot 自己不按攻击键, 靠 florr 的「反转攻击键」持续输出;「反转防御键」是对称的
+    # 可选项. florr 每次从菜单进局都会从账号数据重载设置、把这两个字节盖回原值 ——
+    # 所以不能只在这写一次, 每轮进游戏后都要重写(_reassert_florr_toggles, 见主循环).
+    # 这里先探一次给即时反馈: 地址没标定 / florr 更新导致地址失效时立刻在悬浮窗
+    # 警告, 不用等第一轮.
 
     # 没登录过的 Chrome profile 停在 florr 的登录选择页(绿色「以游客身份游玩」
     # + Discord/Apple). 先点掉它, 让 florr 开始加载游戏 —— 否则下面的
-    # _reassert_invert_attack() 走 CDP 读 window.Module 时 WASM 还没就绪, 白报
+    # _reassert_florr_toggles() 走 CDP 读 window.Module 时 WASM 还没就绪, 白报
     # 一次 failed. 登录过的号 on_guest_screen() 恒 False, 这段是 no-op.
     if on_guest_screen():
         print("👤 未登录标题页, 先点『以游客身份游玩』进正常标题页...")
@@ -758,8 +766,14 @@ def run_worker(cfg):
         click_play_as_guest()
         time.sleep(2)
 
-    if _reassert_invert_attack() == "failed":
-        overlay.update(message="⚠️ 反转攻击键未确认, 见日志")
+    # 反转攻击键 / 反转防御键的目标值直接从整份 cfg 取(顶层键, 不在 active 切片 /
+    # _apply_worker_config 输出里), 缺键回退 app_config.DEFAULTS.
+    _d = app_config.DEFAULTS
+    want_attack = cfg.get("invert_attack", _d["invert_attack"])
+    want_defense = cfg.get("invert_defense", _d["invert_defense"])
+
+    if "failed" in _reassert_florr_toggles(want_attack, want_defense).values():
+        overlay.update(message="⚠️ 反转键未全部确认, 见日志")
 
     w = _apply_worker_config(cfg)
     location = w["location"]
@@ -807,9 +821,10 @@ def run_worker(cfg):
             entered_game = True
             time.sleep(3)
 
-        # 进游戏了(或本来就在局内): florr 刚才可能从账号数据把「反转攻击键」重置
-        # 了, 每轮重写一次. on_already 静默(常态), turned_on / failed 才打日志.
-        _reassert_invert_attack()
+        # 进游戏了(或本来就在局内): florr 刚才可能从账号数据把「反转攻击键 /
+        # 反转防御键」重置了, 每轮重写一次. unchanged 静默(常态), changed / failed
+        # 才打日志.
+        _reassert_florr_toggles(want_attack, want_defense)
 
         # 只在这一轮真的(重新)进了游戏、或首轮时才切 loadout —— 一命跑满
         # farming_duration 没死的下一轮不过上面两个分支, 玩家还在场上、florr 没重置

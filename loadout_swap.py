@@ -24,7 +24,7 @@ def press_swap(cfg, *, press=pyautogui.press,
         key_up 走 finally —— press 抛了也要把修饰键松开.
 
     任何异常吞掉 + ⚠️ 日志, 绝不抛给调用方: 切装备是附加动作, 不能打断刷怪轮次
-    (对齐 main._reassert_invert_attack 的 warn-only).
+    (对齐 main._reassert_florr_toggles 的 warn-only).
     """
     if not isinstance(cfg, dict) or not cfg.get("enabled"):
         return

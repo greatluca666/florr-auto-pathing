@@ -368,3 +368,48 @@ class TestLoadoutSwapKeys:
             "enabled": True, "mod": "k", "digit": "5"}
         assert f({"enabled": True, "mod": "l", "digit": 5})["digit"] == "1"  # int 非法
         assert f({"enabled": "yes"})["enabled"] is False   # 非严格 True
+
+
+class TestInvertToggles:
+    def test_defaults_attack_on_defense_off(self):
+        assert app_config.DEFAULTS["invert_attack"] is True
+        assert app_config.DEFAULTS["invert_defense"] is False
+        assert app_config.DEFAULTS_V2["invert_attack"] is True
+        assert app_config.DEFAULTS_V2["invert_defense"] is False
+
+    def test_not_in_active_keys(self):
+        assert "invert_attack" not in app_config._ACTIVE_KEYS
+        assert "invert_defense" not in app_config._ACTIVE_KEYS
+
+    def test_missing_keys_get_defaults_on_load(self, cfg_path):
+        cfg = _v2_cfg()
+        cfg.pop("invert_attack", None)
+        cfg.pop("invert_defense", None)
+        app_config.save_config(cfg)
+        got = app_config.load_config()
+        assert got["invert_attack"] is True
+        assert got["invert_defense"] is False
+
+    def test_explicit_values_roundtrip(self, cfg_path):
+        cfg = _v2_cfg(invert_attack=False, invert_defense=True)
+        app_config.save_config(cfg)
+        got = app_config.load_config()
+        assert got["invert_attack"] is False
+        assert got["invert_defense"] is True
+
+    def test_non_bool_falls_back_to_default(self, cfg_path):
+        cfg = _v2_cfg(invert_attack="yes", invert_defense=1)
+        app_config.save_config(cfg)
+        got = app_config.load_config()
+        assert got["invert_attack"] is True     # "yes" 非 bool → 默认
+        assert got["invert_defense"] is False   # 1 非 bool → 默认
+
+    def test_v1_migration_adds_toggles(self, cfg_path):
+        cfg_path.write_text(json.dumps({
+            "map": "desert", "location": [1, 2], "farming_area": [[0, 0], [3, 3]],
+            "farming_duration": 100, "consecutive_short_round_limit": 1,
+            "enemy_ai_enabled": False, "auto_switch_server": True,
+        }), encoding="utf-8")
+        got = app_config.load_config()
+        assert got["invert_attack"] is True
+        assert got["invert_defense"] is False
