@@ -11,6 +11,7 @@ import afk_watch
 import enemy_detect
 import app_config
 import florr_settings
+import server_lookup
 
 # ===== 索敌配置 (sszone敌怪检测/追击/规避) =====
 ENEMY_SCAN_INTERVAL = 0.12  # 秒, 索敌扫描节流间隔. 这是"决策新鲜度"的主旋钮:
@@ -662,6 +663,7 @@ def _apply_worker_config(cfg):
                                     d["consecutive_short_round_limit"]),
         "enemy_ai_enabled": src.get("enemy_ai_enabled", d["enemy_ai_enabled"]),
         "auto_switch_server": src.get("auto_switch_server", d["auto_switch_server"]),
+        "biome": server_lookup.biome_key_for_map(src.get("map", d["map"])),
     }
 
 
@@ -676,6 +678,34 @@ def _reassert_invert_attack():
     elif status == "failed":
         print(f"⚠️ 反转攻击键未确认 ({detail}) —— 手动到 设置→控制→反转攻击键 打勾")
     return status
+
+
+_BIOME_LOCK_RETRIES = 3
+_BIOME_LOCK_RETRY_SLEEP = 3.0
+_BIOME_RECONNECT_SLEEP = 3.0
+
+
+def _lock_biome(biome):
+    """把客户端钉到 biome 对应生态区的服务器. florr 不记忆上次选的生态区 —— 不锁
+    的话 click_start_game() 进的是 florr 默认那个(通常花园), 跟寻路用的地图对不上.
+    复用 switch_server(biome) 的 CDP forceServerID(仓库历史确认过能触发重连).
+
+    失败重试 _BIOME_LOCK_RETRIES 次(隔 _BIOME_LOCK_RETRY_SLEEP 秒), 都不成只警告
+    不阻断(跟 _reassert_invert_attack 一个风格)—— 宁可这轮进错生态区, 也不卡死在
+    开局菜单外面. 成功后 sleep 等重连落地再让调用方开始寻路. 返回 True/False.
+    """
+    for attempt in range(1, _BIOME_LOCK_RETRIES + 1):
+        try:
+            sid = switch_server(biome)
+            print(f"🗺️ 已锁定生态区 {biome} (服务器 {sid})")
+            time.sleep(_BIOME_RECONNECT_SLEEP)
+            return True
+        except Exception as e:
+            print(f"⚠️ 锁定生态区第 {attempt}/{_BIOME_LOCK_RETRIES} 次失败: {e}")
+            if attempt < _BIOME_LOCK_RETRIES:
+                time.sleep(_BIOME_LOCK_RETRY_SLEEP)
+    print("⚠️ 生态区没锁上, 先按当前服务器进游戏 (下轮回开局菜单再试)")
+    return False
 
 
 def run_worker(cfg):
@@ -710,6 +740,12 @@ def run_worker(cfg):
     farming_duration = w["farming_duration"]
     CONSECUTIVE_SHORT_ROUND_LIMIT = w["short_round_limit"]
 
+    # florr 不记忆上次选的生态区 —— 进主循环前先把服务器钉到配置的生态区.
+    # worker 刚起时 florr 可能还停在标题页 (cp6 未必加载好), 这次是 best-effort;
+    # 循环里 click_start_game() 之后那次 (一定在局内) 才是可靠的一发.
+    if not _lock_biome(w["biome"]):
+        overlay.update(message="⚠️ 生态区未锁定, 见日志")
+
     print("🎮 开始自动寻路+刷怪 (掉线/死亡后自动点开始重来, 不主动停)\n")
     consecutive_short_rounds = 0
     round_count = 0
@@ -728,6 +764,9 @@ def run_worker(cfg):
             overlay.update(state="重新开始", message="点击开始按钮...")
             click_start_game()
             time.sleep(3)
+            # 已进游戏 -> cp6 就绪 -> forceServerID 重连到配置的生态区 (florr 默认
+            # 通常是花园, 跟寻路用的地图对不上).
+            _lock_biome(w["biome"])
 
         # 进游戏了(或本来就在局内): florr 刚才可能从账号数据把「反转攻击键」重置
         # 了, 每轮重写一次. on_already 静默(常态), turned_on / failed 才打日志.
@@ -760,7 +799,7 @@ def run_worker(cfg):
                 overlay.update(state="换服务器",
                                message=f"连续{consecutive_short_rounds}轮没刷满, 切换中")
                 try:
-                    switch_server()
+                    switch_server(w["biome"])
                     consecutive_short_rounds = 0
                     time.sleep(2)
                 except Exception as e:

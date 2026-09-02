@@ -34,6 +34,22 @@ def test_block_to_active_shapes():
     }
 
 
+def test_map_radio_state():
+    assert gs._map_radio_state("desert") == "normal"
+    assert gs._map_radio_state("ocean") == "disabled"
+    assert gs._map_radio_state("anthell") == "disabled"
+
+
+def test_validate_rejects_disabled_map():
+    msg = gs.validate_block(_blk(map="ocean"), [])
+    assert msg is not None and "暂不可用" in msg
+
+
+def test_validate_accepts_desert_map():
+    # _blk() 默认 map="desert" —— 已被 test_validate_ok 覆盖, 这里显式再钉一次
+    assert gs.validate_block(_blk(map="desert"), []) is None
+
+
 def test_validate_ok():
     assert gs.validate_block(_blk(), []) is None
 

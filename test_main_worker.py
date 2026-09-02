@@ -24,6 +24,16 @@ def test_apply_worker_config_reads_active_slice(monkeypatch):
     assert w["auto_switch_server"] is False
 
 
+def test_apply_worker_config_maps_config_map_to_biome_key(monkeypatch):
+    monkeypatch.setattr(main, "apply_map", lambda name: None)
+    w = main._apply_worker_config({"version": 2, "active": {"map": "anthell"}})
+    assert w["biome"] == "ant_hell"        # config anthell -> index key ant_hell
+    w2 = main._apply_worker_config({"version": 2, "active": {"map": "ocean"}})
+    assert w2["biome"] == "ocean"
+    w3 = main._apply_worker_config({"version": 2, "active": {"map": "desert"}})
+    assert w3["biome"] == "desert"
+
+
 def test_apply_worker_config_falls_back_to_flat_when_no_active(monkeypatch):
     monkeypatch.setattr(main, "apply_map", lambda name: None)
     cfg = {"map": "anthell", "location": [1, 1], "farming_area": [[0, 0], [2, 2]],
@@ -40,6 +50,47 @@ def test_apply_worker_config_fills_missing_from_defaults(monkeypatch):
     import app_config
     assert w["farming_duration"] == app_config.DEFAULTS["farming_duration"]
     assert w["location"] == tuple(app_config.DEFAULTS["location"])
+
+
+def test_lock_biome_success_first_try(monkeypatch):
+    seen = []
+    monkeypatch.setattr(main, "switch_server", lambda b: seen.append(b) or "srv-1")
+    monkeypatch.setattr(main.time, "sleep", lambda *a, **k: None)
+    assert main._lock_biome("ocean") is True
+    assert seen == ["ocean"]
+
+
+def test_lock_biome_retries_then_succeeds(monkeypatch):
+    calls = {"n": 0}
+
+    def flaky(b):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise RuntimeError("cdp boom")
+        return "srv-9"
+
+    monkeypatch.setattr(main, "switch_server", flaky)
+    monkeypatch.setattr(main.time, "sleep", lambda *a, **k: None)
+    assert main._lock_biome("desert") is True
+    assert calls["n"] == 3
+
+
+def test_lock_biome_all_attempts_fail_is_warn_only(monkeypatch):
+    calls = {"n": 0}
+
+    def always_fail(b):
+        calls["n"] += 1
+        raise RuntimeError("network down")
+
+    monkeypatch.setattr(main, "switch_server", always_fail)
+    monkeypatch.setattr(main.time, "sleep", lambda *a, **k: None)
+    assert main._lock_biome("desert") is False        # no raise
+    assert calls["n"] == main._BIOME_LOCK_RETRIES
+
+
+def test_lock_biome_constants_are_numbers():
+    for name in ("_BIOME_LOCK_RETRIES", "_BIOME_LOCK_RETRY_SLEEP", "_BIOME_RECONNECT_SLEEP"):
+        assert isinstance(getattr(main, name), (int, float))
 
 
 def test_maybe_scan_enemies_disabled_never_touches_enemy_detect(monkeypatch):
@@ -134,7 +185,9 @@ def test_run_worker_does_not_start_florr_auto_afk(monkeypatch):
         "short_round_limit": 2,
         "enemy_ai_enabled": False,
         "auto_switch_server": False,
+        "biome": "desert",
     })
+    monkeypatch.setattr(main, "_lock_biome", lambda b: True)   # 本测跟锁生态区无关
     # 主循环体的第一个调用 —— 在这里掐断, 前面的 setup 已经全跑完了.
     monkeypatch.setattr(main, "on_death_screen",
                         lambda: (_ for _ in ()).throw(KeyboardInterrupt))
@@ -285,7 +338,9 @@ def _stub_run_worker_env(monkeypatch, overlay=None):
     monkeypatch.setattr(main, "_apply_worker_config", lambda cfg: {
         "location": (1, 2), "farming_area": [(0, 0), (9, 9)], "farming_duration": 300,
         "short_round_limit": 2, "enemy_ai_enabled": False, "auto_switch_server": False,
+        "biome": "desert",
     })
+    monkeypatch.setattr(main, "switch_server", lambda *a, **k: "stub-srv")
     monkeypatch.setattr(main, "on_death_screen", lambda: False)
     monkeypatch.setattr(main, "on_start_screen", lambda: False)
     monkeypatch.setattr(main.time, "sleep", lambda *a, **k: None)
@@ -318,3 +373,66 @@ def test_run_worker_survives_invert_attack_failure(monkeypatch):
     with pytest.raises(KeyboardInterrupt):   # 到了主循环 = 没被 failed 掐死
         main.run_worker({})
     assert any(m and "反转攻击键" in m for m in warned)
+
+
+def test_run_worker_locks_biome_before_loop_and_after_start_click(monkeypatch):
+    _stub_run_worker_env(monkeypatch)
+    locks = []
+    monkeypatch.setattr(main, "_lock_biome", lambda b: locks.append(b) or True)
+    monkeypatch.setattr(main, "on_start_screen", lambda: True)
+    monkeypatch.setattr(main, "click_start_game", lambda: True)
+    monkeypatch.setattr(main, "_reassert_invert_attack", lambda: "on_already")
+    monkeypatch.setattr(main, "lazy_theta_pathing",
+                        lambda *a, **k: (_ for _ in ()).throw(KeyboardInterrupt))
+    with pytest.raises(KeyboardInterrupt):
+        main.run_worker({})
+    # 进循环前 1 次 + 第 1 轮 on_start_screen 分支里(click_start_game 之后)1 次
+    assert locks == ["desert", "desert"]
+
+
+def test_run_worker_does_not_lock_biome_while_farming(monkeypatch):
+    _stub_run_worker_env(monkeypatch)   # on_start_screen 恒 False
+    locks = []
+    monkeypatch.setattr(main, "_lock_biome", lambda b: locks.append(b) or True)
+    monkeypatch.setattr(main, "_reassert_invert_attack", lambda: "on_already")
+    monkeypatch.setattr(main, "lazy_theta_pathing",
+                        lambda *a, **k: (_ for _ in ()).throw(KeyboardInterrupt))
+    with pytest.raises(KeyboardInterrupt):
+        main.run_worker({})
+    assert locks == ["desert"]          # 只有进循环前那一次, 循环体内不锁
+
+
+def test_run_worker_prewarns_when_biome_lock_fails(monkeypatch):
+    ov = _StubOverlay()
+    warned = []
+    ov.update = lambda **kw: warned.append(kw.get("message"))
+    _stub_run_worker_env(monkeypatch, overlay=ov)
+    monkeypatch.setattr(main, "_lock_biome", lambda b: False)
+    monkeypatch.setattr(main, "_reassert_invert_attack", lambda: "on_already")
+    monkeypatch.setattr(main, "lazy_theta_pathing",
+                        lambda *a, **k: (_ for _ in ()).throw(KeyboardInterrupt))
+    with pytest.raises(KeyboardInterrupt):
+        main.run_worker({})
+    assert any(m and "生态区未锁定" in m for m in warned)
+
+
+def test_run_worker_switch_server_uses_configured_biome(monkeypatch):
+    _stub_run_worker_env(monkeypatch)
+    monkeypatch.setattr(main, "_apply_worker_config", lambda cfg: {
+        "location": (1, 2), "farming_area": [(0, 0), (9, 9)], "farming_duration": 9999,
+        "short_round_limit": 1, "enemy_ai_enabled": False, "auto_switch_server": True,
+        "biome": "ocean",
+    })
+    monkeypatch.setattr(main, "_lock_biome", lambda b: True)
+    monkeypatch.setattr(main, "_reassert_invert_attack", lambda: "on_already")
+    monkeypatch.setattr(main, "lazy_theta_pathing", lambda *a, **k: False)  # 没到区 -> 短局
+    sw = []
+
+    def rec(*a, **k):
+        sw.append(a)
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(main, "switch_server", rec)
+    with pytest.raises(KeyboardInterrupt):
+        main.run_worker({})
+    assert sw == [("ocean",)]      # switch_server 收到配置里的 biome, 不是空参

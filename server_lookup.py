@@ -40,6 +40,17 @@ BIOME_INDEX = {
     "sewers": 6,
 }
 
+# config.json 的 map 名 -> 本模块 BIOME_INDEX 的 key. 目前只差 anthell/ant_hell
+# 这一个不一致; desert/ocean 一模一样. 未知名回退 desert —— 调用方
+# (main._apply_worker_config) 已保证传的是 app_config._VALID_MAPS 之一, 这里只是
+# 多一层不炸.
+_MAP_TO_BIOME = {"desert": "desert", "ocean": "ocean", "anthell": "ant_hell"}
+
+
+def biome_key_for_map(map_name):
+    """把 config.json 的 map 名翻成 fetch_server_ids() / BIOME_INDEX 认的生态区 key."""
+    return _MAP_TO_BIOME.get(map_name, "desert")
+
 
 def fetch_server_ids(biome="desert", timeout=5):
     """查一次官方接口, 返回这个生态区域当前3个区域(NA/EU/AS对应

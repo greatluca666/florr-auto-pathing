@@ -3,7 +3,7 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
-from server_lookup import fetch_server_ids, BIOME_INDEX
+from server_lookup import fetch_server_ids, BIOME_INDEX, biome_key_for_map
 
 
 def _mock_response(payload):
@@ -42,6 +42,17 @@ def test_fetch_server_ids_uses_correct_biome_index_in_url():
 def test_fetch_server_ids_rejects_unknown_biome():
     with pytest.raises(KeyError):
         fetch_server_ids("not_a_real_biome")
+
+
+@pytest.mark.parametrize("map_name, expected", [
+    ("desert", "desert"),
+    ("ocean", "ocean"),
+    ("anthell", "ant_hell"),      # config 用 anthell, 接口 key 是 ant_hell
+    ("garden", "desert"),         # 不是 config 里会出现的 map —— 回退
+    ("", "desert"),
+])
+def test_biome_key_for_map(map_name, expected):
+    assert biome_key_for_map(map_name) == expected
 
 
 def test_biome_index_covers_all_seven_biomes():

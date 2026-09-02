@@ -56,6 +56,8 @@ def validate_block(block, others):
         return "时间格式要是 HH:MM"
     if start == end and start != "00:00":
         return "起止时间不能相同(全天请填 00:00–00:00)"
+    if block.get("map") not in app_config._GUI_ENABLED_MAPS:
+        return "海洋 / 蚁狱暂不可用, 请选沙漠"
     if not block.get("location") and not block.get("farming_area"):
         return "在地图上点个目标点, 或框个刷怪区"
     if not _positive_int(block.get("farming_duration")):
@@ -68,6 +70,11 @@ def validate_block(block, others):
         if app_config.blocks_overlap(block, o):
             return f"跟时块 {o.get('id')} 时间重叠"
     return None
+
+
+def _map_radio_state(map_name):
+    """时块编辑器地图 radio 的 tk state: 不在 _GUI_ENABLED_MAPS 里的置灰."""
+    return "normal" if map_name in app_config._GUI_ENABLED_MAPS else "disabled"
 
 
 def new_block_template(cfg):
@@ -191,10 +198,18 @@ class TimeBlockEditor(ctk.CTkToplevel):
         self._acct.set(self._block.get("profile", vals[0]))
         self._acct.pack(anchor="w", padx=12, pady=4)
 
-        self._map = ctk.CTkOptionMenu(self, values=list(app_config._VALID_MAPS),
-                                      command=self._on_map_change)
-        self._map.set(self._block.get("map", "desert"))
-        self._map.pack(anchor="w", padx=12, pady=4)
+        self._map = tk.StringVar(value=self._block.get("map", "desert"))
+        map_row = ctk.CTkFrame(self, fg_color="transparent")
+        map_row.pack(anchor="w", padx=12, pady=4)
+        _MAP_LABELS = {"desert": "沙漠", "ocean": "海洋", "anthell": "蚁狱"}
+        for m in app_config._VALID_MAPS:
+            state = _map_radio_state(m)
+            text = _MAP_LABELS.get(m, m)
+            if state == "disabled":
+                text += "(暂不可用)"
+            ctk.CTkRadioButton(map_row, text=text, variable=self._map, value=m,
+                               state=state, command=self._on_map_change).pack(
+                side="left", padx=(0, 10))
 
         from gui_map_picker import MapPicker
         self._picker = MapPicker(self, on_point_change=self._on_point,
@@ -296,10 +311,11 @@ class TimeBlockEditor(ctk.CTkToplevel):
         self._acct.configure(values=[p["alias"] for p in self._profiles] + ["＋ 新建…"])
         self._acct.set(new_alias)
 
-    def _on_map_change(self, name):
+    def _on_map_change(self):
+        # CTkRadioButton 的 command 不带值, 从 StringVar 自己读.
         self._point = None
         self._area = None
-        self._picker.load_map(name)
+        self._picker.load_map(self._map.get())
         self._picker.set_point(None)
         self._picker.set_area(None)
 

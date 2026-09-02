@@ -65,8 +65,9 @@ Run `python main.py` to open the control-panel GUI.
 
 **时间表 (schedule) page** — the main view is a list of time blocks. Each block
 covers a set of weekdays + a start/end time (a block whose start ≥ end crosses
-midnight; `00:00–00:00` means all day) and carries: which account, which map, a
-target point / farming area (map picker), enemy-detection AI, auto-switch-server,
+midnight; `00:00–00:00` means all day) and carries: which account, which map
+(海洋 / 蚁狱 are greyed out for now — desert only), a target point / farming area
+(map picker), enemy-detection AI, auto-switch-server,
 and — under 高级选项 — farming duration and the consecutive-short-round threshold
 (both with hover `?` explanations). Overlapping blocks (shared weekday + time)
 are rejected on save. Click **▶ 开始调度** and the GUI drives everything by the
@@ -74,8 +75,10 @@ weekly plan: at each block boundary it stops the worker, relaunches Chrome on
 that block's account profile (`--start-fullscreen`, opens florr.io) if the
 account changed, writes the block's params into `config.json`, and starts a
 fresh worker. Gaps in the plan leave the worker stopped. The whole scheduled run
-needs zero interaction — the worker clicks the in-game start button and handles
-death screens itself.
+needs zero interaction — the worker clicks the in-game start button, handles
+death screens itself, and re-locks the florr server to the block's biome every
+time it's back at the start screen (florr doesn't remember the last-picked
+biome).
 
 **账号 (accounts) page** — each florr.io account is its own Chrome profile
 directory under `chrome-profiles/<别名>/`. New / login / re-login opens a

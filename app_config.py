@@ -35,6 +35,12 @@ DEFAULTS = {
 # 那种"就地写死一小张表"的仓库既有做法一致, 不在 import 时去 listdir.
 _VALID_MAPS = ("desert", "ocean", "anthell")
 
+# GUI 时块编辑器里实际可选的地图. 不在这里的 (ocean / anthell) 在界面上置灰、
+# 标「暂不可用」. 「暂时」措施: 索敌 canvas decode 只做了沙漠、启动锁生态区也只
+# 在沙漠上验证过. 以后放开 ocean 只需把它加回这个元组 —— coerce 层 (_VALID_MAPS)
+# 不受影响, 手写 config.json / 旧时块里的 ocean 仍能跑.
+_GUI_ENABLED_MAPS = ("desert",)
+
 # 一个时块 / active 切片里的刷怪参数键(不含 afk_enabled —— 那是 GUI 全局的).
 _ACTIVE_KEYS = (
     "map", "location", "farming_area", "farming_duration",
