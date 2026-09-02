@@ -277,41 +277,44 @@ def test_move_to_position_without_on_tick_unchanged(monkeypatch):
     assert main.move_to_position((500, 500), (502, 501), max_attempts=5) is True
 
 
-def test_run_worker_calls_ensure_invert_attack_once(monkeypatch):
+def _stub_run_worker_env(monkeypatch, overlay=None):
     monkeypatch.setattr(main.cdp_bridge, "is_dedicated_chrome_ready", lambda: True)
-    monkeypatch.setattr(main, "create_overlay", lambda *a, **k: _StubOverlay())
+    monkeypatch.setattr(main, "create_overlay",
+                        lambda *a, **k: overlay or _StubOverlay())
     monkeypatch.setattr(main, "overlay", None, raising=False)
     monkeypatch.setattr(main, "_apply_worker_config", lambda cfg: {
         "location": (1, 2), "farming_area": [(0, 0), (9, 9)], "farming_duration": 300,
         "short_round_limit": 2, "enemy_ai_enabled": False, "auto_switch_server": False,
     })
+    monkeypatch.setattr(main, "on_death_screen", lambda: False)
+    monkeypatch.setattr(main, "on_start_screen", lambda: False)
+    monkeypatch.setattr(main.time, "sleep", lambda *a, **k: None)
+
+
+def test_run_worker_reasserts_invert_attack_at_startup_and_each_round(monkeypatch):
+    _stub_run_worker_env(monkeypatch)
     calls = []
     monkeypatch.setattr(main.florr_settings, "ensure_invert_attack_on",
-                        lambda ej, *a, **k: calls.append(ej) or ("turned_on", ""))
-    monkeypatch.setattr(main, "on_death_screen",
-                        lambda: (_ for _ in ()).throw(KeyboardInterrupt))
+                        lambda ej, *a, **k: calls.append(ej) or ("on_already", ""))
+    # 掐在寻路 —— 它在"每轮重写反转攻击键"之后, 所以第 1 轮那次也算进去
+    monkeypatch.setattr(main, "lazy_theta_pathing",
+                        lambda *a, **k: (_ for _ in ()).throw(KeyboardInterrupt))
     with pytest.raises(KeyboardInterrupt):
         main.run_worker({})
-    assert len(calls) == 1
-    assert calls[0] is main.cdp_bridge.eval_js
+    assert len(calls) == 2                      # 启动 1 次 + 第 1 轮进游戏后 1 次
+    assert all(c is main.cdp_bridge.eval_js for c in calls)
 
 
 def test_run_worker_survives_invert_attack_failure(monkeypatch):
     """ensure_invert_attack_on 返回 failed 时 worker 照常进主循环, 不 SystemExit."""
-    monkeypatch.setattr(main.cdp_bridge, "is_dedicated_chrome_ready", lambda: True)
     ov = _StubOverlay()
     warned = []
     ov.update = lambda **kw: warned.append(kw.get("message"))
-    monkeypatch.setattr(main, "create_overlay", lambda *a, **k: ov)
-    monkeypatch.setattr(main, "overlay", None, raising=False)
-    monkeypatch.setattr(main, "_apply_worker_config", lambda cfg: {
-        "location": (1, 2), "farming_area": [(0, 0), (9, 9)], "farming_duration": 300,
-        "short_round_limit": 2, "enemy_ai_enabled": False, "auto_switch_server": False,
-    })
+    _stub_run_worker_env(monkeypatch, overlay=ov)
     monkeypatch.setattr(main.florr_settings, "ensure_invert_attack_on",
                         lambda ej, *a, **k: ("failed", "addr-out-of-range"))
-    monkeypatch.setattr(main, "on_death_screen",
-                        lambda: (_ for _ in ()).throw(KeyboardInterrupt))
+    monkeypatch.setattr(main, "lazy_theta_pathing",
+                        lambda *a, **k: (_ for _ in ()).throw(KeyboardInterrupt))
     with pytest.raises(KeyboardInterrupt):   # 到了主循环 = 没被 failed 掐死
         main.run_worker({})
     assert any(m and "反转攻击键" in m for m in warned)

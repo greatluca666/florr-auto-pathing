@@ -665,6 +665,19 @@ def _apply_worker_config(cfg):
     }
 
 
+def _reassert_invert_attack():
+    """确保 florr 的「反转攻击键」是开的. florr 每次从菜单进局 / 定期服务端回同步
+    都会把它重置成账号里的值, 所以要反复写 —— run_worker 启动时一次 + 每轮进游戏
+    后一次. 返回 florr_settings.ensure_invert_attack_on 的 status.
+    on_already(常态)静默; turned_on / failed 才打日志."""
+    status, detail = florr_settings.ensure_invert_attack_on(cdp_bridge.eval_js)
+    if status == "turned_on":
+        print("✅ 反转攻击键已(重新)开启")
+    elif status == "failed":
+        print(f"⚠️ 反转攻击键未确认 ({detail}) —— 手动到 设置→控制→反转攻击键 打勾")
+    return status
+
+
 def run_worker(cfg):
     """刷怪 worker: 由 GUI 以 `main.py --worker` 子进程拉起. 掉线/死亡后自动点
     开始重来, 不主动停(沿用改造前 __main__ 的行为)."""
@@ -684,17 +697,11 @@ def run_worker(cfg):
     global overlay
     overlay = create_overlay()
 
-    # bot 自己不按攻击键, 靠 florr 的「反转攻击键」设置持续输出. 关着的话到位也
-    # 不出伤害. 启动时通过 CDP 往 florr 的 WASM 内存写一个字节确保它开着 ——
-    # 做不到就大声警告, 但不中断(bot 照常跑, 用户看到警告去手动勾).
-    _ia_status, _ia_detail = florr_settings.ensure_invert_attack_on(cdp_bridge.eval_js)
-    if _ia_status == "turned_on":
-        print("✅ 已开启 florr「反转攻击键」")
-    elif _ia_status == "on_already":
-        print("florr「反转攻击键」已是开")
-    else:
-        print(f"⚠️ 没能确认 florr「反转攻击键」({_ia_detail}) —— 请手动到 "
-              f"设置→控制→反转攻击键 打勾, 否则 bot 到位也不出伤害")
+    # bot 自己不按攻击键, 靠 florr 的「反转攻击键」持续输出. florr 每次从菜单进局
+    # 都会从账号数据重载设置、把这个字节盖回原值 —— 所以不能只在这写一次, 每轮
+    # 进游戏后都要重写(_reassert_invert_attack, 见主循环). 这里先探一次给即时
+    # 反馈: 地址没标定 / florr 更新导致地址失效时立刻在悬浮窗警告, 不用等第一轮.
+    if _reassert_invert_attack() == "failed":
         overlay.update(message="⚠️ 反转攻击键未确认, 见日志")
 
     w = _apply_worker_config(cfg)
@@ -721,6 +728,10 @@ def run_worker(cfg):
             overlay.update(state="重新开始", message="点击开始按钮...")
             click_start_game()
             time.sleep(3)
+
+        # 进游戏了(或本来就在局内): florr 刚才可能从账号数据把「反转攻击键」重置
+        # 了, 每轮重写一次. on_already 静默(常态), turned_on / failed 才打日志.
+        _reassert_invert_attack()
 
         print(f"📍 目标区域: {farming_area}\n")
         overlay.update(state="启动", target=location,
