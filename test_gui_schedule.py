@@ -72,3 +72,4 @@ def test_validate_overlap_reports_other_id():
 def test_validate_ignores_self_in_others():
     me = _blk(id="mine")
     assert gs.validate_block(me, [me]) is None
+
