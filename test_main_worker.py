@@ -52,6 +52,47 @@ def test_apply_worker_config_fills_missing_from_defaults(monkeypatch):
     assert w["location"] == tuple(app_config.DEFAULTS["location"])
 
 
+def test_lock_biome_success_first_try(monkeypatch):
+    seen = []
+    monkeypatch.setattr(main, "switch_server", lambda b: seen.append(b) or "srv-1")
+    monkeypatch.setattr(main.time, "sleep", lambda *a, **k: None)
+    assert main._lock_biome("ocean") is True
+    assert seen == ["ocean"]
+
+
+def test_lock_biome_retries_then_succeeds(monkeypatch):
+    calls = {"n": 0}
+
+    def flaky(b):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise RuntimeError("cdp boom")
+        return "srv-9"
+
+    monkeypatch.setattr(main, "switch_server", flaky)
+    monkeypatch.setattr(main.time, "sleep", lambda *a, **k: None)
+    assert main._lock_biome("desert") is True
+    assert calls["n"] == 3
+
+
+def test_lock_biome_all_attempts_fail_is_warn_only(monkeypatch):
+    calls = {"n": 0}
+
+    def always_fail(b):
+        calls["n"] += 1
+        raise RuntimeError("network down")
+
+    monkeypatch.setattr(main, "switch_server", always_fail)
+    monkeypatch.setattr(main.time, "sleep", lambda *a, **k: None)
+    assert main._lock_biome("desert") is False        # no raise
+    assert calls["n"] == main._BIOME_LOCK_RETRIES
+
+
+def test_lock_biome_constants_are_numbers():
+    for name in ("_BIOME_LOCK_RETRIES", "_BIOME_LOCK_RETRY_SLEEP", "_BIOME_RECONNECT_SLEEP"):
+        assert isinstance(getattr(main, name), (int, float))
+
+
 def test_maybe_scan_enemies_disabled_never_touches_enemy_detect(monkeypatch):
     monkeypatch.setattr(main.enemy_detect, "scan_enemies",
                         lambda **k: (_ for _ in ()).throw(AssertionError("不该扫描")))

@@ -680,6 +680,34 @@ def _reassert_invert_attack():
     return status
 
 
+_BIOME_LOCK_RETRIES = 3
+_BIOME_LOCK_RETRY_SLEEP = 3.0
+_BIOME_RECONNECT_SLEEP = 3.0
+
+
+def _lock_biome(biome):
+    """把客户端钉到 biome 对应生态区的服务器. florr 不记忆上次选的生态区 —— 不锁
+    的话 click_start_game() 进的是 florr 默认那个(通常花园), 跟寻路用的地图对不上.
+    复用 switch_server(biome) 的 CDP forceServerID(仓库历史确认过能触发重连).
+
+    失败重试 _BIOME_LOCK_RETRIES 次(隔 _BIOME_LOCK_RETRY_SLEEP 秒), 都不成只警告
+    不阻断(跟 _reassert_invert_attack 一个风格)—— 宁可这轮进错生态区, 也不卡死在
+    开局菜单外面. 成功后 sleep 等重连落地再让调用方开始寻路. 返回 True/False.
+    """
+    for attempt in range(1, _BIOME_LOCK_RETRIES + 1):
+        try:
+            sid = switch_server(biome)
+            print(f"🗺️ 已锁定生态区 {biome} (服务器 {sid})")
+            time.sleep(_BIOME_RECONNECT_SLEEP)
+            return True
+        except Exception as e:
+            print(f"⚠️ 锁定生态区第 {attempt}/{_BIOME_LOCK_RETRIES} 次失败: {e}")
+            if attempt < _BIOME_LOCK_RETRIES:
+                time.sleep(_BIOME_LOCK_RETRY_SLEEP)
+    print("⚠️ 生态区没锁上, 先按当前服务器进游戏 (下轮回开局菜单再试)")
+    return False
+
+
 def run_worker(cfg):
     """刷怪 worker: 由 GUI 以 `main.py --worker` 子进程拉起. 掉线/死亡后自动点
     开始重来, 不主动停(沿用改造前 __main__ 的行为)."""
