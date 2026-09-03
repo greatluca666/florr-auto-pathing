@@ -2,6 +2,7 @@ import pytest
 
 from canvas_decode import (
     group_by_frame, camera_from_frame, screen_to_world, mobs_from_frame,
+    point_blank_shielded_mob,
 )
 from canvas_frame_fixtures import (
     ZOOM, arc_rec, minimap_rec, text_rec, healthbar_recs, nameplate, player_recs,
@@ -113,3 +114,42 @@ def test_stacked_nameplates_no_cross_contamination():
     mobs = mobs_from_frame(recs, camera_from_frame(recs))
     assert all(m["name"] == "Fire Ant" for m in mobs)
     assert sorted(m["rarity"] for m in mobs) == ["Epic", "Rare", "Unusual"]
+
+
+def _bar_stroke(frame, ax, ay, color, width):
+    return {"frame": frame, "op": "stroke", "x": ax, "y": ay, "r": None,
+            "bbox": [ax - 30, ay, ax - 30 + width, ay], "n": 2, "fill": "#FFFFFF",
+            "stroke": color, "lw": 6, "alpha": 1, "m": [ZOOM, 0, 0, ZOOM, ax, ay]}
+
+
+def _shield_bar(frame, ax, ay, hp):
+    # observed live on the point-blank Mythic sandstorm: two #222222 backgrounds with a
+    # #42E3F5 cyan bar between them, then the damage track and value bar. No nameplate text.
+    return [_bar_stroke(frame, ax, ay, "#222222", 60.0),
+            _bar_stroke(frame, ax, ay, "#42E3F5", 40.0),
+            _bar_stroke(frame, ax, ay, "#222222", 60.0),
+            _bar_stroke(frame, ax, ay, "#DD3434", 60.0),
+            _bar_stroke(frame, ax, ay, "#75DD34", 60.0 * hp)]
+
+
+def test_point_blank_shielded_mob_detected_on_player_anchor():
+    recs = list(player_recs(0, 693.8, 472.5))
+    recs += healthbar_recs(0, 1200.0, 800.0, hp=1.0)                       # a normal ranged mob
+    recs += _labelled(1200.0, 800.0, "Sandstorm", "Legendary", "#DE1F1F")
+    recs += _shield_bar(0, 693.8, 472.5, 0.66)                            # the point-blank one
+    recs += [minimap_rec(0, 2200.0, 11500.0)]
+    cam = camera_from_frame(recs)
+
+    pb = point_blank_shielded_mob(recs, cam)
+    assert pb is not None and abs(pb["hp"] - 0.66) < 0.02
+    assert pb["sx"] == 693.8 and pb["sy"] == 472.5
+
+
+def test_point_blank_shielded_mob_none_without_cyan_bar_or_off_anchor():
+    base = list(player_recs(0, 600.0, 453.5)) + [minimap_rec(0, 2200.0, 11500.0)]
+    # a plain (no cyan) bar on the player anchor -> not the shielded case
+    plain = base + healthbar_recs(0, 600.0, 453.5, hp=0.5)
+    assert point_blank_shielded_mob(plain, camera_from_frame(plain)) is None
+    # a cyan-bar mob but 200px off the player anchor -> a normal shielded mob, not point-blank
+    off = base + healthbar_recs(0, 900.0, 700.0, hp=1.0) + _shield_bar(0, 900.0, 700.0, 0.8)
+    assert point_blank_shielded_mob(off, camera_from_frame(off)) is None
