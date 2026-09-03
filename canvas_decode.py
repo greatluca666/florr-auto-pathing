@@ -169,22 +169,15 @@ def _bar_width(rec):
 
 
 def _bar_blocks(records, label_radius=100.0):
-    """Yield one dict per nameplate block.
+    """Yield one dict per nameplate block in draw order.
 
-    A block is a run of bar strokes sharing an anchor. Each coloured bar is measured against
-    the most recent `#222222` background, because entities that draw a second, narrower cyan
-    bar give each bar its own background. The remaining-health bar is identified by position,
-    not colour: it is the stroke drawn immediately after the `#DD3434` damage track. Its
-    colour is a damage-flash gradient, so matching a fixed green would miss every entity
-    mid-flash.
+    A block is the run of bar strokes sharing an anchor, followed by its label text. Each
+    coloured bar is measured against the most recent `#222222` background, because entities
+    that draw a second, narrower cyan bar give each bar its own background.
 
-    Label text is assigned in a second pass, each text record to its NEAREST bar anchor
-    within `label_radius`. Stream-order consumption (claim the text records that immediately
-    follow this block's strokes) breaks at high mob density / zoomed out, where florr batches
-    several mobs' bars together and then their labels together: the first mob in such a batch
-    would get an empty text run and its name/rarity would be silently dropped (observed on a
-    Legendary desert server — a Mythic sandstorm's 神话 tag lost this way). Records are still
-    in draw order, so each block's `texts` lists name before rarity.
+    The remaining-health bar is identified by position, not colour: it is the stroke drawn
+    immediately after the `#DD3434` damage track. Its colour is a damage-flash gradient, so
+    matching a fixed green would miss every entity mid-flash.
     """
     blocks = []
     i, n = 0, len(records)
@@ -209,24 +202,18 @@ def _bar_blocks(records, label_radius=100.0):
                 hp = width / bg_width
                 value_pending = False
             i += 1
-        blocks.append({"anchor": anchor, "hp": hp, "secondary": secondary,
-                       "texts": [], "text_colors": []})
-
-    for r in records:
-        if r["op"] != "text":
-            continue
-        lx, ly = _anchor(r)
-        best, best_d = None, label_radius
-        for b in blocks:
-            d = math.hypot(lx - b["anchor"][0], ly - b["anchor"][1])
-            if d <= best_d:
-                best, best_d = b, d
-        if best is None:
-            continue
-        t = r.get("text")
-        if t not in best["texts"]:
-            best["texts"].append(t)
-            best["text_colors"].append(r.get("fill"))
+        texts = []
+        text_colors = []
+        while i < n and records[i]["op"] == "text":
+            label = _anchor(records[i])
+            if math.hypot(label[0] - anchor[0], label[1] - anchor[1]) <= label_radius:
+                t = records[i].get("text")
+                if t not in texts:
+                    texts.append(t)
+                    text_colors.append(records[i].get("fill"))
+            i += 1
+        blocks.append({"anchor": anchor, "hp": hp, "secondary": secondary, "texts": texts,
+                        "text_colors": text_colors})
     return blocks
 
 

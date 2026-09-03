@@ -66,7 +66,25 @@ def main():
             texts.append((r.get("text"), r.get("fill")))
     print(f"\n=== 次新帧 (frame {keys[-2]}): {len(recs)} 条 ===")
     print(f"op 分布: {ops}")
-    print(f"文本记录 {len(texts)} 条:")
+
+    # 原始交错序列: 想看 florr 到底怎么排一个 nameplate 的 血条 vs 名字/稀有度,
+    # 中间夹没夹别的 (fill 粒子 / 别的怪的血条). _bar_blocks 靠"血条后面紧跟文本"
+    # 这个假设取名字 —— 中间夹一条 fill 就丢整块名字。这段就是拿证据的。
+    print("\n=== 原始交错序列 (只截前 120 条; s=stroke t=text f=fill, xy=CTM锚点) ===")
+    HB = {"#222222", "#DD3434", "#42E3F5"}
+    for k, r in enumerate(recs[:120]):
+        op = r.get("op")
+        ax, ay = (r.get("m") or [0, 0, 0, 0, 0, 0])[4:6]
+        if op == "text":
+            print(f"  {k:3} t  ({ax:6.0f},{ay:6.0f})  {r.get('text')!r:20} fill={r.get('fill')!r}")
+        elif op == "stroke":
+            col = r.get("stroke")
+            tag = "HP-BAR" if col in HB else "value/other"
+            print(f"  {k:3} s  ({ax:6.0f},{ay:6.0f})  stroke={col!r:10} {tag}")
+        else:
+            print(f"  {k:3} f  ({ax:6.0f},{ay:6.0f})  fill={r.get('fill')!r:10} r={r.get('r')}")
+
+    print(f"\n文本记录 {len(texts)} 条:")
     for t, fill in texts:
         print(f"    text={t!r:24}  fill={fill!r}")
 
