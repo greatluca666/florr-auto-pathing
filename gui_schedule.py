@@ -45,6 +45,8 @@ def block_to_active(block):
         "consecutive_short_round_limit": int(block["consecutive_short_round_limit"]),
         "enemy_ai_enabled": bool(block["enemy_ai_enabled"]),
         "auto_switch_server": bool(block["auto_switch_server"]),
+        "invert_attack": bool(block.get("invert_attack", True)),
+        "invert_defense": bool(block.get("invert_defense", False)),
         "enter_game_swap": _coerce_swap_obj(block.get("enter_game_swap")),
         "reach_area_swap": _coerce_swap_obj(block.get("reach_area_swap")),
     }
@@ -96,6 +98,7 @@ def new_block_template(cfg):
         "map": "desert", "location": None, "farming_area": None,
         "farming_duration": 300, "consecutive_short_round_limit": 2,
         "enemy_ai_enabled": True, "auto_switch_server": True,
+        "invert_attack": True, "invert_defense": False,
         "enter_game_swap": {"enabled": False, "mod": "none", "digit": "1"},
         "reach_area_swap": {"enabled": False, "mod": "none", "digit": "1"},
     }
@@ -243,6 +246,15 @@ class TimeBlockEditor(ctk.CTkToplevel):
             self._autosw.select()
         self._autosw.pack(anchor="w", padx=12, pady=6)
 
+        self._inv_attack = ctk.CTkSwitch(self, text="反转攻击键")
+        if self._block.get("invert_attack", True):
+            self._inv_attack.select()
+        self._inv_attack.pack(anchor="w", padx=12, pady=(6, 0))
+        self._inv_defense = ctk.CTkSwitch(self, text="反转防御键")
+        if self._block.get("invert_defense", False):
+            self._inv_defense.select()
+        self._inv_defense.pack(anchor="w", padx=12, pady=(0, 6))
+
         self._enter_swap_w = self._build_swap_field(
             "enter_game_swap", "进游戏切换装备",
             "每轮真的(重新)进游戏后按一次和弦换 loadout: 按住修饰键 → 按数字 → 松开.")
@@ -389,6 +401,8 @@ class TimeBlockEditor(ctk.CTkToplevel):
             farming_area=[list(area[0]), list(area[1])] if area else None,
             enemy_ai_enabled=bool(self._enemy.get()),
             auto_switch_server=bool(self._autosw.get()),
+            invert_attack=bool(self._inv_attack.get()),
+            invert_defense=bool(self._inv_defense.get()),
             enter_game_swap=self._collect_swap(self._enter_swap_w),
             reach_area_swap=self._collect_swap(self._reach_swap_w),
         )

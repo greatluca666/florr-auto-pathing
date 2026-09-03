@@ -171,22 +171,6 @@ class App(ctk.CTk):
             ctk.CTkLabel(afk_box, text="(仅 Windows)", font=("", 9),
                          text_color="gray").pack()
 
-        inv_box = ctk.CTkFrame(side, fg_color="transparent")
-        inv_box.grid(row=6, column=0, padx=10, pady=(0, 10), sticky="ew")
-        ctk.CTkLabel(inv_box, text="florr 反转键", font=("", 12)).pack()
-        self.invert_attack_switch = ctk.CTkSwitch(
-            inv_box, text="反转攻击键",
-            command=lambda: self._persist_flag("invert_attack", self.invert_attack_switch.get()))
-        self.invert_attack_switch.pack(pady=(4, 0), anchor="w")
-        if self._cfg["invert_attack"]:
-            self.invert_attack_switch.select()
-        self.invert_defense_switch = ctk.CTkSwitch(
-            inv_box, text="反转防御键",
-            command=lambda: self._persist_flag("invert_defense", self.invert_defense_switch.get()))
-        self.invert_defense_switch.pack(pady=(2, 0), anchor="w")
-        if self._cfg["invert_defense"]:
-            self.invert_defense_switch.select()
-
         # ---- 主区 ----
         self.content = ctk.CTkFrame(self)
         self.content.grid(row=0, column=1, sticky="nsew", padx=12, pady=12)
