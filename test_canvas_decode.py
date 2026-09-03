@@ -57,6 +57,45 @@ def test_camera_resolves_self_when_other_players_level_text_is_orphaned():
     assert cam["player_screen"] == (700.0, 470.0)
 
 
+def _bare_hp_bar(frame, ax, ay, hp=1.0):
+    def s(color, w):
+        return {"frame": frame, "op": "stroke", "x": ax, "y": ay, "r": None,
+                "bbox": [ax - 30, ay, ax - 30 + w, ay], "n": 2, "fill": "#FFFFFF",
+                "stroke": color, "lw": 6, "alpha": 1, "m": [ZOOM, 0, 0, ZOOM, ax, ay]}
+    return [s("#222222", 60.0), s("#DD3434", 60.0), s("#75DD34", 60.0 * hp)]
+
+
+def test_camera_strict_raises_but_best_effort_falls_back_to_own_hp_bar():
+    # a dense frame whose player gold body isn't a clean #FFE763 match (occluded / skin /
+    # flash). strict camera_from_frame raises; best_effort uses the player's own bare HP bar.
+    recs = []
+    for ax, ay in [(300.0, 300.0), (900.0, 600.0), (500.0, 700.0), (700.0, 200.0)]:
+        recs += healthbar_recs(0, ax, ay, hp=1.0)
+        recs += _labelled(ax, ay, "Sandstorm", "Legendary", "#DE1F1F")
+    recs += _bare_hp_bar(0, 960.0, 472.0, hp=1.0)          # the player's own bar, no nameplate
+    recs += [minimap_rec(0, 5000.0, 6000.0)]
+
+    with pytest.raises(ValueError, match="player_screen"):
+        camera_from_frame(recs)
+    cam = camera_from_frame(recs, best_effort=True)
+    assert cam["player_screen"] == (960.0, 472.0)
+    assert cam["approx"] is True
+
+
+def test_camera_best_effort_rejects_offscreen_other_players_body():
+    # another player's gold body sits way off-screen (y far below the mob cluster). best_effort
+    # must reject it as an outlier and fall back to our own HP bar near the cluster centre.
+    recs = list(_bare_hp_bar(0, 400.0, 300.0, hp=1.0))     # a mob bar (no label)
+    recs += [_gold_body(1094.0, 2536.0, r=ZOOM)]           # other player, far off-screen
+    recs += ([text_rec(0, 1095.0, 2587.0, "106级")] * 2)
+    recs += _bare_hp_bar(0, 960.0, 472.0, hp=1.0)          # our own bar
+    recs += [minimap_rec(0, 3700.0, 3700.0)]
+
+    cam = camera_from_frame(recs, best_effort=True)
+    assert cam["player_screen"] == (960.0, 472.0)
+    assert cam["approx"] is True
+
+
 def test_bar_blocks_ignores_floating_damage_numbers():
     recs = list(player_recs(0))
     recs += healthbar_recs(0, 400.0, 300.0, hp=1.0)

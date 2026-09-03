@@ -89,14 +89,49 @@ def _is_rotated(rec):
     return abs(rec["m"][1]) > 1e-9
 
 
-def camera_from_frame(records):
+def _median_bar_anchor(records):
+    anchors = [_anchor(r) for r in records
+               if r["op"] == "stroke" and r.get("stroke") == HEALTHBAR_BG and not _is_minimap(r)]
+    if not anchors:
+        return None
+    xs = sorted(a[0] for a in anchors)
+    ys = sorted(a[1] for a in anchors)
+    return (xs[len(xs) // 2], ys[len(ys) // 2])
+
+
+_SELF_ANCHOR_OUTLIER_PX = 600.0   # a resolved player anchor further than this from the mob
+                                  # cluster's median bar anchor is not the local player
+
+
+def _self_bar_anchor(records):
+    """Best-effort player screen anchor when the gold-body method fails or is an outlier: the
+    player draws its own #222222 HP bar (no nameplate text) at its screen anchor. Among bare,
+    healthy-hp bar blocks, take the one nearest the median of every bar anchor (the player sits
+    in the middle of the mob cluster). None if there's nothing usable."""
+    med = _median_bar_anchor(records)
+    if med is None:
+        return None
+    bare = [b["anchor"] for b in _bar_blocks(records)
+            if not b["texts"] and b["hp"] is not None and b["hp"] > 0.4]
+    if not bare:
+        return None
+    return min(bare, key=lambda a: math.hypot(a[0] - med[0], a[1] - med[1]))
+
+
+def camera_from_frame(records, best_effort=False):
     """Read the camera for one frame: {"zoom", "player_world", "player_screen"}.
 
     zoom comes from a nameplate health bar (drawn unrotated at the camera scale), the absolute
     world position from the minimap player dot, and the screen anchor from the player's own gold
-    body. Raises ValueError if any of the three is missing — a frame with no mob on screen has no
-    scale reference, and guessing one would silently corrupt every world coordinate derived from it.
-    """
+    body. Raises ValueError if any of the three is missing — guessing one would silently corrupt
+    every world coordinate derived from it.
+
+    best_effort=True (used by enemy_detect.scan_enemies, which works in screen space and
+    discards world coords): a gold-body anchor that lands far outside the mob cluster is
+    another player's body, not ours — discard it. If player_screen is then still unknown but
+    zoom is, fall back to the player's own bare HP bar near the cluster centre and set
+    player_world to 0. Only _is_player_anchor filtering needs player_screen pixel-exact;
+    screen_pos comes straight from each mob's own anchor."""
     zoom = None
     for r in records:
         if r["op"] == "stroke" and r.get("stroke") == HEALTHBAR_BG and not _is_minimap(r):
@@ -158,11 +193,24 @@ def camera_from_frame(records):
             if len(largest) == 1:
                 player_screen = _anchor(largest[0])
 
+    if best_effort and player_screen is not None:
+        med = _median_bar_anchor(records)
+        if med is not None and math.hypot(player_screen[0] - med[0],
+                                          player_screen[1] - med[1]) > _SELF_ANCHOR_OUTLIER_PX:
+            player_screen = None            # that gold body is another player, off-screen
+
+    if best_effort and player_screen is None and zoom is not None:
+        fallback = _self_bar_anchor(records)
+        if fallback is not None:
+            return {"zoom": zoom, "player_world": player_world or (0.0, 0.0),
+                    "player_screen": fallback, "approx": True}
+
     missing = [n for n, v in (("zoom", zoom), ("player_world", player_world),
                               ("player_screen", player_screen)) if v is None]
     if missing:
         raise ValueError(f"camera undetermined for this frame, missing: {', '.join(missing)}")
-    return {"zoom": zoom, "player_world": player_world, "player_screen": player_screen}
+    return {"zoom": zoom, "player_world": player_world, "player_screen": player_screen,
+            "approx": False}
 
 
 def screen_to_world(x, y, camera):

@@ -439,7 +439,7 @@ def scan_enemies(image=None, conf=0.4, model_path=None):
         keys = sorted(frames)
         recs = frames[keys[-2]]                 # 最新那帧可能还在画, 取次新的
         _frame_buffer[:] = [r for r in _frame_buffer if r.get("frame", -1) >= keys[-1]]
-        cam = canvas_decode.camera_from_frame(recs)
+        cam = canvas_decode.camera_from_frame(recs, best_effort=True)
         mobs = canvas_decode.mobs_from_frame(recs, cam)
     except Exception:
         return []                              # 任何异常 → 当作这次没解出来, 返回 []
