@@ -28,8 +28,9 @@ DEFAULTS = {
     # 索敌早已不需要模型文件, 改成解码 canvas 绘制调用了.
     "enemy_ai_enabled": False,
     "auto_switch_server": True,
-    # florr 反转攻击键 / 反转防御键: worker 每轮把对应 WASM 字节写成 (1 if True else 0).
-    # attack 默认 True —— 旧 config 无键时行为跟"无条件强制开"完全一致, 不静默关伤害.
+    # florr 反转攻击键 / 反转防御键: 每个时块单独配 (在 _ACTIVE_KEYS 里). worker 每轮
+    # 把对应 WASM 字节写成 (1 if True else 0). 这里的扁平默认给 _ACTIVE_KEYS 迁移 +
+    # 空 schedule 时 active 兜底用; 新建时块的默认在 gui_schedule 里.
     "invert_attack": True,
     "invert_defense": False,
     # 进游戏 / 寻路到刷怪区时按一次和弦切换 florr loadout.
@@ -55,6 +56,7 @@ _ACTIVE_KEYS = (
     "map", "location", "farming_area", "farming_duration",
     "consecutive_short_round_limit", "enemy_ai_enabled", "auto_switch_server",
     "enter_game_swap", "reach_area_swap",
+    "invert_attack", "invert_defense",
 )
 _TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 
@@ -142,8 +144,6 @@ def _coerce_v1(raw):
 DEFAULTS_V2 = {
     "version": 2,
     "afk_enabled": False,
-    "invert_attack": True,
-    "invert_defense": False,
     "profiles": [{"alias": "默认", "dir": "chrome-profiles/默认"}],
     # 全新装是空的 —— 用户自己加时块. 空 schedule 时 worker 不会真跑.
     "schedule": [],
@@ -219,6 +219,13 @@ def _coerce_block(raw, aliases, n):
         print(f"⚠️ config.json 时块 {bid} 引用的账号 {profile!r} 不存在, 已禁用该时块")
         enabled = False
 
+    # 反转攻击键 / 反转防御键: 缺键或非 bool 一律回落 DEFAULTS, 绝不 return None ——
+    # 旧 v2 时块没这两个键, 不能因此被整块丢. enemy_ai_enabled 那种严格 return None
+    # 是给一直都有的键用的; 这两个是后加的, 故意宽松.
+    def _bool_or(key, dflt):
+        v = raw.get(key, dflt)
+        return v if isinstance(v, bool) else dflt
+
     return {
         "id": bid, "enabled": enabled, "days": days, "start": start, "end": end,
         "profile": profile, "map": raw["map"],
@@ -231,6 +238,8 @@ def _coerce_block(raw, aliases, n):
         # 绝不 raw[key] (KeyError 会让整块被丢).
         "enter_game_swap": _coerce_swap_obj(raw.get("enter_game_swap")),
         "reach_area_swap": _coerce_swap_obj(raw.get("reach_area_swap")),
+        "invert_attack": _bool_or("invert_attack", DEFAULTS["invert_attack"]),
+        "invert_defense": _bool_or("invert_defense", DEFAULTS["invert_defense"]),
     }
 
 
@@ -267,8 +276,6 @@ def _coerce(raw):
         return copy.deepcopy(DEFAULTS_V2)
     cfg = {"version": 2}
     cfg["afk_enabled"] = raw["afk_enabled"] if isinstance(raw.get("afk_enabled"), bool) else False
-    cfg["invert_attack"] = raw["invert_attack"] if isinstance(raw.get("invert_attack"), bool) else True
-    cfg["invert_defense"] = raw["invert_defense"] if isinstance(raw.get("invert_defense"), bool) else False
     cfg["profiles"] = _coerce_profiles(raw.get("profiles"))
     aliases = {p["alias"] for p in cfg["profiles"]}
     cfg["schedule"] = _coerce_schedule(raw.get("schedule"), aliases)
@@ -305,8 +312,6 @@ def migrate_v1(raw):
     return {
         "version": 2,
         "afk_enabled": flat["afk_enabled"],
-        "invert_attack": flat["invert_attack"],
-        "invert_defense": flat["invert_defense"],
         "profiles": [{"alias": "默认", "dir": "chrome-profiles/默认"}],
         "schedule": [block],
         "active": {k: copy.deepcopy(flat[k]) for k in _ACTIVE_KEYS},
