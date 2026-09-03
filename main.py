@@ -839,7 +839,8 @@ def run_worker(cfg):
         overlay.update(state="启动", target=location,
                        message=f"第{round_count}轮: 开始自动寻路到刷怪区域")
 
-        if lazy_theta_pathing(location, [farming_area]):
+        reached_farm = lazy_theta_pathing(location, [farming_area])
+        if reached_farm:
             print("✅ 到达刷怪区域！")
             # 到刷怪区了: 按配置的键切到"输出" loadout. 跟 enter swap 同一道 gate ——
             # 存活续命轮 florr 没重置 loadout, 不重按.
@@ -851,6 +852,18 @@ def run_worker(cfg):
             print("❌ 本轮未能到达目标区域")
             overlay.update(message="本轮未能到达目标区域")
             time.sleep(1)
+
+        # 这轮既没在循环顶撞见死亡/开局/游客画面(entered_game 一直 False), 又没能
+        # 寻路到刷怪区 —— 典型是换服/重连的空档: 开局菜单还没画出来, 循环顶
+        # on_start_screen() 没抓到、没点开始, 等控制权到了 lazy_theta_pathing 菜单才
+        # 渲染完被它的循环顶抓到并 return False. 没进过场就没有"这条命", 不能算短局
+        # (否则白 strike 攒够两次会误触发又一次 switch_server, 换服抖动). 直接重开
+        # 一轮, 下一轮循环顶的 on_start_screen() 会把开始按钮点掉正常进场.
+        if not entered_game and not reached_farm:
+            print("↩️ 本轮未进游戏(停在开局/死亡画面), 不计入短局, 重开一轮")
+            overlay.update(state="重新开始", message="上轮卡在菜单, 重开一轮")
+            time.sleep(2)
+            continue
 
         round_elapsed = time.time() - round_start_time
         completed_full_duration = round_elapsed >= farming_duration
