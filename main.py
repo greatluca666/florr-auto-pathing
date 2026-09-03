@@ -667,6 +667,8 @@ def _apply_worker_config(cfg):
         "biome": server_lookup.biome_key_for_map(src.get("map", d["map"])),
         "enter_game_swap": src.get("enter_game_swap", d["enter_game_swap"]),
         "reach_area_swap": src.get("reach_area_swap", d["reach_area_swap"]),
+        "invert_attack": src.get("invert_attack", d["invert_attack"]),
+        "invert_defense": src.get("invert_defense", d["invert_defense"]),
     }
 
 
@@ -766,20 +768,19 @@ def run_worker(cfg):
         click_play_as_guest()
         time.sleep(2)
 
-    # 反转攻击键 / 反转防御键的目标值直接从整份 cfg 取(顶层键, 不在 active 切片 /
-    # _apply_worker_config 输出里), 缺键回退 app_config.DEFAULTS.
-    _d = app_config.DEFAULTS
-    want_attack = cfg.get("invert_attack", _d["invert_attack"])
-    want_defense = cfg.get("invert_defense", _d["invert_defense"])
-
-    if "failed" in _reassert_florr_toggles(want_attack, want_defense).values():
-        overlay.update(message="⚠️ 反转键未全部确认, 见日志")
-
     w = _apply_worker_config(cfg)
     location = w["location"]
     farming_area = w["farming_area"]
     farming_duration = w["farming_duration"]
     CONSECUTIVE_SHORT_ROUND_LIMIT = w["short_round_limit"]
+
+    # 反转攻击键 / 反转防御键的目标值来自当前时块 (active 切片, 见 _apply_worker_config).
+    # 调度器换时块会重启 worker, 所以整个 worker 生命周期用同一份就够. florr 每次进局
+    # 会从账号数据把这两个字节盖回 —— 每轮进游戏后重写一次(见主循环).
+    want_attack = w["invert_attack"]
+    want_defense = w["invert_defense"]
+    if "failed" in _reassert_florr_toggles(want_attack, want_defense).values():
+        overlay.update(message="⚠️ 反转键未全部确认, 见日志")
 
     print("🎮 开始自动寻路+刷怪 (掉线/死亡后自动点开始重来, 不主动停)\n")
     consecutive_short_rounds = 0

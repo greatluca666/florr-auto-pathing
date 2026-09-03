@@ -371,45 +371,68 @@ class TestLoadoutSwapKeys:
 
 
 class TestInvertToggles:
-    def test_defaults_attack_on_defense_off(self):
+    def test_flat_defaults_unchanged(self):
         assert app_config.DEFAULTS["invert_attack"] is True
         assert app_config.DEFAULTS["invert_defense"] is False
-        assert app_config.DEFAULTS_V2["invert_attack"] is True
-        assert app_config.DEFAULTS_V2["invert_defense"] is False
 
-    def test_not_in_active_keys(self):
-        assert "invert_attack" not in app_config._ACTIVE_KEYS
-        assert "invert_defense" not in app_config._ACTIVE_KEYS
+    def test_now_in_active_keys(self):
+        assert "invert_attack" in app_config._ACTIVE_KEYS
+        assert "invert_defense" in app_config._ACTIVE_KEYS
 
-    def test_missing_keys_get_defaults_on_load(self, cfg_path):
+    def test_not_top_level_in_defaults_v2(self):
+        assert "invert_attack" not in app_config.DEFAULTS_V2
+        assert "invert_defense" not in app_config.DEFAULTS_V2
+        assert app_config.DEFAULTS_V2["active"]["invert_attack"] is True
+        assert app_config.DEFAULTS_V2["active"]["invert_defense"] is False
+
+    def test_load_has_them_per_block_not_top_level(self, cfg_path):
         cfg = _v2_cfg()
-        cfg.pop("invert_attack", None)
-        cfg.pop("invert_defense", None)
+        cfg["schedule"] = [_v2_block()]
         app_config.save_config(cfg)
         got = app_config.load_config()
-        assert got["invert_attack"] is True
-        assert got["invert_defense"] is False
+        assert "invert_attack" not in got            # gone from top level
+        blk = got["schedule"][0]
+        assert blk["invert_attack"] is True
+        assert blk["invert_defense"] is False
+        assert got["active"]["invert_attack"] is True
 
-    def test_explicit_values_roundtrip(self, cfg_path):
-        cfg = _v2_cfg(invert_attack=False, invert_defense=True)
+    def test_block_explicit_values_roundtrip(self, cfg_path):
+        cfg = _v2_cfg()
+        cfg["schedule"] = [_v2_block(invert_attack=False, invert_defense=True)]
+        app_config.save_config(cfg)
+        blk = app_config.load_config()["schedule"][0]
+        assert blk["invert_attack"] is False
+        assert blk["invert_defense"] is True
+
+    def test_block_non_bool_falls_back_to_default(self, cfg_path):
+        cfg = _v2_cfg()
+        cfg["schedule"] = [_v2_block(invert_attack="yes", invert_defense=1)]
+        app_config.save_config(cfg)
+        blk = app_config.load_config()["schedule"][0]
+        assert blk["invert_attack"] is True
+        assert blk["invert_defense"] is False
+
+    def test_old_block_without_keys_kept_with_defaults(self, cfg_path):
+        cfg = _v2_cfg()
+        b = _v2_block()
+        b.pop("invert_attack", None)
+        b.pop("invert_defense", None)
+        cfg["schedule"] = [b]
         app_config.save_config(cfg)
         got = app_config.load_config()
-        assert got["invert_attack"] is False
-        assert got["invert_defense"] is True
+        assert len(got["schedule"]) == 1            # not dropped
+        assert got["schedule"][0]["invert_attack"] is True
+        assert got["schedule"][0]["invert_defense"] is False
 
-    def test_non_bool_falls_back_to_default(self, cfg_path):
-        cfg = _v2_cfg(invert_attack="yes", invert_defense=1)
-        app_config.save_config(cfg)
-        got = app_config.load_config()
-        assert got["invert_attack"] is True     # "yes" 非 bool → 默认
-        assert got["invert_defense"] is False   # 1 非 bool → 默认
-
-    def test_v1_migration_adds_toggles(self, cfg_path):
+    def test_v1_migration_per_block_and_active_not_top_level(self, cfg_path):
         cfg_path.write_text(json.dumps({
             "map": "desert", "location": [1, 2], "farming_area": [[0, 0], [3, 3]],
             "farming_duration": 100, "consecutive_short_round_limit": 1,
             "enemy_ai_enabled": False, "auto_switch_server": True,
         }), encoding="utf-8")
         got = app_config.load_config()
-        assert got["invert_attack"] is True
-        assert got["invert_defense"] is False
+        assert "invert_attack" not in got
+        assert got["schedule"][0]["invert_attack"] is True
+        assert got["schedule"][0]["invert_defense"] is False
+        assert got["active"]["invert_attack"] is True
+        assert got["active"]["invert_defense"] is False

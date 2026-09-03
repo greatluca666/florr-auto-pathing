@@ -52,6 +52,21 @@ def test_apply_worker_config_fills_missing_from_defaults(monkeypatch):
     assert w["location"] == tuple(app_config.DEFAULTS["location"])
 
 
+def test_apply_worker_config_reads_invert_from_active(monkeypatch):
+    monkeypatch.setattr(main, "apply_map", lambda name: None)
+    w = main._apply_worker_config({"version": 2, "active": {
+        "map": "desert", "invert_attack": False, "invert_defense": True}})
+    assert w["invert_attack"] is False
+    assert w["invert_defense"] is True
+
+
+def test_apply_worker_config_invert_defaults_when_absent(monkeypatch):
+    monkeypatch.setattr(main, "apply_map", lambda name: None)
+    w = main._apply_worker_config({"version": 2, "active": {"map": "desert"}})
+    assert w["invert_attack"] is True
+    assert w["invert_defense"] is False
+
+
 def test_lock_biome_success_first_try(monkeypatch):
     seen = []
     monkeypatch.setattr(main, "switch_server", lambda b: seen.append(b) or "srv-1")
@@ -208,6 +223,8 @@ def test_run_worker_does_not_start_florr_auto_afk(monkeypatch):
         "enemy_ai_enabled": False,
         "auto_switch_server": False,
         "biome": "desert",
+        "invert_attack": True,
+        "invert_defense": False,
     })
     monkeypatch.setattr(main, "_lock_biome", lambda b: True)   # 本测跟锁生态区无关
     monkeypatch.setattr(main.florr_settings, "ensure_flag",
@@ -365,6 +382,7 @@ def _stub_run_worker_env(monkeypatch, overlay=None):
         "biome": "desert",
         "enter_game_swap": {"enabled": False, "mod": "none", "digit": "1"},
         "reach_area_swap": {"enabled": False, "mod": "none", "digit": "1"},
+        "invert_attack": True, "invert_defense": False,
     })
     monkeypatch.setattr(main, "switch_server", lambda *a, **k: "stub-srv")
     monkeypatch.setattr(main, "on_death_screen", lambda: False)
@@ -387,19 +405,27 @@ def test_run_worker_reasserts_florr_toggles_at_startup_and_each_round(monkeypatc
     # 每次内部对 attack + defense 各调一次 ensure_flag = 4 次
     assert len(calls) == 4
     A, D = main.florr_settings.INVERT_ATTACK_ADDR, main.florr_settings.INVERT_DEFENSE_ADDR
-    # 默认 cfg={} → invert_attack 默认 True → want 1; invert_defense 默认 False → want 0
+    # _stub 的 _apply_worker_config 返回 invert_attack True → want 1; invert_defense False → want 0
     assert calls == [(A, 1), (D, 0), (A, 1), (D, 0)]
 
 
-def test_run_worker_toggle_wants_follow_cfg(monkeypatch):
+def test_run_worker_toggle_wants_come_from_active_slice(monkeypatch):
     _stub_run_worker_env(monkeypatch)
+    monkeypatch.setattr(main, "_apply_worker_config", lambda cfg: {
+        "location": (1, 2), "farming_area": [(0, 0), (9, 9)], "farming_duration": 300,
+        "short_round_limit": 2, "enemy_ai_enabled": False, "auto_switch_server": False,
+        "biome": "desert",
+        "enter_game_swap": {"enabled": False, "mod": "none", "digit": "1"},
+        "reach_area_swap": {"enabled": False, "mod": "none", "digit": "1"},
+        "invert_attack": False, "invert_defense": True,
+    })
     calls = []
     monkeypatch.setattr(main.florr_settings, "ensure_flag",
                         lambda ej, addr, want: calls.append((addr, want)) or ("unchanged", ""))
     monkeypatch.setattr(main, "lazy_theta_pathing",
                         lambda *a, **k: (_ for _ in ()).throw(KeyboardInterrupt))
     with pytest.raises(KeyboardInterrupt):
-        main.run_worker({"invert_attack": False, "invert_defense": True})
+        main.run_worker({})
     A, D = main.florr_settings.INVERT_ATTACK_ADDR, main.florr_settings.INVERT_DEFENSE_ADDR
     assert calls == [(A, 0), (D, 1), (A, 0), (D, 1)]
 
@@ -524,6 +550,7 @@ def test_run_worker_switch_server_uses_configured_biome(monkeypatch):
         "short_round_limit": 1, "enemy_ai_enabled": False, "auto_switch_server": True,
         "biome": "ocean",
         "enter_game_swap": "none", "reach_area_swap": "none",
+        "invert_attack": True, "invert_defense": False,
     })
     monkeypatch.setattr(main, "_lock_biome", lambda b: True)
     monkeypatch.setattr(main, "_reassert_florr_toggles",
@@ -605,6 +632,7 @@ def _swap_env(monkeypatch, *, enter="k", reach="l"):
         "short_round_limit": 2, "enemy_ai_enabled": False, "auto_switch_server": False,
         "biome": "desert",
         "enter_game_swap": enter, "reach_area_swap": reach,
+        "invert_attack": True, "invert_defense": False,
     })
     monkeypatch.setattr(main.florr_settings, "ensure_flag",
                         lambda ej, addr, want: ("unchanged", ""))

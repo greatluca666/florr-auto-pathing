@@ -32,6 +32,7 @@ def test_block_to_active_shapes():
         "map": "ocean", "location": [5, 6], "farming_area": [[1, 1], [2, 2]],
         "farming_duration": 120, "consecutive_short_round_limit": 2,
         "enemy_ai_enabled": True, "auto_switch_server": True,
+        "invert_attack": True, "invert_defense": False,
         "enter_game_swap": _off, "reach_area_swap": _off,
     }
 
@@ -127,4 +128,26 @@ class TestLoadoutSwapInGuiSchedule:
 
     def test_digit_values_are_1_through_0(self):
         assert gs._SWAP_DIGIT_VALUES == list("1234567890")
+
+
+class TestInvertTogglesInGuiSchedule:
+    def test_block_to_active_carries_invert(self):
+        blk = _blk(invert_attack=False, invert_defense=True)
+        act = gs.block_to_active(blk)
+        assert act["invert_attack"] is False
+        assert act["invert_defense"] is True
+
+    def test_block_to_active_invert_defaults_when_missing(self):
+        blk = _blk()
+        blk.pop("invert_attack", None)
+        blk.pop("invert_defense", None)
+        act = gs.block_to_active(blk)
+        assert act["invert_attack"] is True
+        assert act["invert_defense"] is False
+
+    def test_new_block_template_invert_defaults(self):
+        cfg = {"profiles": [{"alias": "默认", "dir": "d"}], "schedule": []}
+        tpl = gs.new_block_template(cfg)
+        assert tpl["invert_attack"] is True
+        assert tpl["invert_defense"] is False
 

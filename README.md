@@ -43,12 +43,7 @@ The worker never presses attack — it relies on florr's **Settings → Controls
 反转攻击键 / "Invert attack button"** being ON, so flowers stay open and keep
 attacking without a held key. `反转防御键` is the symmetric optional control.
 
-Two global `config.json` keys (top-level, not per-time-block): `invert_attack`
-(default `true`) and `invert_defense` (default `false`). Each round the worker
-forces florr's byte to match the switch: **ON → writes `1`, OFF → writes `0`**
-(force-disable — *not* "leave whatever the account has"). The GUI sidebar has
-two switches (「反转攻击键」/「反转防御键」) that toggle these; they only write
-`config.json` — the running/next worker applies the bytes over CDP.
+每个调度时块单独配 `invert_attack`（默认开）/ `invert_defense`（默认关），在时块编辑器里勾。调度器切到某个时块时会重启 worker，把该时块的值写进 florr。开→每轮写 `1`，关→每轮写 `0`（强制关，不是「留 florr 账号里的值」）。
 
 The addresses are calibrated constants in `florr_settings.py`:
 `INVERT_ATTACK_ADDR = 0x53430E`, `INVERT_DEFENSE_ADDR = 0x534310`. The
