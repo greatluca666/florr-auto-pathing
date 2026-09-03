@@ -414,6 +414,14 @@ def test_species_from_name_rejects_non_desert_and_none():
     assert _species_from_name("") is None
 
 
+def test_species_from_name_ignores_known_non_targets_silently(capsys):
+    # 火蚁穴 (Fire Ant Hole) is a spawner structure, not a mob; 瓢虫 is a garden mob. Both are
+    # recognised but must NOT fold to one of the 6 combat slugs, and must not spam the log.
+    assert _species_from_name("火蚁穴") is None
+    assert _species_from_name("瓢虫") is None
+    assert capsys.readouterr().out == ""
+
+
 def test_tier_from_color():
     assert _tier_from_color("#1FDBDE") == "Mythic"
     assert _tier_from_color("#7EEF6D") == "Common"

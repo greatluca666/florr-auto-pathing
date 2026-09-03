@@ -362,10 +362,13 @@ _SPECIES_ALIASES = {
     "蜈蚣": "sand_centipede",
     "火兵蚁": "soldier_fire_ant",
     "火蚁": "soldier_fire_ant",       # 工蚁; 本项目不分工/兵, 都归 soldier_fire_ant
-    "火蚁穴": "soldier_fire_ant",     # Fire Ant Hole: 不动的出怪口, 没有独立 slug —— 折到
-                                     # 最接近的火蚁威胁; Mythic 档会被当 strafe 目标, 可接受
-    "瓢虫": "sand_centipede",         # 非沙漠怪(花园的), 无害低价值 —— 折到最低 rank slug
-                                     # 当低优先接战目标, 免得每帧刷"未识别"日志
+}
+
+# 认得、但不是接战目标的名字: 不折进 6 个 slug (折了会当怪去追/遛), 直接 None,
+# 也不刷"未识别"日志。
+_IGNORE_NAMES = {
+    "火蚁穴",   # Fire Ant Hole: 不动的出怪口 / 建筑, 不是怪
+    "瓢虫",     # Ladybug: 花园怪, 不属于这个刷怪区
 }
 
 _seen_unknown_names = set()   # slugs already reported by _species_from_name — recovers the
@@ -395,6 +398,8 @@ def _species_from_name(name):
         return slug
     if slug in _SPECIES_ALIASES:
         return _SPECIES_ALIASES[slug]
+    if slug in _IGNORE_NAMES:
+        return None
     if slug and slug not in _seen_unknown_names:
         _seen_unknown_names.add(slug)
         print(f"ℹ️ canvas 解出未识别怪物名: {name!r} (slug={slug!r}) —— 若是沙漠怪, 加进 _SPECIES_ALIASES")
