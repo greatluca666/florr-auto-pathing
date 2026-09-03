@@ -457,25 +457,4 @@ def scan_enemies(image=None, conf=0.4, model_path=None):
             "bbox": (sx - 1, sy - 1, sx + 1, sy + 1),
             "confidence": 1.0,
         })
-
-    # 贴脸神话沙尘暴("青怪"): 你站在它身上时 florr 不画它的名字/稀有度牌, 血条锚点又
-    # 跟你自己重合 → mobs_from_frame 当玩家滤掉了. 靠"锚点=玩家 + 有 #42E3F5 护盾副
-    # 血条 + 没名字牌"这组特征把它认回来(5 次实机诊断全中), 当成 Mythic sandstorm.
-    # 物种猜 sandstorm(用户的青怪主要就是它); 猜错也只是走 chase 分支, 对着屏幕中心
-    # 打, 不会乱跑. 已经解出一只 Mythic+ sandstorm 就不重复加.
-    try:
-        pb = canvas_decode.point_blank_shielded_mob(recs, cam)
-    except Exception:
-        pb = None
-    if pb is not None and not any(
-            d["species"] == "sandstorm" and RARITY_RANK[d["rarity"]] >= RARITY_RANK["Mythic"]
-            for d in out):
-        cx, cy = pb["sx"], pb["sy"]
-        out.append({
-            "species": "sandstorm",
-            "rarity": "Mythic",
-            "screen_pos": (cx, cy),
-            "bbox": (cx - 1, cy - 1, cx + 1, cy + 1),
-            "confidence": 1.0,
-        })
     return out

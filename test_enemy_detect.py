@@ -472,36 +472,6 @@ def test_scan_enemies_empty_when_camera_undecodable(monkeypatch):
     assert scan_enemies() == []
 
 
-def _shield_bar_at(frame, ax, ay, hp):
-    def s(color, w):
-        return {"frame": frame, "op": "stroke", "x": ax, "y": ay, "r": None,
-                "bbox": [ax - 30, ay, ax - 30 + w, ay], "n": 2, "fill": "#FFFFFF",
-                "stroke": color, "lw": 6, "alpha": 1, "m": [0.7558333, 0, 0, 0.7558333, ax, ay]}
-    return [s("#222222", 60.0), s("#42E3F5", 40.0), s("#222222", 60.0),
-            s("#DD3434", 60.0), s("#75DD34", 60.0 * hp)]
-
-
-def test_scan_enemies_emits_point_blank_mythic_sandstorm(monkeypatch):
-    # you standing on the Mythic sandstorm: florr draws no nameplate for it, its bar anchor
-    # sits on the player anchor, and it carries a #42E3F5 shield bar. scan_enemies must still
-    # surface it as a Mythic sandstorm so the chase/latch layer engages.
-    px, py = 600.0, 453.5
-    f_old = (player_recs(0, px, py)
-             + nameplate(0, 1200.0, 800.0, "Sandstorm", rarity="Legendary", rarity_color="#DE1F1F")
-             + _shield_bar_at(0, px, py, 0.66)
-             + [minimap_rec(0, 2200.0, 11500.0)])
-    f_new = gameplay_frame(1, player_screen=(px, py))
-    _stub_canvas(monkeypatch, f_old + f_new)
-
-    dets = scan_enemies()
-    mythic = [d for d in dets if d["rarity"] == "Mythic"]
-    assert len(mythic) == 1
-    assert mythic[0]["species"] == "sandstorm"
-    assert mythic[0]["screen_pos"] == (px, py)
-    # the ordinary ranged Legendary sandstorm is still there too
-    assert any(d["species"] == "sandstorm" and d["rarity"] == "Legendary" for d in dets)
-
-
 def test_scan_enemies_swallows_non_tuple_exception_types(monkeypatch):
     # the decode path now leans on cdp_bridge (websocket.WebSocketException),
     # file reads (OSError/FileNotFoundError) and division (ZeroDivisionError) —

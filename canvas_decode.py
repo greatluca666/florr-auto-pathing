@@ -142,9 +142,8 @@ def camera_from_frame(records):
                     # Still ambiguous. The player is camera-locked near the centre of the mob
                     # cluster; pick the candidate closest to the centroid of all nameplate bar
                     # anchors. Best-effort -- an approximate self-anchor beats losing the whole
-                    # frame's detections (only _is_player_anchor filtering and
-                    # point_blank_shielded_mob depend on it being pixel-exact; screen_pos comes
-                    # straight from each mob's own anchor).
+                    # frame's detections (only _is_player_anchor filtering depends on it being
+                    # pixel-exact; screen_pos comes straight from each mob's own anchor).
                     bars = [_anchor(r) for r in records
                             if r["op"] == "stroke" and r.get("stroke") == HEALTHBAR_BG
                             and not _is_minimap(r)]
@@ -265,25 +264,6 @@ def _bar_blocks(records, label_radius=100.0):
 def _is_player_anchor(anchor, camera, tol=1.0):
     px, py = camera["player_screen"]
     return math.hypot(anchor[0] - px, anchor[1] - py) <= tol
-
-
-def point_blank_shielded_mob(records, camera, tol=15.0):
-    """A bar block sitting on the player's own screen anchor, carrying a `#42E3F5` cyan
-    secondary bar and no readable nameplate.
-
-    florr does not draw the name/rarity label for a mob you are standing on, and its bar
-    anchor coincides with the player's, so `mobs_from_frame` drops it via `_is_player_anchor`.
-    Seen across five live captures ONLY on the point-blank Mythic sandstorm of a desert
-    server — the cyan bar is its shield. Returns `{"hp", "sx", "sy"}` (screen pos = the
-    player's own anchor) or None; the caller decides what species/rarity to attribute.
-    """
-    px, py = camera["player_screen"]
-    for b in _bar_blocks(records):
-        if b["secondary"] is None or _is_player_block(b["texts"]):
-            continue
-        if math.hypot(b["anchor"][0] - px, b["anchor"][1] - py) <= tol:
-            return {"hp": b["hp"], "sx": px, "sy": py}
-    return None
 
 
 def mobs_from_frame(records, camera, label_radius=100.0):
