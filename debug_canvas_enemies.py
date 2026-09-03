@@ -99,20 +99,25 @@ def main():
             print(f"        text={t!r:24}  fill={c!r}")
 
     print("\n=== camera_from_frame ===")
+    strict_ok = False
     try:
         cam = canvas_decode.camera_from_frame(recs)
-        print(f"  zoom={cam['zoom']:.4f}  player_world={cam['player_world']}  "
+        strict_ok = True
+        print(f"  严格: zoom={cam['zoom']:.4f}  player_world={cam['player_world']}  "
               f"player_screen={cam['player_screen']}")
     except ValueError as e:
-        print(f"  ⚠️ 抛 ValueError: {e}")
+        print(f"  严格: ⚠️ {e}")
         menu_hits = [t for t, _ in texts if t in ("设置", "图像", "控制", "致谢",
                                                   "反转攻击控制", "使用键盘移动")]
         if "player_screen" in str(e) and menu_hits:
-            print("  ★ 画面里有设置菜单文本", menu_hits, "—— 设置/选项面板打开时 florr")
-            print("    不画你的花本体, camera_from_frame 找不到你 → 整个 scan_enemies")
-            print("    返回 []。关掉设置菜单再跑 (实机跑 bot 时也要确保它是关的)。")
-        else:
-            print("  (这一帧解不出相机 —— mobs_from_frame 没法跑; 靠近一个怪 / 关设置菜单再试)")
+            print("  ★ 画面里有设置菜单文本", menu_hits, "—— 设置面板打开时 florr 不画花本体。关掉再跑。")
+
+    # scan_enemies 走的是 best_effort —— 严格解不出也能兜底. 用这个跑后面的映射.
+    try:
+        cam = canvas_decode.camera_from_frame(recs, best_effort=True)
+        print(f"  best_effort: player_screen={cam['player_screen']}  approx={cam.get('approx')}")
+    except ValueError as e:
+        print(f"  best_effort: ⚠️ 也解不出: {e}  —— 这一帧 scan_enemies 会返回 []")
         return
 
     print("\n=== mobs_from_frame -> 映射 ===")

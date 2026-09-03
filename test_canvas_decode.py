@@ -65,14 +65,21 @@ def _bare_hp_bar(frame, ax, ay, hp=1.0):
     return [s("#222222", 60.0), s("#DD3434", 60.0), s("#75DD34", 60.0 * hp)]
 
 
-def test_camera_strict_raises_but_best_effort_falls_back_to_own_hp_bar():
-    # a dense frame whose player gold body isn't a clean #FFE763 match (occluded / skin /
-    # flash). strict camera_from_frame raises; best_effort uses the player's own bare HP bar.
+def _black_base(frame, ax, ay, r=22.5):
+    return {"frame": frame, "op": "fill", "x": ax, "y": ay, "r": r,
+            "bbox": [ax - r, ay - r, ax + r, ay + r], "n": 1, "fill": "#000000",
+            "stroke": None, "lw": None, "alpha": 1, "m": [ZOOM, 0, 0, ZOOM, ax, ay]}
+
+
+def test_camera_strict_raises_but_best_effort_uses_black_base_circle():
+    # the player gold body renders off-palette (#F5BF39 skin / damage flash), so the exact
+    # #FFE763 match finds nothing. The flower's solid black base circle is still at the anchor.
     recs = []
-    for ax, ay in [(300.0, 300.0), (900.0, 600.0), (500.0, 700.0), (700.0, 200.0)]:
+    for ax, ay in [(300.0, 300.0), (500.0, 700.0), (700.0, 200.0)]:
         recs += healthbar_recs(0, ax, ay, hp=1.0)
         recs += _labelled(ax, ay, "Sandstorm", "Legendary", "#DE1F1F")
-    recs += _bare_hp_bar(0, 960.0, 472.0, hp=1.0)          # the player's own bar, no nameplate
+    recs += [_black_base(0, 960.0, 472.0)]                 # flower base, at the player anchor
+    recs += _bare_hp_bar(0, 960.0, 472.0, hp=1.0)
     recs += [minimap_rec(0, 5000.0, 6000.0)]
 
     with pytest.raises(ValueError, match="player_screen"):

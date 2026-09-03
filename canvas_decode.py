@@ -104,18 +104,33 @@ _SELF_ANCHOR_OUTLIER_PX = 600.0   # a resolved player anchor further than this f
 
 
 def _self_bar_anchor(records):
-    """Best-effort player screen anchor when the gold-body method fails or is an outlier: the
-    player draws its own #222222 HP bar (no nameplate text) at its screen anchor. Among bare,
-    healthy-hp bar blocks, take the one nearest the median of every bar anchor (the player sits
-    in the middle of the mob cluster). None if there's nothing usable."""
+    """Best-effort player screen anchor when the gold-body method fails or is an outlier.
+
+    1. The player flower's base is a solid black circle (`#000000`, r≈18-30) drawn at its
+       screen anchor every frame — seen in every live capture at the same point even when the
+       gold body itself renders in an off-palette gold (`#F5BF39`) or is occluded. Take that.
+    2. Failing that, the player draws its own `#222222` HP bar (no nameplate, and it carries
+       the `#42E3F5` shield stroke). Prefer a bare bar block with that secondary; else the
+       bare healthy-hp block nearest the median of every bar anchor.
+    None if nothing usable.
+    """
+    for r in records:
+        if (r["op"] == "fill" and r.get("fill") == "#000000" and not _is_minimap(r)
+                and r.get("r") is not None and 18.0 <= r["r"] <= 30.0):
+            ax, ay = _anchor(r)
+            if (ax, ay) != (0.0, 0.0):
+                return (ax, ay)
+
+    blocks = _bar_blocks(records)
+    bare = [b for b in blocks if not b["texts"] and b["hp"] is not None and b["hp"] > 0.4]
+    shielded = [b["anchor"] for b in bare if b["secondary"] is not None]
+    if len(shielded) == 1:
+        return shielded[0]
     med = _median_bar_anchor(records)
-    if med is None:
+    if med is None or not bare:
         return None
-    bare = [b["anchor"] for b in _bar_blocks(records)
-            if not b["texts"] and b["hp"] is not None and b["hp"] > 0.4]
-    if not bare:
-        return None
-    return min(bare, key=lambda a: math.hypot(a[0] - med[0], a[1] - med[1]))
+    pool = shielded or [b["anchor"] for b in bare]
+    return min(pool, key=lambda a: math.hypot(a[0] - med[0], a[1] - med[1]))
 
 
 def camera_from_frame(records, best_effort=False):
