@@ -123,28 +123,39 @@ def camera_from_frame(records):
             if len(largest) > 1:
                 # A same-radius tie: other real players can share the exact default flower
                 # appearance (confirmed live 2026-08-19, main account, a crowded area -- three
-                # identical gold bodies at once). Break it with a second, independent signal:
-                # OTHER players draw a floating level nameplate ("37级") near their own body;
-                # the env's own player does not (its HP is read from a separate UI element, not
-                # a nameplate -- see player_from_frame). The candidate with NO nearby
-                # player-style nameplate is presumed to be self.
-                blocks = _bar_blocks(records)
-                without_nameplate = [
+                # identical gold bodies at once). Break it: OTHER players draw a floating "NNN级"
+                # level label near their own body; the env's own player does not. Scan the raw
+                # text records for it -- NOT _bar_blocks, because another player's HP bar often
+                # lacks the #222222 background so no block (hence no captured level text) is
+                # built for them.
+                lvl = [_anchor(r) for r in records
+                       if r["op"] == "text"
+                       and PLAYER_RARITY_PATTERN.match(str(r.get("text", "")))]
+                without = [
                     c for c in largest
-                    if not any(
-                        _is_player_block(b["texts"])
-                        and math.hypot(b["anchor"][0] - c["m"][4], b["anchor"][1] - c["m"][5])
-                            <= SELF_DISAMBIGUATION_RADIUS
-                        for b in blocks
-                    )
+                    if not any(math.hypot(lx - c["m"][4], ly - c["m"][5]) <= SELF_DISAMBIGUATION_RADIUS
+                               for lx, ly in lvl)
                 ]
-                if len(without_nameplate) == 1:
-                    largest = without_nameplate
-            # Exactly one candidate (after the nameplate tie-break, if it applied) is genuinely
-            # our own player. A tie that STILL isn't resolved (no candidate has a nameplate --
-            # possible if the account is completely alone and something else glitches -- or
-            # more than one candidate lacks one) can't be broken further -- fail loud rather
-            # than silently picking one by draw order.
+                if len(without) == 1:
+                    largest = without
+                elif without:
+                    # Still ambiguous. The player is camera-locked near the centre of the mob
+                    # cluster; pick the candidate closest to the centroid of all nameplate bar
+                    # anchors. Best-effort -- an approximate self-anchor beats losing the whole
+                    # frame's detections (only _is_player_anchor filtering and
+                    # point_blank_shielded_mob depend on it being pixel-exact; screen_pos comes
+                    # straight from each mob's own anchor).
+                    bars = [_anchor(r) for r in records
+                            if r["op"] == "stroke" and r.get("stroke") == HEALTHBAR_BG
+                            and not _is_minimap(r)]
+                    if bars:
+                        cx = sum(a[0] for a in bars) / len(bars)
+                        cy = sum(a[1] for a in bars) / len(bars)
+                        largest = [min(without,
+                                       key=lambda c: math.hypot(c["m"][4] - cx, c["m"][5] - cy))]
+            # Exactly one candidate (after the tie-break) is genuinely our own player. A tie
+            # that STILL isn't resolved (every candidate has a level label nearby -- shouldn't
+            # happen for self) can't be broken -- fail loud rather than pick by draw order.
             if len(largest) == 1:
                 player_screen = _anchor(largest[0])
 
@@ -229,6 +240,8 @@ def _bar_blocks(records, label_radius=100.0):
     for k, rec in enumerate(records):
         if rec["op"] != "text":
             continue
+        if str(rec.get("text", "")).strip().isdigit():
+            continue                           # floating damage numbers — never a name or rarity
         prev = [b for b in blocks if b["_end"] <= k]
         owner = max(prev, key=lambda b: b["_end"]) if prev else None
         if owner is not None and _d(rec, owner) <= label_radius:

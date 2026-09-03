@@ -36,6 +36,40 @@ def test_camera_raises_without_world_scale_reference():
         camera_from_frame([minimap_rec(0, 100.0, 200.0)])
 
 
+def _gold_body(x, y, r=7.4):
+    return {"frame": 0, "op": "fill", "x": x, "y": y, "r": r, "bbox": [x - r, y - r, x + r, y + r],
+            "n": 1, "fill": "#FFE763", "stroke": None, "lw": None, "alpha": 1,
+            "m": [ZOOM, 0, 0, ZOOM, x, y]}
+
+
+def test_camera_resolves_self_when_other_players_level_text_is_orphaned():
+    # two identical-radius default-skin flowers (self + another player). The other player's
+    # HP bar has no #222222 background so no _bar_blocks block is built for them; their "108级"
+    # label is loose text. The tie-break must still scan raw text and exclude them.
+    recs = list(player_recs(0, 700.0, 470.0))
+    recs += [_gold_body(700.0, 470.0)]                     # self
+    recs += [_gold_body(200.0, 110.0)]                     # other player, same radius
+    recs += ([text_rec(0, 178.0, 131.0, "108级")] * 2)     # their level label, near their body
+    recs += healthbar_recs(0, 900.0, 700.0, hp=1.0)        # a mob (gives zoom + a nameplate)
+    recs += _labelled(900.0, 700.0, "Sandstorm", "Legendary", "#DE1F1F")
+    recs += [minimap_rec(0, 5000.0, 6000.0)]
+
+    cam = camera_from_frame(recs)
+    assert cam["player_screen"] == (700.0, 470.0)
+
+
+def test_bar_blocks_ignores_floating_damage_numbers():
+    recs = list(player_recs(0))
+    recs += healthbar_recs(0, 400.0, 300.0, hp=1.0)
+    recs += _labelled(400.0, 300.0, "Beetle", "Mythic", "#1FDBDE")
+    recs += ([text_rec(0, 410.0, 305.0, "4729", "#FF5555")] * 2)   # a crit number on the mob
+    recs += ([text_rec(0, 395.0, 312.0, "35", "#CE76DB")] * 2)     # a poison tick
+    recs += [minimap_rec(0, 5000.0, 6000.0)]
+
+    mob = mobs_from_frame(recs, camera_from_frame(recs))[0]
+    assert mob["name"] == "Beetle" and mob["rarity"] == "Mythic"
+
+
 def test_screen_to_world_is_anchored_on_the_player():
     recs = gameplay_frame(0, player_world=(5000.0, 6000.0), mobs=[(800.0, 300.0, "Rock", 1.0)])
     cam = camera_from_frame(recs)
