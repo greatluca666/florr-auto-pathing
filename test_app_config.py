@@ -370,9 +370,6 @@ class TestLoadoutSwapKeys:
         assert f({"enabled": "yes"})["enabled"] is False   # 非严格 True
 
 
-_INV_DEFAULTS = {"invert_attack": True, "invert_defense": False}
-
-
 class TestInvertToggles:
     def test_flat_defaults_unchanged(self):
         assert app_config.DEFAULTS["invert_attack"] is True
