@@ -173,7 +173,9 @@ class TimeBlockEditor(ctk.CTkToplevel):
     def __init__(self, master, *, block, others, profiles, on_save):
         super().__init__(master)
         self.title("时块")
-        self.geometry("560x720")
+        self.geometry("560x680")
+        self.minsize(520, 420)
+        self.resizable(True, True)
         self.transient(master)
         self._block = dict(block)
         self._others = others
@@ -186,7 +188,16 @@ class TimeBlockEditor(ctk.CTkToplevel):
         self._build()
 
     def _build(self):
-        wk = ctk.CTkFrame(self, fg_color="transparent")
+        # 字段太多(星期/时间/账号/地图/选择器/索敌/换服/反转攻击/反转防御/两行
+        # loadout 切换/高级) —— 固定高度的 Toplevel 装不下, 底部"保存/取消"会被挤
+        # 出窗外. 字段区放进滚动框, 按钮条 pin 在窗口底部永远可见.
+        self.grid_rowconfigure(0, weight=1)
+        self.grid_columnconfigure(0, weight=1)
+        body = ctk.CTkScrollableFrame(self)
+        body.grid(row=0, column=0, sticky="nsew")
+        self._body = body
+
+        wk = ctk.CTkFrame(body, fg_color="transparent")
         wk.pack(anchor="w", padx=12, pady=(12, 4))
         self._day_vars = []
         for i, lab in enumerate(WEEKDAY_LABELS):
@@ -194,7 +205,7 @@ class TimeBlockEditor(ctk.CTkToplevel):
             ctk.CTkCheckBox(wk, text=lab, width=44, variable=v).pack(side="left", padx=2)
             self._day_vars.append(v)
 
-        tr = ctk.CTkFrame(self, fg_color="transparent")
+        tr = ctk.CTkFrame(body, fg_color="transparent")
         tr.pack(anchor="w", padx=12, pady=4)
         self._start_e = ctk.CTkEntry(tr, width=70, placeholder_text="09:00")
         self._start_e.insert(0, self._block.get("start", ""))
@@ -209,12 +220,12 @@ class TimeBlockEditor(ctk.CTkToplevel):
                      font=("", 9), text_color="gray").pack(side="left")
 
         vals = [p["alias"] for p in self._profiles] + ["＋ 新建…"]
-        self._acct = ctk.CTkOptionMenu(self, values=vals, command=self._on_acct_pick)
+        self._acct = ctk.CTkOptionMenu(body, values=vals, command=self._on_acct_pick)
         self._acct.set(self._block.get("profile", vals[0]))
         self._acct.pack(anchor="w", padx=12, pady=4)
 
         self._map = tk.StringVar(value=self._block.get("map", "desert"))
-        map_row = ctk.CTkFrame(self, fg_color="transparent")
+        map_row = ctk.CTkFrame(body, fg_color="transparent")
         map_row.pack(anchor="w", padx=12, pady=4)
         _MAP_LABELS = {"desert": "沙漠", "ocean": "海洋", "anthell": "蚁狱"}
         for m in app_config._VALID_MAPS:
@@ -227,30 +238,36 @@ class TimeBlockEditor(ctk.CTkToplevel):
                 side="left", padx=(0, 10))
 
         from gui_map_picker import MapPicker
-        self._picker = MapPicker(self, on_point_change=self._on_point,
+        self._picker = MapPicker(body, on_point_change=self._on_point,
                                  on_area_change=self._on_area)
-        self._picker.pack(fill="both", expand=True, padx=12, pady=4)
+        # 滚动框里不能 expand=True(会把整条滚动内容撑没边); 给个固定高度.
+        self._picker.configure(height=230)
+        self._picker.pack(fill="x", padx=12, pady=4)
+        try:
+            self._picker.pack_propagate(False)
+        except Exception:
+            pass
         self._picker.load_map(self._map.get())
         self._picker.set_point(self._point)
         self._picker.set_area(self._area)
 
-        self._enemy = ctk.CTkSwitch(self, text="索敌 AI")
+        self._enemy = ctk.CTkSwitch(body, text="索敌 AI")
         if self._block.get("enemy_ai_enabled", True):
             self._enemy.select()
         self._enemy.pack(anchor="w", padx=12, pady=(6, 0))
-        ctk.CTkLabel(self, text="仅沙漠", font=("", 9),
+        ctk.CTkLabel(body, text="仅沙漠", font=("", 9),
                      text_color="gray").pack(anchor="w", padx=12)
-        self._autosw = ctk.CTkSwitch(self, text="自动换服务器",
+        self._autosw = ctk.CTkSwitch(body, text="自动换服务器",
                                      command=self._sync_short_enabled)
         if self._block.get("auto_switch_server", True):
             self._autosw.select()
         self._autosw.pack(anchor="w", padx=12, pady=6)
 
-        self._inv_attack = ctk.CTkSwitch(self, text="反转攻击键")
+        self._inv_attack = ctk.CTkSwitch(body, text="反转攻击键")
         if self._block.get("invert_attack", True):
             self._inv_attack.select()
         self._inv_attack.pack(anchor="w", padx=12, pady=(6, 0))
-        self._inv_defense = ctk.CTkSwitch(self, text="反转防御键")
+        self._inv_defense = ctk.CTkSwitch(body, text="反转防御键")
         if self._block.get("invert_defense", False):
             self._inv_defense.select()
         self._inv_defense.pack(anchor="w", padx=12, pady=(0, 6))
@@ -263,10 +280,10 @@ class TimeBlockEditor(ctk.CTkToplevel):
             "寻路到刷怪区后按一次和弦换 loadout.")
 
         self._adv_open = False
-        self._adv_btn = ctk.CTkButton(self, text="▸ 高级选项", anchor="w",
+        self._adv_btn = ctk.CTkButton(body, text="▸ 高级选项", anchor="w",
                                       fg_color="transparent", command=self._toggle_adv)
         self._adv_btn.pack(anchor="w", padx=12)
-        self._adv = ctk.CTkFrame(self, fg_color="transparent")
+        self._adv = ctk.CTkFrame(body, fg_color="transparent")
         dur_row = ctk.CTkFrame(self._adv, fg_color="transparent")
         dur_row.pack(anchor="w")
         ctk.CTkLabel(dur_row, text="刷怪时长(秒)").pack(side="left")
@@ -287,10 +304,12 @@ class TimeBlockEditor(ctk.CTkToplevel):
         self._short_e.pack(anchor="w")
         self._sync_short_enabled()
 
-        self._err = ctk.CTkLabel(self, text="", text_color="#ff5555")
+        self._err = ctk.CTkLabel(body, text="", text_color="#ff5555")
         self._err.pack(anchor="w", padx=12, pady=(6, 0))
+
+        # 按钮条 pin 在窗口底部(不进滚动区) —— "保存/取消"永远可见.
         br = ctk.CTkFrame(self, fg_color="transparent")
-        br.pack(anchor="e", padx=12, pady=10)
+        br.grid(row=1, column=0, sticky="e", padx=12, pady=10)
         ctk.CTkButton(br, text="取消", width=70, command=self.destroy).pack(side="left", padx=4)
         ctk.CTkButton(br, text="保存", width=70, command=self._save).pack(side="left")
 
@@ -298,7 +317,7 @@ class TimeBlockEditor(ctk.CTkToplevel):
         """一个 loadout 切换字段: 开关 + 修饰键下拉(无/k/l) + 数字下拉(1..0).
         返回 (switch, mod_menu, digit_menu); _collect 从这三个读回 {enabled,mod,digit}."""
         cur = _coerce_swap_obj(self._block.get(key))
-        row = ctk.CTkFrame(self, fg_color="transparent")
+        row = ctk.CTkFrame(self._body, fg_color="transparent")
         row.pack(anchor="w", padx=12, pady=(6, 0), fill="x")
         sw = ctk.CTkSwitch(row, text=title)
         if cur["enabled"]:
