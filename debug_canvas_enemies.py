@@ -105,7 +105,14 @@ def main():
               f"player_screen={cam['player_screen']}")
     except ValueError as e:
         print(f"  ⚠️ 抛 ValueError: {e}")
-        print("  (这一帧解不出相机 —— mobs_from_frame 也就没法跑; 换一帧 / 靠近一个怪再试)")
+        menu_hits = [t for t, _ in texts if t in ("设置", "图像", "控制", "致谢",
+                                                  "反转攻击控制", "使用键盘移动")]
+        if "player_screen" in str(e) and menu_hits:
+            print("  ★ 画面里有设置菜单文本", menu_hits, "—— 设置/选项面板打开时 florr")
+            print("    不画你的花本体, camera_from_frame 找不到你 → 整个 scan_enemies")
+            print("    返回 []。关掉设置菜单再跑 (实机跑 bot 时也要确保它是关的)。")
+        else:
+            print("  (这一帧解不出相机 —— mobs_from_frame 没法跑; 靠近一个怪 / 关设置菜单再试)")
         return
 
     print("\n=== mobs_from_frame -> 映射 ===")
