@@ -169,15 +169,25 @@ def _bar_width(rec):
 
 
 def _bar_blocks(records, label_radius=100.0):
-    """Yield one dict per nameplate block in draw order.
+    """Yield one dict per nameplate block.
 
-    A block is the run of bar strokes sharing an anchor, followed by its label text. Each
-    coloured bar is measured against the most recent `#222222` background, because entities
-    that draw a second, narrower cyan bar give each bar its own background.
+    Bars first: a block is a run of health-bar strokes sharing an anchor. Each coloured bar is
+    measured against the most recent `#222222` background, because entities that draw a second,
+    narrower cyan bar give each bar its own background. The remaining-health bar is identified
+    by position, not colour: it is the stroke drawn immediately after the `#DD3434` damage
+    track (its colour is a damage-flash gradient).
 
-    The remaining-health bar is identified by position, not colour: it is the stroke drawn
-    immediately after the `#DD3434` damage track. Its colour is a damage-flash gradient, so
-    matching a fixed green would miss every entity mid-flash.
+    Text is assigned in a second pass: each label goes to the block whose stroke run was drawn
+    most recently before it (draw order), if within `label_radius` of that block's anchor.
+    Any block left empty then claims the nearest unassigned label within a tighter radius.
+
+    Why not just consume the text right after each block's strokes (the old way): at desert
+    mob density a `fill` particle between the bar and the label ended the run early, and when
+    florr batched two mobs' bars back-to-back then their labels, the first block consumed
+    nothing and the second consumed+rejected the first's label on distance — the whole
+    nameplate vanished (a point-blank Mythic sandstorm was lost this way). Why not
+    nearest-anchor: 8 stacked nameplates in a ~150px corner let a neighbour's rarity word
+    jump into slot 0. Stream-order primary + distance gate + empty-block rescue handles both.
     """
     blocks = []
     i, n = 0, len(records)
@@ -202,18 +212,40 @@ def _bar_blocks(records, label_radius=100.0):
                 hp = width / bg_width
                 value_pending = False
             i += 1
-        texts = []
-        text_colors = []
-        while i < n and records[i]["op"] == "text":
-            label = _anchor(records[i])
-            if math.hypot(label[0] - anchor[0], label[1] - anchor[1]) <= label_radius:
-                t = records[i].get("text")
-                if t not in texts:
-                    texts.append(t)
-                    text_colors.append(records[i].get("fill"))
-            i += 1
-        blocks.append({"anchor": anchor, "hp": hp, "secondary": secondary, "texts": texts,
-                        "text_colors": text_colors})
+        blocks.append({"anchor": anchor, "hp": hp, "secondary": secondary,
+                       "texts": [], "text_colors": [], "_end": i})
+
+    def _add(block, rec):
+        t = rec.get("text")
+        if t not in block["texts"]:
+            block["texts"].append(t)
+            block["text_colors"].append(rec.get("fill"))
+
+    def _d(rec, block):
+        lx, ly = _anchor(rec)
+        return math.hypot(lx - block["anchor"][0], ly - block["anchor"][1])
+
+    unclaimed = []
+    for k, rec in enumerate(records):
+        if rec["op"] != "text":
+            continue
+        prev = [b for b in blocks if b["_end"] <= k]
+        owner = max(prev, key=lambda b: b["_end"]) if prev else None
+        if owner is not None and _d(rec, owner) <= label_radius:
+            _add(owner, rec)
+        else:
+            unclaimed.append(rec)
+
+    tight = label_radius * 0.6
+    for b in blocks:
+        if b["texts"]:
+            continue
+        near = sorted((r for r in unclaimed if _d(r, b) <= tight), key=lambda r: _d(r, b))
+        for r in near[:4]:                     # name x2 + rarity x2
+            _add(b, r)
+
+    for b in blocks:
+        del b["_end"]
     return blocks
 
 

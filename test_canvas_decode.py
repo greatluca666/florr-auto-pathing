@@ -76,3 +76,40 @@ def test_two_mobs_decode_independently():
     recs = gameplay_frame(0, mobs=[(400.0, 200.0, "Beetle", 1.0), (700.0, 500.0, "Scorpion", 1.0)])
     mobs = mobs_from_frame(recs, camera_from_frame(recs))
     assert sorted(m["name"] for m in mobs) == ["Beetle", "Scorpion"]
+
+
+def _labelled(ax, ay, name, rarity, color):
+    return ([text_rec(0, ax - 21, ay + 39, name)] * 2
+            + [text_rec(0, ax + 10, ay + 48, rarity, color)] * 2)
+
+
+def test_batched_bars_then_batched_labels_first_mob_recovered():
+    # florr at desert density draws several mobs' HP bars back to back, THEN their name +
+    # rarity text back to back. Old stream-order consumption gave the first mob in the batch
+    # an empty nameplate and dropped it — a point-blank Mythic sandstorm was lost this way.
+    recs = list(player_recs(0))
+    recs += healthbar_recs(0, 400.0, 200.0, hp=1.0)          # mob A bars
+    recs += healthbar_recs(0, 700.0, 500.0, hp=1.0)          # mob B bars, straight after
+    recs += _labelled(400.0, 200.0, "Sandstorm", "Mythic", "#1FDBDE")   # A labels
+    recs += _labelled(700.0, 500.0, "Beetle", "Legendary", "#DE1F1F")   # B labels
+    recs += [minimap_rec(0, 5000.0, 6000.0)]
+
+    got = {m["name"]: m["rarity_color"] for m in mobs_from_frame(recs, camera_from_frame(recs))}
+    assert got == {"Sandstorm": "#1FDBDE", "Beetle": "#DE1F1F"}
+
+
+def test_stacked_nameplates_no_cross_contamination():
+    # 3 nameplates ~40px apart (a corner pile at min zoom). Clean per-mob draw order.
+    # Nearest-anchor assignment let a neighbour's rarity word land in slot 0 (name); each
+    # mob must keep its OWN rarity, read from its OWN label run.
+    recs = list(player_recs(0))
+    for ax, ay, rarity, color in [(120.0, 1040.0, "Rare", "#4D52E3"),
+                                  (150.0, 1048.0, "Epic", "#861FDE"),
+                                  (95.0, 1055.0, "Unusual", "#FFE65D")]:
+        recs += healthbar_recs(0, ax, ay, hp=1.0)
+        recs += _labelled(ax, ay, "Fire Ant", rarity, color)
+    recs += [minimap_rec(0, 5000.0, 6000.0)]
+
+    mobs = mobs_from_frame(recs, camera_from_frame(recs))
+    assert all(m["name"] == "Fire Ant" for m in mobs)
+    assert sorted(m["rarity"] for m in mobs) == ["Epic", "Rare", "Unusual"]
