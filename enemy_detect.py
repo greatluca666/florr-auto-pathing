@@ -362,13 +362,15 @@ _SPECIES_ALIASES = {
     "蜈蚣": "sand_centipede",
     "火兵蚁": "soldier_fire_ant",
     "火蚁": "soldier_fire_ant",       # 工蚁; 本项目不分工/兵, 都归 soldier_fire_ant
+    "瓢虫": "sandstorm",             # Ladybug: 沙漠里极罕见的乱入怪, 高价值 —— 借
+                                     # SPECIES_RANK 最高档(sandstorm=5), 同稀有度时优先
+                                     # 被挑; 不危险, 走普通追击(sandstorm 非 kite 物种)
 }
 
 # 认得、但不是接战目标的名字: 不折进 6 个 slug (折了会当怪去追/遛), 直接 None,
 # 也不刷"未识别"日志。
 _IGNORE_NAMES = {
     "火蚁穴",   # Fire Ant Hole: 不动的出怪口 / 建筑, 不是怪
-    "瓢虫",     # Ladybug: 花园怪, 不属于这个刷怪区
 }
 
 _seen_unknown_names = set()   # slugs already reported by _species_from_name — recovers the
