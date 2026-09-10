@@ -12,7 +12,6 @@ import enemy_detect
 import app_config
 import florr_settings
 import server_lookup
-import biome_lock
 import loadout_swap
 
 # ===== 索敌配置 (sszone敌怪检测/追击/规避) =====
@@ -693,56 +692,9 @@ def _reassert_florr_toggles(want_attack, want_defense):
     return out
 
 
-_BIOME_LOCK_RETRIES = 3
-_BIOME_LOCK_RETRY_SLEEP = 3.0
-_BIOME_CONFIRM_TIMEOUT = 20.0   # forceServerID 后, 轮询 WS url 确认已连到目标生态区服务器的上限
-_BIOME_CONFIRM_INTERVAL = 1.0
-
-
-def _lock_biome(biome):
-    """确保 florr 连的是 biome 生态区的服务器. florr 生态区 = 连的那台服务器
-    (wss://<码>.s.m28n.net); 没有 JS API 读, 靠 biome_lock 钩 WS url 反查
-    (抄 greasyfork server-switcher). 死亡重生留在同一台 → 常态是"已经在对的生态区
-    → 无操作". 不对 → switch_server(biome) 发 cp6.forceServerID(断线重连回开局菜单,
-    实测非无缝), 轮询 WS url 直到确认连到目标服务器再返回.
-
-    确认不到(网络/CDP 抽风)重试 _BIOME_LOCK_RETRIES 次, 都不成只警告返回 False
-    (跟 _reassert_florr_toggles 一个风格) —— 宁可这轮进错生态区, 也不卡死在开局
-    菜单外面. 返回 True = 已确认在目标生态区.
-    """
-    try:
-        ids = server_lookup.fetch_server_ids(biome)
-    except Exception as e:
-        print(f"⚠️ 查 {biome} 服务器列表失败, 跳过生态区锁: {e}")
-        return False
-
-    if biome_lock.on_biome(cdp_bridge.eval_js, ids):
-        return True   # 已经在对的生态区(常态: 重生留在同一台)
-
-    for attempt in range(1, _BIOME_LOCK_RETRIES + 1):
-        try:
-            sid = switch_server(biome)
-        except Exception as e:
-            print(f"⚠️ 切生态区第 {attempt}/{_BIOME_LOCK_RETRIES} 次 forceServerID 失败: {e}")
-            if attempt < _BIOME_LOCK_RETRIES:
-                time.sleep(_BIOME_LOCK_RETRY_SLEEP)
-            continue
-        print(f"🗺️ forceServerID -> {biome} ({sid}), 等重连确认...")
-        deadline = time.time() + _BIOME_CONFIRM_TIMEOUT
-        while time.time() < deadline:
-            if biome_lock.on_biome(cdp_bridge.eval_js, ids):
-                print(f"✅ 已确认连到 {biome} 服务器 ({sid})")
-                return True
-            time.sleep(_BIOME_CONFIRM_INTERVAL)
-        print(f"⚠️ 切了但 {_BIOME_CONFIRM_TIMEOUT:.0f}s 内没确认到 {biome} 服务器, 重试...")
-
-    print("⚠️ 生态区没锁上, 先按当前服务器进游戏 (下轮回开局菜单再试)")
-    return False
-
-
 def _wait_for_start_menu(timeout=15, interval=0.5):
-    """轮询等 florr 开局菜单("开始"按钮)出现/回来. forceServerID 锁生态区会触发一次
-    重连、florr 短暂离开开局菜单 —— 锁完等菜单回来再点, 别在重连空档里空点(那会让
+    """轮询等 florr 开局菜单("开始"按钮)出现/回来. 点生态区选择器可能触发一次重连、
+    florr 短暂离开开局菜单 —— 选完等菜单回来再点开始, 别在重连空档里空点(那会让
     click_start_game 复查时以为已经进去了). 到点还没出现返回 False, 调用方
     (click_start_game) 自己还会重试. 已经在菜单上则立刻返回 True."""
     deadline = time.time() + timeout
@@ -828,13 +780,12 @@ def run_worker(cfg):
         if on_start_screen():
             print("🔁 检测到开局菜单, 点击开始按钮进入游戏...")
             overlay.update(state="重新开始", message="点击开始按钮...")
-            # 点开始前先确认/切到配置的生态区. florr 生态区 = 连的服务器; _lock_biome
-            # 已在对的生态区就是 no-op(重生常态), 不对才 forceServerID + 确认.
-            # 顺序不能反: forceServerID 断线重连回开局菜单(实测非无缝), 得在点开始
-            # 之前做; 切完等"开始"按钮从重连空档回来再点, 否则 click_start_game
-            # 复查时会把空档当成"已经进去了".
-            if _lock_biome(w["biome"]):
-                _wait_for_start_menu()
+            # 点"开始"前, 先在标题页生态区选择器里点一下配置的生态区 —— florr 不
+            # 记忆上次选的, 默认花园, 跟寻路用的地图对不上. (CDP forceServerID 那条
+            # 路试过反复不行, 只有像素点这个 canvas 按钮管用.) 选生态区可能触发一次
+            # 重连, 等"开始"按钮从空档回来再点.
+            select_biome_on_title(w["biome"])
+            _wait_for_start_menu()
             click_start_game()
             entered_game = True
             time.sleep(3)

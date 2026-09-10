@@ -67,76 +67,6 @@ def test_apply_worker_config_invert_defaults_when_absent(monkeypatch):
     assert w["invert_defense"] is False
 
 
-def _stub_biome_lock_env(monkeypatch, on_biome_seq, ids=("d1", "d2", "d3")):
-    """_lock_biome 的依赖打桩. on_biome_seq: biome_lock.on_biome 每次调用依次返回的值
-    (用尽后取最后一个). 返回 {switch: [传给 switch_server 的 biome...]}."""
-    rec = {"switch": [], "on_biome_calls": 0}
-    seq = list(on_biome_seq)
-    monkeypatch.setattr(main.server_lookup, "fetch_server_ids", lambda b: list(ids))
-    monkeypatch.setattr(main.time, "sleep", lambda *a, **k: None)
-
-    def fake_on_biome(eval_js, server_ids):
-        i = rec["on_biome_calls"]
-        rec["on_biome_calls"] += 1
-        return seq[i] if i < len(seq) else seq[-1]
-
-    monkeypatch.setattr(main.biome_lock, "on_biome", fake_on_biome)
-    monkeypatch.setattr(main, "switch_server",
-                        lambda b: rec["switch"].append(b) or "srv-X")
-    return rec
-
-
-def test_lock_biome_noop_when_already_on_biome(monkeypatch):
-    rec = _stub_biome_lock_env(monkeypatch, on_biome_seq=[True])
-    assert main._lock_biome("desert") is True
-    assert rec["switch"] == []          # 已在对的生态区 -> 不 forceServerID
-
-
-def test_lock_biome_forces_then_confirms(monkeypatch):
-    # 第一次检查 False -> switch_server -> 确认轮询第一拍 True
-    rec = _stub_biome_lock_env(monkeypatch, on_biome_seq=[False, True])
-    assert main._lock_biome("ocean") is True
-    assert rec["switch"] == ["ocean"]
-
-
-def test_lock_biome_confirm_times_out_then_retries_then_fails(monkeypatch):
-    # on_biome 永远 False -> 每次 forceServerID 后确认超时 -> 重试满 -> False
-    clock = [0.0]
-    rec = _stub_biome_lock_env(monkeypatch, on_biome_seq=[False])
-    monkeypatch.setattr(main.time, "time", lambda: clock[0])
-    monkeypatch.setattr(main.time, "sleep", lambda s: clock.__setitem__(0, clock[0] + (s or 1)))
-    assert main._lock_biome("desert") is False           # no raise
-    assert len(rec["switch"]) == main._BIOME_LOCK_RETRIES  # forceServerID 试满次数
-
-
-def test_lock_biome_fetch_ids_failure_is_warn_only(monkeypatch):
-    monkeypatch.setattr(main.server_lookup, "fetch_server_ids",
-                        lambda b: (_ for _ in ()).throw(RuntimeError("m28 down")))
-    sw = []
-    monkeypatch.setattr(main, "switch_server", lambda b: sw.append(b) or "x")
-    assert main._lock_biome("desert") is False
-    assert sw == []                     # 列表都查不到 -> 不 forceServerID
-
-
-def test_lock_biome_forceserverid_error_retries_then_fails(monkeypatch):
-    rec = _stub_biome_lock_env(monkeypatch, on_biome_seq=[False])
-    n = {"i": 0}
-
-    def boom(b):
-        n["i"] += 1
-        raise RuntimeError("cdp boom")
-
-    monkeypatch.setattr(main, "switch_server", boom)
-    assert main._lock_biome("desert") is False
-    assert n["i"] == main._BIOME_LOCK_RETRIES
-
-
-def test_lock_biome_constants_are_numbers():
-    for name in ("_BIOME_LOCK_RETRIES", "_BIOME_LOCK_RETRY_SLEEP",
-                 "_BIOME_CONFIRM_TIMEOUT", "_BIOME_CONFIRM_INTERVAL"):
-        assert isinstance(getattr(main, name), (int, float))
-
-
 def test_wait_for_start_menu_returns_true_when_menu_present(monkeypatch):
     monkeypatch.setattr(main, "on_start_screen", lambda: True)
     monkeypatch.setattr(main.time, "sleep", lambda *a, **k: None)
@@ -255,7 +185,7 @@ def test_run_worker_does_not_start_florr_auto_afk(monkeypatch):
         "invert_attack": True,
         "invert_defense": False,
     })
-    monkeypatch.setattr(main, "_lock_biome", lambda b: True)   # 本测跟锁生态区无关
+    monkeypatch.setattr(main, "select_biome_on_title", lambda *a, **k: None)  # 本测跟生态区无关
     monkeypatch.setattr(main.florr_settings, "ensure_flag",
                         lambda ej, addr, want: ("unchanged", ""))
     # 主循环体的第一个调用 —— 在这里掐断, 前面的 setup 已经全跑完了.
@@ -414,8 +344,8 @@ def _stub_run_worker_env(monkeypatch, overlay=None):
         "invert_attack": True, "invert_defense": False,
     })
     monkeypatch.setattr(main, "switch_server", lambda *a, **k: "stub-srv")
-    # 生态区锁默认打桩成 no-op(返回 True); 专门测它的用例自己再 re-stub.
-    monkeypatch.setattr(main, "_lock_biome", lambda *a, **k: True)
+    # 生态区选择默认打桩成 no-op; 专门测它的用例自己再 re-stub.
+    monkeypatch.setattr(main, "select_biome_on_title", lambda *a, **k: None)
     monkeypatch.setattr(main, "_wait_for_start_menu", lambda *a, **k: True)
     monkeypatch.setattr(main, "on_death_screen", lambda: False)
     monkeypatch.setattr(main, "on_start_screen", lambda: False)
@@ -491,13 +421,13 @@ def test_reassert_florr_toggles_returns_per_flag_status(monkeypatch):
     assert seen == [(A, 1), (D, 0)]
 
 
-def test_run_worker_locks_biome_on_title_before_clicking_start(monkeypatch):
-    """锁生态区必须在标题页、click_start_game() 之前 —— 反过来(进局后 forceServerID)
-    会把人踢回标题页, 形成死循环. 顺序: _lock_biome -> _wait_for_start_menu ->
-    click_start_game."""
+def test_run_worker_selects_biome_on_title_before_clicking_start(monkeypatch):
+    """点生态区选择器必须在 click_start_game() 之前 —— 点"开始"进的是当时选中的
+    生态区. 顺序: select_biome_on_title -> _wait_for_start_menu -> click_start_game."""
     _stub_run_worker_env(monkeypatch)
     events = []
-    monkeypatch.setattr(main, "_lock_biome", lambda b: events.append(("lock", b)) or True)
+    monkeypatch.setattr(main, "select_biome_on_title",
+                        lambda b: events.append(("select", b)))
     monkeypatch.setattr(main, "_wait_for_start_menu",
                         lambda *a, **k: events.append("wait") or True)
     monkeypatch.setattr(main, "on_start_screen", lambda: True)
@@ -508,15 +438,14 @@ def test_run_worker_locks_biome_on_title_before_clicking_start(monkeypatch):
                         lambda *a, **k: (_ for _ in ()).throw(KeyboardInterrupt))
     with pytest.raises(KeyboardInterrupt):
         main.run_worker({})
-    assert events == [("lock", "desert"), "wait", "click"]
+    assert events == [("select", "desert"), "wait", "click"]
 
 
-def test_run_worker_calls_lock_biome_every_start_screen_round(monkeypatch):
-    """每轮回开局菜单都调 _lock_biome —— "已经在对的生态区就 no-op" 的去重是
-    _lock_biome 内部的事(靠 biome_lock.on_biome), run_worker 不自己记标记."""
+def test_run_worker_selects_biome_every_start_screen_round(monkeypatch):
+    """每轮回开局菜单都点一下配置的生态区(幂等, 已选中再点无害) + 每轮照常点开始."""
     _stub_run_worker_env(monkeypatch)
-    locks, clicks = [], []
-    monkeypatch.setattr(main, "_lock_biome", lambda b: locks.append(b) or True)
+    selects, clicks = [], []
+    monkeypatch.setattr(main, "select_biome_on_title", lambda b: selects.append(b))
     monkeypatch.setattr(main, "_wait_for_start_menu", lambda *a, **k: True)
     monkeypatch.setattr(main, "on_start_screen", lambda: True)
     monkeypatch.setattr(main, "click_start_game", lambda: clicks.append(1) or True)
@@ -533,47 +462,21 @@ def test_run_worker_calls_lock_biome_every_start_screen_round(monkeypatch):
     monkeypatch.setattr(main, "lazy_theta_pathing", pathing)
     with pytest.raises(KeyboardInterrupt):
         main.run_worker({})
-    assert locks == ["desert", "desert", "desert"]   # 每轮一次
+    assert selects == ["desert", "desert", "desert"]
     assert len(clicks) == 3
 
 
-def test_run_worker_skips_wait_menu_when_lock_biome_returns_false(monkeypatch):
-    """_lock_biome 没确认到(返回 False)时不等菜单, 直接点开始(可能进错生态区,
-    但不卡死). 返回 True 才等菜单."""
-    _stub_run_worker_env(monkeypatch)
-    monkeypatch.setattr(main, "on_start_screen", lambda: True)
-    monkeypatch.setattr(main, "click_start_game", lambda: True)
-    monkeypatch.setattr(main, "_reassert_florr_toggles",
-                        lambda *a, **k: {"attack": "unchanged", "defense": "unchanged"})
-    lock_ret = iter([False, True])
-    monkeypatch.setattr(main, "_lock_biome", lambda b: next(lock_ret, True))
-    waits = []
-    monkeypatch.setattr(main, "_wait_for_start_menu", lambda *a, **k: waits.append(1) or True)
-    n = {"i": 0}
-
-    def pathing(*a, **k):
-        n["i"] += 1
-        if n["i"] >= 3:
-            raise KeyboardInterrupt
-        return False
-
-    monkeypatch.setattr(main, "lazy_theta_pathing", pathing)
-    with pytest.raises(KeyboardInterrupt):
-        main.run_worker({})
-    assert len(waits) == 2      # 轮1 lock False -> 不等; 轮2/3 lock True -> 各等一次
-
-
-def test_run_worker_does_not_lock_biome_when_not_on_start_screen(monkeypatch):
+def test_run_worker_does_not_select_biome_when_not_on_start_screen(monkeypatch):
     _stub_run_worker_env(monkeypatch)   # on_start_screen 恒 False
-    locks = []
-    monkeypatch.setattr(main, "_lock_biome", lambda b: locks.append(b) or True)
+    selects = []
+    monkeypatch.setattr(main, "select_biome_on_title", lambda b: selects.append(b))
     monkeypatch.setattr(main, "_reassert_florr_toggles",
                         lambda *a, **k: {"attack": "unchanged", "defense": "unchanged"})
     monkeypatch.setattr(main, "lazy_theta_pathing",
                         lambda *a, **k: (_ for _ in ()).throw(KeyboardInterrupt))
     with pytest.raises(KeyboardInterrupt):
         main.run_worker({})
-    assert locks == []      # 锁只发生在标题页(点开始前), 不在开局菜单就一次都不锁
+    assert selects == []      # 选生态区只在标题页(点开始前), 不在开局菜单就不点
 
 
 def test_run_worker_switch_server_uses_configured_biome(monkeypatch):
@@ -588,7 +491,7 @@ def test_run_worker_switch_server_uses_configured_biome(monkeypatch):
     # 每轮都真进游戏(否则 d9592fd 后"没进游戏的轮"不计短局, 到不了换服分支)
     monkeypatch.setattr(main, "on_start_screen", lambda: True)
     monkeypatch.setattr(main, "click_start_game", lambda: True)
-    monkeypatch.setattr(main, "_lock_biome", lambda b: True)
+    monkeypatch.setattr(main, "select_biome_on_title", lambda *a, **k: None)
     monkeypatch.setattr(main, "_wait_for_start_menu", lambda *a, **k: True)
     monkeypatch.setattr(main, "_reassert_florr_toggles",
                         lambda *a, **k: {"attack": "unchanged", "defense": "unchanged"})
@@ -751,7 +654,7 @@ def test_run_worker_swaps_again_after_real_respawn(monkeypatch):
     monkeypatch.setattr(main, "click_start_game", lambda: None)
     # 锁生态区那段会额外反复轮询 on_start_screen —— stub 掉, 让计数器只被主循环
     # 体每轮那一次 on_start_screen() 推进.
-    monkeypatch.setattr(main, "_lock_biome", lambda *a, **k: True)
+    monkeypatch.setattr(main, "select_biome_on_title", lambda *a, **k: None)
     monkeypatch.setattr(main, "_wait_for_start_menu", lambda *a, **k: True)
     starts = {"n": 0}
 
