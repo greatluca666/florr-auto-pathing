@@ -495,13 +495,14 @@ def click_play_as_guest():
 # 页), 只有像素点这个 canvas 按钮管用 —— 跟"开始"/"继续"/"以游客身份游玩"同一类
 # (canvas 标题页按钮吃 pyautogui 合成点击; 游戏内控件才不吃).
 #
-# 坐标: 用户实机截图量的, 1920x1080 基准(跟 _START_BUTTON_POS 等一致).
+# 坐标: 实机 debug_screen_pos.py 量的, 1920x1080 全屏(跟 _START_BUTTON_POS 等一致).
 # florr 改标题页布局 / 换了分辨率没对上 → 点空 → 照旧进花园(自愈, 不卡死),
-# 重新截图量 Desert 按钮中心填这里. 键 = server_lookup 的生态区 key
+# 重新跑 debug_screen_pos.py 量 Desert 格中心, 换算到 1920x1080 基准
+# (ref_x = 实测x * 1920 / 屏宽) 填这里. 键 = server_lookup 的生态区 key
 # (main._apply_worker_config 传进来的 w["biome"]). ocean / anthell 现在 GUI
 # 禁用(app_config._GUI_ENABLED_MAPS), 没量坐标.
 _BIOME_BUTTON_POS = {
-    "desert": scale_point(958, 500),
+    "desert": scale_point(977, 596),
 }
 
 
