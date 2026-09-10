@@ -67,44 +67,73 @@ def test_apply_worker_config_invert_defaults_when_absent(monkeypatch):
     assert w["invert_defense"] is False
 
 
-def test_lock_biome_success_first_try(monkeypatch):
-    seen = []
-    monkeypatch.setattr(main, "switch_server", lambda b: seen.append(b) or "srv-1")
+def _stub_biome_lock_env(monkeypatch, on_biome_seq, ids=("d1", "d2", "d3")):
+    """_lock_biome 的依赖打桩. on_biome_seq: biome_lock.on_biome 每次调用依次返回的值
+    (用尽后取最后一个). 返回 {switch: [传给 switch_server 的 biome...]}."""
+    rec = {"switch": [], "on_biome_calls": 0}
+    seq = list(on_biome_seq)
+    monkeypatch.setattr(main.server_lookup, "fetch_server_ids", lambda b: list(ids))
     monkeypatch.setattr(main.time, "sleep", lambda *a, **k: None)
-    assert main._lock_biome("ocean") is True
-    assert seen == ["ocean"]
+
+    def fake_on_biome(eval_js, server_ids):
+        i = rec["on_biome_calls"]
+        rec["on_biome_calls"] += 1
+        return seq[i] if i < len(seq) else seq[-1]
+
+    monkeypatch.setattr(main.biome_lock, "on_biome", fake_on_biome)
+    monkeypatch.setattr(main, "switch_server",
+                        lambda b: rec["switch"].append(b) or "srv-X")
+    return rec
 
 
-def test_lock_biome_retries_then_succeeds(monkeypatch):
-    calls = {"n": 0}
-
-    def flaky(b):
-        calls["n"] += 1
-        if calls["n"] < 3:
-            raise RuntimeError("cdp boom")
-        return "srv-9"
-
-    monkeypatch.setattr(main, "switch_server", flaky)
-    monkeypatch.setattr(main.time, "sleep", lambda *a, **k: None)
+def test_lock_biome_noop_when_already_on_biome(monkeypatch):
+    rec = _stub_biome_lock_env(monkeypatch, on_biome_seq=[True])
     assert main._lock_biome("desert") is True
-    assert calls["n"] == 3
+    assert rec["switch"] == []          # 已在对的生态区 -> 不 forceServerID
 
 
-def test_lock_biome_all_attempts_fail_is_warn_only(monkeypatch):
-    calls = {"n": 0}
+def test_lock_biome_forces_then_confirms(monkeypatch):
+    # 第一次检查 False -> switch_server -> 确认轮询第一拍 True
+    rec = _stub_biome_lock_env(monkeypatch, on_biome_seq=[False, True])
+    assert main._lock_biome("ocean") is True
+    assert rec["switch"] == ["ocean"]
 
-    def always_fail(b):
-        calls["n"] += 1
-        raise RuntimeError("network down")
 
-    monkeypatch.setattr(main, "switch_server", always_fail)
-    monkeypatch.setattr(main.time, "sleep", lambda *a, **k: None)
-    assert main._lock_biome("desert") is False        # no raise
-    assert calls["n"] == main._BIOME_LOCK_RETRIES
+def test_lock_biome_confirm_times_out_then_retries_then_fails(monkeypatch):
+    # on_biome 永远 False -> 每次 forceServerID 后确认超时 -> 重试满 -> False
+    clock = [0.0]
+    rec = _stub_biome_lock_env(monkeypatch, on_biome_seq=[False])
+    monkeypatch.setattr(main.time, "time", lambda: clock[0])
+    monkeypatch.setattr(main.time, "sleep", lambda s: clock.__setitem__(0, clock[0] + (s or 1)))
+    assert main._lock_biome("desert") is False           # no raise
+    assert len(rec["switch"]) == main._BIOME_LOCK_RETRIES  # forceServerID 试满次数
+
+
+def test_lock_biome_fetch_ids_failure_is_warn_only(monkeypatch):
+    monkeypatch.setattr(main.server_lookup, "fetch_server_ids",
+                        lambda b: (_ for _ in ()).throw(RuntimeError("m28 down")))
+    sw = []
+    monkeypatch.setattr(main, "switch_server", lambda b: sw.append(b) or "x")
+    assert main._lock_biome("desert") is False
+    assert sw == []                     # 列表都查不到 -> 不 forceServerID
+
+
+def test_lock_biome_forceserverid_error_retries_then_fails(monkeypatch):
+    rec = _stub_biome_lock_env(monkeypatch, on_biome_seq=[False])
+    n = {"i": 0}
+
+    def boom(b):
+        n["i"] += 1
+        raise RuntimeError("cdp boom")
+
+    monkeypatch.setattr(main, "switch_server", boom)
+    assert main._lock_biome("desert") is False
+    assert n["i"] == main._BIOME_LOCK_RETRIES
 
 
 def test_lock_biome_constants_are_numbers():
-    for name in ("_BIOME_LOCK_RETRIES", "_BIOME_LOCK_RETRY_SLEEP", "_BIOME_RECONNECT_SLEEP"):
+    for name in ("_BIOME_LOCK_RETRIES", "_BIOME_LOCK_RETRY_SLEEP",
+                 "_BIOME_CONFIRM_TIMEOUT", "_BIOME_CONFIRM_INTERVAL"):
         assert isinstance(getattr(main, name), (int, float))
 
 
@@ -385,6 +414,9 @@ def _stub_run_worker_env(monkeypatch, overlay=None):
         "invert_attack": True, "invert_defense": False,
     })
     monkeypatch.setattr(main, "switch_server", lambda *a, **k: "stub-srv")
+    # 生态区锁默认打桩成 no-op(返回 True); 专门测它的用例自己再 re-stub.
+    monkeypatch.setattr(main, "_lock_biome", lambda *a, **k: True)
+    monkeypatch.setattr(main, "_wait_for_start_menu", lambda *a, **k: True)
     monkeypatch.setattr(main, "on_death_screen", lambda: False)
     monkeypatch.setattr(main, "on_start_screen", lambda: False)
     monkeypatch.setattr(main, "on_guest_screen", lambda: False)
@@ -479,9 +511,9 @@ def test_run_worker_locks_biome_on_title_before_clicking_start(monkeypatch):
     assert events == [("lock", "desert"), "wait", "click"]
 
 
-def test_run_worker_locks_biome_only_once_across_respawns(monkeypatch):
-    """每次重生都回开局菜单, 但生态区只锁 1 次 —— florr 重生留在同一台服务器,
-    每次重生都 forceServerID 是白重连. 后续重生照常点开始, 不锁."""
+def test_run_worker_calls_lock_biome_every_start_screen_round(monkeypatch):
+    """每轮回开局菜单都调 _lock_biome —— "已经在对的生态区就 no-op" 的去重是
+    _lock_biome 内部的事(靠 biome_lock.on_biome), run_worker 不自己记标记."""
     _stub_run_worker_env(monkeypatch)
     locks, clicks = [], []
     monkeypatch.setattr(main, "_lock_biome", lambda b: locks.append(b) or True)
@@ -501,21 +533,22 @@ def test_run_worker_locks_biome_only_once_across_respawns(monkeypatch):
     monkeypatch.setattr(main, "lazy_theta_pathing", pathing)
     with pytest.raises(KeyboardInterrupt):
         main.run_worker({})
-    assert locks == ["desert"]      # 3 轮都进开局菜单, 只锁 1 次
-    assert len(clicks) == 3         # 每轮照常点开始
+    assert locks == ["desert", "desert", "desert"]   # 每轮一次
+    assert len(clicks) == 3
 
 
-def test_run_worker_retries_biome_lock_next_respawn_if_it_failed(monkeypatch):
-    """首次锁失败(CDP 抽风)不把标记设死 —— 下次回开局菜单再试, 成功后才不再试."""
+def test_run_worker_skips_wait_menu_when_lock_biome_returns_false(monkeypatch):
+    """_lock_biome 没确认到(返回 False)时不等菜单, 直接点开始(可能进错生态区,
+    但不卡死). 返回 True 才等菜单."""
     _stub_run_worker_env(monkeypatch)
     monkeypatch.setattr(main, "on_start_screen", lambda: True)
     monkeypatch.setattr(main, "click_start_game", lambda: True)
-    monkeypatch.setattr(main, "_wait_for_start_menu", lambda *a, **k: True)
     monkeypatch.setattr(main, "_reassert_florr_toggles",
                         lambda *a, **k: {"attack": "unchanged", "defense": "unchanged"})
-    attempts = []
-    monkeypatch.setattr(main, "_lock_biome",
-                        lambda b: attempts.append(b) or len(attempts) >= 2)
+    lock_ret = iter([False, True])
+    monkeypatch.setattr(main, "_lock_biome", lambda b: next(lock_ret, True))
+    waits = []
+    monkeypatch.setattr(main, "_wait_for_start_menu", lambda *a, **k: waits.append(1) or True)
     n = {"i": 0}
 
     def pathing(*a, **k):
@@ -527,7 +560,7 @@ def test_run_worker_retries_biome_lock_next_respawn_if_it_failed(monkeypatch):
     monkeypatch.setattr(main, "lazy_theta_pathing", pathing)
     with pytest.raises(KeyboardInterrupt):
         main.run_worker({})
-    assert attempts == ["desert", "desert"]   # 失败那次下轮重试, 第 2 次成功后不再试
+    assert len(waits) == 2      # 轮1 lock False -> 不等; 轮2/3 lock True -> 各等一次
 
 
 def test_run_worker_does_not_lock_biome_when_not_on_start_screen(monkeypatch):
@@ -552,7 +585,11 @@ def test_run_worker_switch_server_uses_configured_biome(monkeypatch):
         "enter_game_swap": "none", "reach_area_swap": "none",
         "invert_attack": True, "invert_defense": False,
     })
+    # 每轮都真进游戏(否则 d9592fd 后"没进游戏的轮"不计短局, 到不了换服分支)
+    monkeypatch.setattr(main, "on_start_screen", lambda: True)
+    monkeypatch.setattr(main, "click_start_game", lambda: True)
     monkeypatch.setattr(main, "_lock_biome", lambda b: True)
+    monkeypatch.setattr(main, "_wait_for_start_menu", lambda *a, **k: True)
     monkeypatch.setattr(main, "_reassert_florr_toggles",
                         lambda *a, **k: {"attack": "unchanged", "defense": "unchanged"})
     monkeypatch.setattr(main, "lazy_theta_pathing", lambda *a, **k: False)  # 没到区 -> 短局
@@ -565,7 +602,7 @@ def test_run_worker_switch_server_uses_configured_biome(monkeypatch):
     monkeypatch.setattr(main, "switch_server", rec)
     with pytest.raises(KeyboardInterrupt):
         main.run_worker({})
-    assert sw == [("ocean",)]      # switch_server 收到配置里的 biome, 不是空参
+    assert sw == [("ocean",)]      # 换服分支的 switch_server 收到配置里的 biome
 
 
 # ── 未登录标题页: run_worker 自动点「以游客身份游玩」──────────────────────
