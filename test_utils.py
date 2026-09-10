@@ -296,6 +296,36 @@ def test_click_start_game_gives_up_after_max_attempts_without_crashing(monkeypat
     assert spy.clicks == 2 * utils._CONFIRM_CLICK_MAX_ATTEMPTS
 
 
+class _MoveClickSpy:
+    def __init__(self):
+        self.moves = []
+        self.clicks = 0
+
+    def moveTo(self, pos=None, *_a, **_kw):
+        self.moves.append(tuple(pos) if pos is not None else None)
+
+    def click(self, *_a, **_kw):
+        self.clicks += 1
+
+
+def test_select_biome_on_title_clicks_desert_button(monkeypatch):
+    spy = _MoveClickSpy()
+    monkeypatch.setattr(utils, "pyautogui", spy)
+    monkeypatch.setattr(utils.time, "sleep", lambda *_a, **_kw: None)
+    utils.select_biome_on_title("desert")
+    assert spy.moves == [tuple(utils._BIOME_BUTTON_POS["desert"])]
+    assert spy.clicks == 2          # 先点一下抢焦点、再点一下真命中
+
+
+def test_select_biome_on_title_noop_for_unmapped_biome(monkeypatch):
+    spy = _MoveClickSpy()
+    monkeypatch.setattr(utils, "pyautogui", spy)
+    monkeypatch.setattr(utils.time, "sleep", lambda *_a, **_kw: None)
+    for biome in ("ocean", "ant_hell", "garden", "", None):
+        utils.select_biome_on_title(biome)
+    assert spy.moves == [] and spy.clicks == 0
+
+
 # ── on_guest_screen: 未登录标题页的「以游客身份游玩」绿按钮检测 ──────────────
 
 def _stub_guest_ratio(monkeypatch, value):

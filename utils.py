@@ -486,6 +486,42 @@ def click_play_as_guest():
     return _click_button_until_gone(_PLAY_AS_GUEST_POS, on_guest_screen, "以游客身份游玩")
 
 
+# florr 标题页(绿色"开始"按钮那屏)下方的生态区选择器 —— 一小格按钮:
+#     Garden   Desert   Ocean
+#        Jungle   Hel
+# 选中的那个有浅色高亮. florr 不记忆上次选的, 每次(重新)开都默认 Garden ——
+# 不点一下目标生态区, click_start_game() 就进花园, 跟寻路用的地图对不上.
+# CDP cp6.forceServerID 那条路试过反复不行(切别的生态区会掉回花园 / 被踢回标题
+# 页), 只有像素点这个 canvas 按钮管用 —— 跟"开始"/"继续"/"以游客身份游玩"同一类
+# (canvas 标题页按钮吃 pyautogui 合成点击; 游戏内控件才不吃).
+#
+# 坐标: 用户实机截图量的, 1920x1080 基准(跟 _START_BUTTON_POS 等一致).
+# florr 改标题页布局 / 换了分辨率没对上 → 点空 → 照旧进花园(自愈, 不卡死),
+# 重新截图量 Desert 按钮中心填这里. 键 = server_lookup 的生态区 key
+# (main._apply_worker_config 传进来的 w["biome"]). ocean / anthell 现在 GUI
+# 禁用(app_config._GUI_ENABLED_MAPS), 没量坐标.
+_BIOME_BUTTON_POS = {
+    "desert": scale_point(958, 500),
+}
+
+
+def select_biome_on_title(biome):
+    """在标题页生态区选择器里点一下目标生态区, 保证点"开始"后进这个生态区.
+    biome 没有对应坐标(ocean / anthell 暂未量, 或未知值)→ 直接返回不点.
+    已经选中目标生态区时再点一下也无害(幂等). 沿用确认类按钮的"先点一下抢焦点、
+    再点一下真命中"套路, 但这个选择器点完不会消失、没有"画面已离开"的复查信号,
+    所以不走 _click_button_until_gone, 就连点两下.
+    """
+    pos = _BIOME_BUTTON_POS.get(biome)
+    if pos is None:
+        return
+    pyautogui.moveTo(pos)
+    time.sleep(0.2)
+    pyautogui.click()
+    time.sleep(0.1)
+    pyautogui.click()
+
+
 def check_stage():
     full_screen = [0, 0, SCREEN_WIDTH, SCREEN_HEIGHT]
     color = pyautogui.screenshot(region=full_screen).getpixel(scale_point(316, 32))
