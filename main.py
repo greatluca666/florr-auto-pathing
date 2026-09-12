@@ -760,6 +760,12 @@ def run_worker(cfg):
     # 生态区只在本次 worker 启动后的第一次进游戏时锁一次. florr 死亡/重生会留在
     # 同一台服务器 = 同生态区, 每次重生都 forceServerID 纯属多一次重连、拖慢重生.
     # 换服务器(连续短局那条)走 switch_server(w["biome"]) 自己保证生态区, 不影响这个标记.
+
+    # switch_server() 之后紧跟着的下一次"死亡结算画面"是断线重连的过渡态, 不是
+    # 真死亡 —— 点"继续"会把进度重置到检查点(用户实机确认). 用户: "如果检测到死亡
+    # 结算画面之后就不要点了, 因为点了之后就会重置检查点". 只吞掉换服务器后的
+    # 第一次死亡画面: 消费一次就清掉, 真死亡照常点(不会一直卡着不点).
+    just_switched_server = False
     while True:
         round_count += 1
         round_start_time = time.time()
@@ -772,14 +778,22 @@ def run_worker(cfg):
             click_play_as_guest()
             time.sleep(2)
         if on_death_screen():
-            print("💀 检测到死亡结算画面, 点击继续...")
-            overlay.update(state="重新开始", message="死亡, 点击继续...")
-            click_continue_after_death()
-            entered_game = True
-            time.sleep(2)
+            if just_switched_server:
+                print("💀 换服务器后的死亡结算画面, 不点『继续』(点了会重置检查点), "
+                      "等重连自己过去...")
+                overlay.update(state="换服务器", message="重连过渡画面, 暂不点继续")
+                just_switched_server = False   # 只吞这一次, 真死亡照常点
+                time.sleep(2)
+            else:
+                print("💀 检测到死亡结算画面, 点击继续...")
+                overlay.update(state="重新开始", message="死亡, 点击继续...")
+                click_continue_after_death()
+                entered_game = True
+                time.sleep(2)
         if on_start_screen():
             print("🔁 检测到开局菜单, 点击开始按钮进入游戏...")
             overlay.update(state="重新开始", message="点击开始按钮...")
+            just_switched_server = False   # 重连正常落到了标题页, 恢复正常死亡画面处理
             # 点"开始"前, 先在标题页生态区选择器里点一下配置的生态区 —— florr 不
             # 记忆上次选的, 默认花园, 跟寻路用的地图对不上. (CDP forceServerID 那条
             # 路试过反复不行, 只有像素点这个 canvas 按钮管用.) 选生态区可能触发一次
@@ -849,6 +863,7 @@ def run_worker(cfg):
                 try:
                     switch_server(w["biome"])
                     consecutive_short_rounds = 0
+                    just_switched_server = True   # 下一次死亡画面是重连过渡态, 别点
                     time.sleep(2)
                 except Exception as e:
                     print(f"⚠️ 换服务器失败, 先用当前服务器继续刷 (下轮再重试): {e}")
