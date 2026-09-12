@@ -508,6 +508,94 @@ def test_run_worker_switch_server_uses_configured_biome(monkeypatch):
     assert sw == [("ocean",)]      # 换服分支的 switch_server 收到配置里的 biome
 
 
+# ── switch_server() 后紧跟的死亡画面是重连过渡态, 不真点『继续』────────────
+# 用户实机确认: 换服务器后如果检测到死亡结算画面就点『继续』, 会把进度重置到
+# 检查点. 只吞换服后的第一次死亡画面, 之后照常点(不会一直卡着不点).
+
+def test_run_worker_skips_death_click_right_after_switch_server(monkeypatch):
+    _stub_run_worker_env(monkeypatch)
+    monkeypatch.setattr(main, "_apply_worker_config", lambda cfg: {
+        "location": (1, 2), "farming_area": [(0, 0), (9, 9)], "farming_duration": 9999,
+        "short_round_limit": 1, "enemy_ai_enabled": False, "auto_switch_server": True,
+        "biome": "desert",
+        "enter_game_swap": "none", "reach_area_swap": "none",
+        "invert_attack": True, "invert_defense": False,
+    })
+    monkeypatch.setattr(main, "select_biome_on_title", lambda *a, **k: None)
+    monkeypatch.setattr(main, "_wait_for_start_menu", lambda *a, **k: True)
+    monkeypatch.setattr(main, "click_start_game", lambda: True)
+    monkeypatch.setattr(main, "_reassert_florr_toggles",
+                        lambda *a, **k: {"attack": "unchanged", "defense": "unchanged"})
+    monkeypatch.setattr(main, "lazy_theta_pathing", lambda *a, **k: False)
+
+    # run_worker 在 while 循环前有一次独立的 on_guest_screen() 探测(游客页处理),
+    # 会先把计数拨到 0 —— 从 -1 起步, 让循环体第 1 轮的计数正好落在 1, 对齐 round_count.
+    rounds = {"n": -1}
+    monkeypatch.setattr(main, "on_guest_screen",
+                        lambda: rounds.__setitem__("n", rounds["n"] + 1) or False)
+    # 轮1: 正常进游戏(短局 -> 触发换服). 轮2 起: 死亡画面 —— 轮2 该是换服的过渡态
+    # (吞掉), 轮3 是真死亡(照常点).
+    monkeypatch.setattr(main, "on_start_screen", lambda: rounds["n"] == 1)
+    monkeypatch.setattr(main, "on_death_screen", lambda: rounds["n"] >= 2)
+
+    calls = []
+
+    def click_continue():
+        calls.append(rounds["n"])
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(main, "click_continue_after_death", click_continue)
+
+    with pytest.raises(KeyboardInterrupt):
+        main.run_worker({})
+    assert calls == [3]      # 轮2(换服刚发生)被吞掉, 轮3 才真的点了『继续』
+
+
+def test_run_worker_clears_switch_flag_when_start_screen_seen_first(monkeypatch):
+    """换服后如果重连直接落到标题页(没经过死亡画面), on_start_screen 分支也会清掉
+    标记 —— 之后真正的死亡画面照常点, 不会被误吞."""
+    _stub_run_worker_env(monkeypatch)
+    monkeypatch.setattr(main, "_apply_worker_config", lambda cfg: {
+        "location": (1, 2), "farming_area": [(0, 0), (9, 9)], "farming_duration": 100,
+        "short_round_limit": 1, "enemy_ai_enabled": False, "auto_switch_server": True,
+        "biome": "desert",
+        "enter_game_swap": "none", "reach_area_swap": "none",
+        "invert_attack": True, "invert_defense": False,
+    })
+    monkeypatch.setattr(main, "select_biome_on_title", lambda *a, **k: None)
+    monkeypatch.setattr(main, "_wait_for_start_menu", lambda *a, **k: True)
+    monkeypatch.setattr(main, "click_start_game", lambda: True)
+    monkeypatch.setattr(main, "_reassert_florr_toggles",
+                        lambda *a, **k: {"attack": "unchanged", "defense": "unchanged"})
+    monkeypatch.setattr(main, "lazy_theta_pathing", lambda *a, **k: False)
+
+    # 精心安排的 time.time() 序列, 每轮恰好 2 次调用(round_start_time / round_elapsed):
+    # 轮1 elapsed=1(<100, 短局 -> 触发换服); 轮2 elapsed=1000(>=100, 算刷满 -> 不再
+    # 换服, 只用来验证 on_start_screen 分支清标记); 轮3 只用到 round_start_time.
+    seq = iter([0, 1, 2, 1002, 2000])
+    monkeypatch.setattr(main.time, "time", lambda: next(seq, 999999))
+
+    # run_worker 在 while 循环前有一次独立的 on_guest_screen() 探测(游客页处理),
+    # 会先把计数拨到 0 —— 从 -1 起步, 让循环体第 1 轮的计数正好落在 1, 对齐 round_count.
+    rounds = {"n": -1}
+    monkeypatch.setattr(main, "on_guest_screen",
+                        lambda: rounds.__setitem__("n", rounds["n"] + 1) or False)
+    monkeypatch.setattr(main, "on_start_screen", lambda: rounds["n"] in (1, 2))
+    monkeypatch.setattr(main, "on_death_screen", lambda: rounds["n"] == 3)
+
+    calls = []
+
+    def click_continue():
+        calls.append(rounds["n"])
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(main, "click_continue_after_death", click_continue)
+
+    with pytest.raises(KeyboardInterrupt):
+        main.run_worker({})
+    assert calls == [3]      # 轮2 的 on_start_screen 已经清过标记, 轮3 死亡正常点
+
+
 # ── 未登录标题页: run_worker 自动点「以游客身份游玩」──────────────────────
 
 def test_run_worker_clicks_play_as_guest_when_on_guest_screen(monkeypatch):
